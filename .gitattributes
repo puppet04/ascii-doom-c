@@ -1,0 +1,15 @@
+# Detectar automaticamente arquivos de texto e normalizar quebras de linha
+* text=auto
+
+# Codigo-fonte em C e headers sempre com LF
+*.c text eol=lf
+*.h text eol=lf
+Makefile text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.json text eol=lf
+*.txt text eol=lf
+
+# Scripts do Windows sempre com CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf

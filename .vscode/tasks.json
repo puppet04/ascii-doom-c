@@ -1,0 +1,51 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Compilar DOOM ASCII",
+      "type": "shell",
+      "command": ".\\build.bat",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "Compilar e Executar DOOM ASCII",
+      "type": "shell",
+      "command": ".\\build.bat run",
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "Rodar Testes",
+      "type": "shell",
+      "command": ".\\build.bat test",
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": "$gcc"
+    },
+    {
+      "label": "Limpar Build",
+      "type": "shell",
+      "command": ".\\build.bat clean",
+      "group": "build",
+      "problemMatcher": []
+    }
+  ]
+}
