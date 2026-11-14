@@ -41,7 +41,21 @@ void renderer_close(void);
 /* Limpa a grade ASCII e reseta o z-buffer antes de desenhar um novo frame. */
 void renderer_clear(void);
 
-/* Calcula e desenha as 160 colunas de parede/teto/chao usando Raycasting DDA. */
+typedef enum {
+    ASCII_QUALITY_AUTO = 0,
+    ASCII_QUALITY_LEVE = 1,
+    ASCII_QUALITY_MEDIA = 2,
+    ASCII_QUALITY_ALTA = 3,
+    ASCII_QUALITY_ULTRA = 4
+} AsciiQualityMode;
+
+/* Ajusta dinamicamente a densidade da malha ASCII conforme a qualidade (0=Auto..4=Ultra) e tamanho da janela. */
+void renderer_set_ascii_density(int quality_mode, int screen_w, int screen_h);
+
+/* Configura o angulo vertical da camera (look up/down) e o modo 1a/3a pessoa. */
+void renderer_set_camera_view(float pitch_offset, int third_person);
+
+/* Calcula e desenha as colunas de parede/teto/chao usando Raycasting DDA em 3D. */
 void renderer_draw_walls(const GameMap *map, const Player *player);
 
 /* Desenha entidades (outros jogadores/inimigos) respeitando o z-buffer. */
@@ -56,6 +70,10 @@ void renderer_draw_minimap(const GameMap *map, const Player *player,
 
 /* Desenha a mira central no buffer ASCII. */
 void renderer_draw_hud(const Player *player);
+
+/* Desenha o viewport 3D ASCII e o HUD na janela atual (entre BeginDrawing e EndDrawing). */
+void renderer_draw_scene_and_hud(const Player *player, int is_multiplayer,
+                                 int remote_connected, int mouse_locked, int fps_cap);
 
 /* Renderiza a grade ASCII colorida e o painel de status na janela Raylib. */
 void renderer_present_window(const Player *player, int is_multiplayer,
