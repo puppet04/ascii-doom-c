@@ -1,15 +1,37 @@
 #include "renderer.h"
+#include "raylib.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#endif
-
-static char screen_buf[SCREEN_HEIGHT][SCREEN_WIDTH + 1];
+static AsciiCell screen_grid[SCREEN_HEIGHT][SCREEN_WIDTH];
 static float z_buffer[SCREEN_WIDTH];
+static Font ui_font;
+static int font_loaded = 0;
+
+static AsciiColor make_color(unsigned char r, unsigned char g, unsigned char b) {
+    AsciiColor c = {r, g, b};
+    return c;
+}
+
+static AsciiColor scale_color(AsciiColor c, float factor) {
+    if (factor < 0.0f) factor = 0.0f;
+    if (factor > 1.0f) factor = 1.0f;
+    AsciiColor out;
+    out.r = (unsigned char)((float)c.r * factor);
+    out.g = (unsigned char)((float)c.g * factor);
+    out.b = (unsigned char)((float)c.b * factor);
+    return out;
+}
+
+static void set_cell(int x, int y, char ch, AsciiColor fg, AsciiColor bg) {
+    if (x < 0 || x >= SCREEN_WIDTH || y < 0 || y >= SCREEN_HEIGHT) {
+        return;
+    }
+    screen_grid[y][x].ch = ch;
+    screen_grid[y][x].fg = fg;
+    screen_grid[y][x].bg = bg;
+}
 
 static float wrap_angle_signed(float angle) {
     while (angle > PI_F) {
@@ -21,51 +43,58 @@ static float wrap_angle_signed(float angle) {
     return angle;
 }
 
+static AsciiColor get_tile_base_color(char tile) {
+    switch (tile) {
+        case '#': return make_color(225, 65, 55);   /* Tijolo vermelho DOOM */
+        case '@': return make_color(70, 155, 245);  /* Metal azul tech */
+        case '%': return make_color(65, 210, 110);  /* Parede verde musgo */
+        default:  return make_color(220, 165, 65);  /* Ambar */
+    }
+}
+
 static char get_wall_shade(float dist, int side) {
     const char *shades = "#@%*=+-:. ";
     int num_shades = 9;
-    float shade_range = 10.0f;
-    float norm = dist / shade_range;
+    float norm = dist / 11.0f;
 
     if (norm < 0.0f) norm = 0.0f;
     if (norm > 1.0f) norm = 1.0f;
 
     int idx = (int)(norm * (num_shades - 1));
     if (side == 1 && idx < num_shades - 1) {
-        idx++; /* Escurece levemente paredes no eixo Y para dar contraste 3D */
+        idx++;
     }
     return shades[idx];
 }
 
-static char get_floor_shade(int y) {
-    float row_ratio = (float)(y - SCREEN_HEIGHT / 2) / (float)(SCREEN_HEIGHT / 2);
-    if (row_ratio > 0.75f) return '.';
-    if (row_ratio > 0.45f) return ',';
-    if (row_ratio > 0.20f) return '-';
-    return ' ';
+void renderer_init(void) {
+    SetConfigFlags(FLAG_WINDOW_RESIZABLE);
+    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "ASCII DOOM C - 165 FPS (Raylib)");
+    SetExitKey(KEY_NULL);
+    SetTargetFPS(TARGET_FPS);
+    ui_font = GetFontDefault();
+    font_loaded = 1;
+    DisableCursor();
 }
 
-void renderer_init(void) {
-#ifdef _WIN32
-    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (hOut != INVALID_HANDLE_VALUE) {
-        CONSOLE_CURSOR_INFO cursor_info;
-        if (GetConsoleCursorInfo(hOut, &cursor_info)) {
-            cursor_info.bVisible = FALSE;
-            SetConsoleCursorInfo(hOut, &cursor_info);
+void renderer_close(void) {
+    if (IsWindowReady()) {
+        if (IsCursorHidden()) {
+            EnableCursor();
         }
-        DWORD mode = 0;
-        if (GetConsoleMode(hOut, &mode)) {
-            SetConsoleMode(hOut, mode | 0x0004); /* ENABLE_VIRTUAL_TERMINAL_PROCESSING */
-        }
+        CloseWindow();
     }
-#endif
+    font_loaded = 0;
 }
 
 void renderer_clear(void) {
+    AsciiColor black = make_color(0, 0, 0);
     for (int y = 0; y < SCREEN_HEIGHT; y++) {
-        memset(screen_buf[y], ' ', SCREEN_WIDTH);
-        screen_buf[y][SCREEN_WIDTH] = '\0';
+        for (int x = 0; x < SCREEN_WIDTH; x++) {
+            screen_grid[y][x].ch = ' ';
+            screen_grid[y][x].fg = black;
+            screen_grid[y][x].bg = black;
+        }
     }
     for (int x = 0; x < SCREEN_WIDTH; x++) {
         z_buffer[x] = MAX_DEPTH;
@@ -76,6 +105,8 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
     if (!map || !player) {
         return;
     }
+
+    AsciiColor bg_black = make_color(0, 0, 0);
 
     for (int x = 0; x < SCREEN_WIDTH; x++) {
         float ray_angle = (player->angle - player->fov * 0.5f) +
@@ -90,10 +121,8 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
         float delta_dist_x = (fabsf(ray_dir_x) < 1e-6f) ? 1e30f : fabsf(1.0f / ray_dir_x);
         float delta_dist_y = (fabsf(ray_dir_y) < 1e-6f) ? 1e30f : fabsf(1.0f / ray_dir_y);
 
-        int step_x;
-        int step_y;
-        float side_dist_x;
-        float side_dist_y;
+        int step_x, step_y;
+        float side_dist_x, side_dist_y;
 
         if (ray_dir_x < 0.0f) {
             step_x = -1;
@@ -134,23 +163,22 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
 
         float raw_dist = MAX_DEPTH;
         if (hit) {
-            if (side == 0) {
-                raw_dist = side_dist_x - delta_dist_x;
-            } else {
-                raw_dist = side_dist_y - delta_dist_y;
-            }
+            raw_dist = (side == 0) ? (side_dist_x - delta_dist_x)
+                                   : (side_dist_y - delta_dist_y);
         }
 
-        /* Corrige distorcao olho de peixe usando o cosseno da diferenca de angulo */
         float perp_dist = raw_dist * cosf(ray_angle - player->angle);
-        if (perp_dist < 0.1f) {
-            perp_dist = 0.1f;
-        }
-        if (perp_dist > MAX_DEPTH) {
-            perp_dist = MAX_DEPTH;
-        }
+        if (perp_dist < 0.1f) perp_dist = 0.1f;
+        if (perp_dist > MAX_DEPTH) perp_dist = MAX_DEPTH;
 
         z_buffer[x] = perp_dist;
+
+        /* Posicao exata do impacto na face do bloco para desenhar bordas verticais */
+        float wall_hit_coord = (side == 0)
+            ? (player->y + raw_dist * ray_dir_y)
+            : (player->x + raw_dist * ray_dir_x);
+        wall_hit_coord -= floorf(wall_hit_coord);
+        int is_block_edge = (wall_hit_coord < 0.045f || wall_hit_coord > 0.955f);
 
         int line_height = (int)((float)SCREEN_HEIGHT / perp_dist);
         int draw_start = (SCREEN_HEIGHT - line_height) / 2;
@@ -159,15 +187,42 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
         if (draw_start < 0) draw_start = 0;
         if (draw_end >= SCREEN_HEIGHT) draw_end = SCREEN_HEIGHT - 1;
 
-        char wall_char = hit ? get_wall_shade(perp_dist, side) : ' ';
+        char tile = hit ? map_get_tile(map, map_x, map_y) : '#';
+        AsciiColor base_wall = get_tile_base_color(tile);
+        float fog = 1.0f - (perp_dist / 13.0f);
+        if (fog < 0.16f) fog = 0.16f;
+        if (side == 1) fog *= 0.70f;
+
+        AsciiColor wall_fg = scale_color(base_wall, fog);
+        AsciiColor edge_fg = scale_color(base_wall, fog * 0.45f);
+        char wall_ch = hit ? get_wall_shade(perp_dist, side) : ' ';
+        if (is_block_edge && perp_dist < 8.5f) {
+            wall_ch = '|';
+            wall_fg = edge_fg;
+        }
 
         for (int y = 0; y < SCREEN_HEIGHT; y++) {
             if (y < draw_start) {
-                screen_buf[y][x] = ' ';
+                /* Teto estilizado discreto */
+                float ceil_ratio = 1.0f - ((float)y / (float)(SCREEN_HEIGHT / 2));
+                if ((x + y) % 5 == 0 && ceil_ratio > 0.3f) {
+                    unsigned char v = (unsigned char)(25 + ceil_ratio * 35);
+                    set_cell(x, y, '.', make_color(v, v, (unsigned char)(v + 15)), bg_black);
+                }
             } else if (y <= draw_end) {
-                screen_buf[y][x] = wall_char;
+                set_cell(x, y, wall_ch, wall_fg, bg_black);
             } else {
-                screen_buf[y][x] = get_floor_shade(y);
+                /* Chao sombreado por profundidade */
+                float floor_ratio = (float)(y - SCREEN_HEIGHT / 2) / (float)(SCREEN_HEIGHT / 2);
+                char floor_ch = ' ';
+                if (floor_ratio > 0.72f) floor_ch = '.';
+                else if (floor_ratio > 0.42f) floor_ch = ',';
+                else if (floor_ratio > 0.18f) floor_ch = '-';
+
+                if (floor_ch != ' ') {
+                    unsigned char shade = (unsigned char)(55 + floor_ratio * 85);
+                    set_cell(x, y, floor_ch, make_color(shade, (unsigned char)(shade * 0.75f), (unsigned char)(shade * 0.55f)), bg_black);
+                }
             }
         }
     }
@@ -177,6 +232,8 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
     if (!player || !sprites || count <= 0) {
         return;
     }
+
+    AsciiColor bg_black = make_color(0, 0, 0);
 
     for (int i = 0; i < count; i++) {
         if (!sprites[i].active) {
@@ -198,23 +255,28 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
 
         int center_x = (int)((0.5f + sprite_angle / player->fov) * (float)SCREEN_WIDTH);
         int sprite_h = (int)((float)SCREEN_HEIGHT / dist);
-        if (sprite_h < 3) sprite_h = 3;
+        if (sprite_h < 4) sprite_h = 4;
         if (sprite_h > SCREEN_HEIGHT) sprite_h = SCREEN_HEIGHT;
 
         int sprite_w = sprite_h / 2;
-        if (sprite_w < 3) sprite_w = 3;
+        if (sprite_w < 4) sprite_w = 4;
 
         int top_y = (SCREEN_HEIGHT - sprite_h) / 2;
         int bot_y = top_y + sprite_h - 1;
         int left_x = center_x - sprite_w / 2;
         int right_x = center_x + sprite_w / 2;
 
+        float fog = 1.0f - (dist / 14.0f);
+        if (fog < 0.25f) fog = 0.25f;
+
+        AsciiColor head_col = scale_color(make_color(255, 220, 120), fog);
+        AsciiColor body_col = scale_color(make_color(240, 70, 210), fog);
+        AsciiColor leg_col  = scale_color(make_color(120, 190, 255), fog);
+        AsciiColor fire_col = make_color(255, 240, 70);
+
         for (int sx = left_x; sx <= right_x; sx++) {
-            if (sx < 0 || sx >= SCREEN_WIDTH) {
+            if (sx < 0 || sx >= SCREEN_WIDTH || dist >= z_buffer[sx]) {
                 continue;
-            }
-            if (dist >= z_buffer[sx]) {
-                continue; /* Sprite atras da parede */
             }
 
             for (int sy = top_y; sy <= bot_y; sy++) {
@@ -222,29 +284,113 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
                     continue;
                 }
 
-                float ny = (float)(sy - top_y) / (float)(sprite_h);
+                float ny = (float)(sy - top_y) / (float)sprite_h;
                 float nx = (float)(sx - left_x) / (float)(sprite_w > 1 ? sprite_w - 1 : 1);
                 char glyph = ' ';
+                AsciiColor col = body_col;
 
-                if (ny < 0.28f) {
-                    if (nx > 0.25f && nx < 0.75f) {
+                if (ny < 0.26f) {
+                    if (nx > 0.24f && nx < 0.76f) {
                         glyph = sprites[i].label ? sprites[i].label : 'O';
+                        col = head_col;
                     }
-                } else if (ny < 0.72f) {
-                    if (sprites[i].shooting && ny > 0.35f && ny < 0.55f) {
+                } else if (ny < 0.68f) {
+                    if (sprites[i].shooting && ny > 0.34f && ny < 0.54f) {
                         glyph = '*';
-                    } else if (nx > 0.15f && nx < 0.85f) {
-                        glyph = '|';
+                        col = fire_col;
+                    } else if (nx > 0.14f && nx < 0.86f) {
+                        glyph = (nx < 0.28f || nx > 0.72f) ? '|' : '#';
+                        col = body_col;
                     }
                 } else {
-                    if (nx < 0.42f) glyph = '/';
-                    else if (nx > 0.58f) glyph = '\\';
+                    if (nx < 0.42f) {
+                        glyph = '/';
+                        col = leg_col;
+                    } else if (nx > 0.58f) {
+                        glyph = '\\';
+                        col = leg_col;
+                    }
                 }
 
                 if (glyph != ' ') {
-                    screen_buf[sy][sx] = glyph;
+                    set_cell(sx, sy, glyph, col, bg_black);
                 }
             }
+        }
+    }
+}
+
+void renderer_draw_weapon(const Player *player) {
+    if (!player) {
+        return;
+    }
+
+    static const char *WEAPON_ART[] = {
+        "       ||       ",
+        "      |==|      ",
+        "      |##|      ",
+        "     /####\\     ",
+        "    |######|    ",
+        "   [|##**##|]   ",
+        "   [|######|]   ",
+        "  //|======|\\\\  ",
+        " // |======| \\\\ ",
+        " || |######| || ",
+        " || |######| || "
+    };
+    int art_rows = (int)(sizeof(WEAPON_ART) / sizeof(WEAPON_ART[0]));
+    int art_cols = (int)strlen(WEAPON_ART[0]);
+
+    int firing = (player->shoot_timer > 0.12f);
+    int bob_x = (int)roundf(cosf(player->bob_phase * 0.5f) * 2.5f);
+    int bob_y = (int)roundf(fabsf(sinf(player->bob_phase)) * 2.0f) - (firing ? 3 : 0);
+
+    int base_x = (SCREEN_WIDTH - art_cols) / 2 + bob_x;
+    int base_y = SCREEN_HEIGHT - art_rows + bob_y;
+
+    AsciiColor bg_black = make_color(0, 0, 0);
+    AsciiColor metal = make_color(195, 205, 220);
+    AsciiColor dark_metal = make_color(115, 125, 145);
+    AsciiColor accent = make_color(235, 165, 65);
+
+    if (firing) {
+        static const char *FLASH_ART[] = {
+            "    \\  *  /    ",
+            "  -- *###* --  ",
+            "    *#####*    ",
+            "   /  ***  \\   "
+        };
+        int f_rows = 4;
+        int f_cols = (int)strlen(FLASH_ART[0]);
+        int fx = (SCREEN_WIDTH - f_cols) / 2 + bob_x;
+        int fy = base_y - f_rows;
+
+        for (int r = 0; r < f_rows; r++) {
+            for (int c = 0; c < f_cols; c++) {
+                char ch = FLASH_ART[r][c];
+                if (ch != ' ') {
+                    AsciiColor fc = (ch == '#') ? make_color(255, 245, 120)
+                                                : make_color(255, 145, 35);
+                    set_cell(fx + c, fy + r, ch, fc, bg_black);
+                }
+            }
+        }
+    }
+
+    for (int r = 0; r < art_rows; r++) {
+        for (int c = 0; c < art_cols; c++) {
+            char ch = WEAPON_ART[r][c];
+            if (ch == ' ') {
+                continue;
+            }
+
+            AsciiColor col = metal;
+            if (ch == '#' || ch == '=') {
+                col = dark_metal;
+            } else if (ch == '*') {
+                col = accent;
+            }
+            set_cell(base_x + c, base_y + r, ch, col, bg_black);
         }
     }
 }
@@ -255,12 +401,29 @@ void renderer_draw_minimap(const GameMap *map, const Player *player,
         return;
     }
 
-    int max_rows = (map->height < SCREEN_HEIGHT - 1) ? map->height : SCREEN_HEIGHT - 1;
-    int max_cols = (map->width < SCREEN_WIDTH - 1) ? map->width : SCREEN_WIDTH - 1;
+    AsciiColor mm_bg = make_color(12, 14, 22);
+    AsciiColor border = make_color(110, 120, 145);
+    int w = map->width;
+    int h = map->height;
 
-    for (int y = 0; y < max_rows; y++) {
-        for (int x = 0; x < max_cols; x++) {
-            screen_buf[y][x] = map_is_wall(map, x, y) ? '#' : ' ';
+    /* Borda ao redor do minimapa */
+    for (int y = 0; y <= h + 1; y++) {
+        for (int x = 0; x <= w + 1; x++) {
+            int is_edge = (x == 0 || y == 0 || x == w + 1 || y == h + 1);
+            if (is_edge) {
+                set_cell(x, y, '+', border, mm_bg);
+            }
+        }
+    }
+
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            char tile = map_get_tile(map, x, y);
+            if (map_is_wall(map, x, y)) {
+                set_cell(x + 1, y + 1, tile, get_tile_base_color(tile), mm_bg);
+            } else {
+                set_cell(x + 1, y + 1, '.', make_color(45, 50, 62), mm_bg);
+            }
         }
     }
 
@@ -269,77 +432,146 @@ void renderer_draw_minimap(const GameMap *map, const Player *player,
             if (!sprites[i].active) continue;
             int sx = (int)sprites[i].x;
             int sy = (int)sprites[i].y;
-            if (sx >= 0 && sx < max_cols && sy >= 0 && sy < max_rows) {
-                screen_buf[sy][sx] = 'E';
+            if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
+                set_cell(sx + 1, sy + 1, 'E', make_color(255, 90, 220), mm_bg);
             }
         }
     }
 
+    /* Direcao da mira no minimapa */
+    int look_x = (int)(player->x + cosf(player->angle) * 1.1f);
+    int look_y = (int)(player->y + sinf(player->angle) * 1.1f);
+    if (look_x >= 0 && look_x < w && look_y >= 0 && look_y < h &&
+        !map_is_wall(map, look_x, look_y)) {
+        set_cell(look_x + 1, look_y + 1, '*', make_color(255, 190, 60), mm_bg);
+    }
+
     int px = (int)player->x;
     int py = (int)player->y;
-    if (px >= 0 && px < max_cols && py >= 0 && py < max_rows) {
-        screen_buf[py][px] = 'P';
+    if (px >= 0 && px < w && py >= 0 && py < h) {
+        set_cell(px + 1, py + 1, 'P', make_color(255, 240, 70), mm_bg);
     }
 }
 
-void renderer_draw_hud(const Player *player, int is_multiplayer,
-                       int shoot_flash, int remote_connected) {
+void renderer_draw_hud(const Player *player) {
     if (!player) {
         return;
     }
 
-    /* Mira central */
     int cx = SCREEN_WIDTH / 2;
     int cy = SCREEN_HEIGHT / 2;
-    screen_buf[cy][cx] = shoot_flash ? '*' : '+';
+    int firing = (player->shoot_timer > 0.12f);
 
-    if (shoot_flash && cx > 1 && cx < SCREEN_WIDTH - 2) {
-        screen_buf[cy][cx - 1] = '-';
-        screen_buf[cy][cx + 1] = '-';
-    }
+    AsciiColor bg_black = make_color(0, 0, 0);
+    AsciiColor cross_col = firing ? make_color(255, 90, 60) : make_color(110, 255, 130);
 
-    /* Badge de status no canto superior direito */
-    char badge[32];
-    if (is_multiplayer) {
-        snprintf(badge, sizeof(badge), "[MP:%s]", remote_connected ? "ONLINE" : "AGUARDANDO");
-    } else {
-        snprintf(badge, sizeof(badge), "[SINGLEPLAYER]");
-    }
-
-    int badge_len = (int)strlen(badge);
-    int start_x = SCREEN_WIDTH - badge_len - 1;
-    if (start_x > 0) {
-        memcpy(&screen_buf[0][start_x], badge, (size_t)badge_len);
-    }
+    set_cell(cx, cy, firing ? '*' : '+', cross_col, bg_black);
+    set_cell(cx - 2, cy, '-', cross_col, bg_black);
+    set_cell(cx + 2, cy, '-', cross_col, bg_black);
+    set_cell(cx, cy - 1, '|', cross_col, bg_black);
+    set_cell(cx, cy + 1, '|', cross_col, bg_black);
 }
 
-void renderer_present(int show_hud_footer, const Player *player,
-                      int is_multiplayer, int remote_connected) {
-#ifdef _WIN32
-    HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    DWORD console_mode = 0;
-    if (hOut != INVALID_HANDLE_VALUE && GetConsoleMode(hOut, &console_mode)) {
-        COORD home = {0, 0};
-        SetConsoleCursorPosition(hOut, home);
+void renderer_present_window(const Player *player, int is_multiplayer,
+                             int remote_connected, int mouse_locked, int fps_cap) {
+    if (!font_loaded) {
+        return;
     }
-#endif
+
+    BeginDrawing();
+    ClearBackground((Color){10, 11, 16, 255});
 
     for (int y = 0; y < SCREEN_HEIGHT; y++) {
-        puts(screen_buf[y]);
+        int py = y * CELL_HEIGHT;
+        for (int x = 0; x < SCREEN_WIDTH; x++) {
+            AsciiCell cell = screen_grid[y][x];
+            int px = x * CELL_WIDTH;
+
+            if (cell.bg.r != 0 || cell.bg.g != 0 || cell.bg.b != 0) {
+                DrawRectangle(px, py, CELL_WIDTH, CELL_HEIGHT,
+                              (Color){cell.bg.r, cell.bg.g, cell.bg.b, 255});
+            }
+
+            if (cell.ch != ' ' && cell.ch != '\0') {
+                DrawTextCodepoint(
+                    ui_font,
+                    (int)cell.ch,
+                    (Vector2){(float)px, (float)py},
+                    10.0f,
+                    (Color){cell.fg.r, cell.fg.g, cell.fg.b, 255}
+                );
+            }
+        }
     }
 
-    if (show_hud_footer && player) {
-        printf("================================================================================================\n");
-        printf(" VIDA: %3d%%  |  MUNICAO: %2d  |  PONTOS: %3d  |  POS: (%.1f, %.1f)  |  MODO: %s\n",
+    /* Painel inferior de HUD (y = 640..720) */
+    int hud_y = SCREEN_HEIGHT * CELL_HEIGHT;
+    DrawRectangle(0, hud_y, WINDOW_WIDTH, HUD_HEIGHT, (Color){18, 20, 28, 255});
+    DrawRectangle(0, hud_y, WINDOW_WIDTH, 3, (Color){190, 45, 45, 255});
+
+    if (player) {
+        Color hp_col = (player->health > 60) ? (Color){70, 220, 110, 255}
+                     : (player->health > 30) ? (Color){245, 200, 60, 255}
+                                             : (Color){235, 65, 65, 255};
+
+        DrawText(TextFormat("VIDA: %d%%", player->health), 24, hud_y + 14, 22, hp_col);
+        DrawRectangle(24, hud_y + 42, 160, 10, (Color){40, 44, 56, 255});
+        int hp_w = (player->health * 160) / 100;
+        if (hp_w < 0) hp_w = 0;
+        if (hp_w > 160) hp_w = 160;
+        DrawRectangle(24, hud_y + 42, hp_w, 10, hp_col);
+
+        Color ammo_col = (player->ammo > 5) ? (Color){250, 210, 80, 255}
+                                            : (Color){240, 75, 75, 255};
+        DrawText(TextFormat("MUNICAO: %02d/30", player->ammo), 220, hud_y + 14, 22, ammo_col);
+        DrawText(TextFormat("PONTOS: %d", player->score), 445, hud_y + 14, 22, (Color){120, 215, 255, 255});
+
+        const char *mode_str = is_multiplayer
+            ? (remote_connected ? "MP: ONLINE" : "MP: AGUARDANDO")
+            : "SINGLEPLAYER";
+        Color mode_col = (is_multiplayer && !remote_connected)
+            ? (Color){250, 185, 65, 255}
+            : (Color){115, 235, 145, 255};
+        DrawText(mode_str, 650, hud_y + 14, 22, mode_col);
+
+        const char *cap_str = (fps_cap > 0) ? TextFormat("%d", fps_cap) : "MAX";
+        DrawText(TextFormat("FPS: %d (Alvo: %s)", GetFPS(), cap_str),
+                 940, hud_y + 14, 22, (Color){235, 235, 245, 255});
+
+        const char *mouse_hint = mouse_locked ? "[TAB] Soltar Mouse" : "[TAB] Travar Mouse";
+        DrawText(
+            TextFormat("[Mouse] Mirar/Atirar   [WASD+Shift] Mover/Correr   [R] Recarregar   %s   [F3] FPS   [ESC] Menu",
+                       mouse_hint),
+            24, hud_y + 58, 15, (Color){165, 175, 195, 255}
+        );
+    }
+
+    EndDrawing();
+}
+
+void renderer_present_stdout(const Player *player, int is_multiplayer,
+                             int remote_connected) {
+    /* Amostra 80x26 da grade 160x80 para validacao em terminal/CI */
+    for (int y = 0; y < SCREEN_HEIGHT; y += 3) {
+        char line[81];
+        int col = 0;
+        for (int x = 0; x < SCREEN_WIDTH && col < 80; x += 2) {
+            line[col++] = screen_grid[y][x].ch;
+        }
+        line[col] = '\0';
+        puts(line);
+    }
+
+    if (player) {
+        printf("================================================================================\n");
+        printf(" VIDA: %3d%% | MUNICAO: %2d | PONTOS: %3d | POS: (%.1f, %.1f) | MODO: %s\n",
                player->health,
                player->ammo,
                player->score,
                player->x,
                player->y,
-               is_multiplayer ? (remote_connected ? "MULTIPLAYER (CONECTADO)" : "MULTIPLAYER (AGUARDANDO)")
-                              : "SINGLEPLAYER");
-        printf(" CONTROLES: [W/A/S/D] Mover  [Q/E ou Setas] Girar  [Espaco] Atirar  [ESC] Sair\n");
-        printf("================================================================================================\n");
+               is_multiplayer ? (remote_connected ? "MP-ONLINE" : "MP-WAIT") : "SINGLEPLAYER");
+        printf("================================================================================\n");
     }
 
     fflush(stdout);

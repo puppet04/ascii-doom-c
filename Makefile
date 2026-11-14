@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -O2 -Iinclude
-LDFLAGS = -lws2_32 -lm
+LDFLAGS = -lraylib -lopengl32 -lgdi32 -lwinmm -lws2_32 -lm
 
 BIN_DIR = bin
 TARGET = $(BIN_DIR)/doom_ascii.exe

@@ -1,8 +1,8 @@
 # ASCII DOOM em C — Projeto Final (A2)
 
-Jogo interativo em primeira pessoa estilo **DOOM em ASCII** rodando diretamente no terminal, desenvolvido em **linguagem C** para a Segunda Avaliação (A2) da disciplina de **Linguagem de Programação** (Engenharia da Computação).
+Jogo interativo em primeira pessoa estilo **DOOM em ASCII colorido** em janela gráfica dedicada (**Raylib a 165 FPS**), desenvolvido em **linguagem C** para a Segunda Avaliação (A2) da disciplina de **Linguagem de Programação** (Engenharia da Computação).
 
-O projeto utiliza **Raycasting DDA** para projetar um mapa 2D em perspectiva 3D no console e conta com base de **Multiplayer em rede local (LAN/UDP)** usando Winsock2.
+O projeto combina **Raycasting DDA colorido em alta resolução (`160x80` caracteres ASCII)**, física independente da taxa de quadros via **Delta Time**, **Mouse Look 360°** e base de **Multiplayer em rede local (LAN/UDP)** usando Winsock2.
 
 ---
 
@@ -21,7 +21,7 @@ O projeto utiliza **Raycasting DDA** para projetar um mapa 2D em perspectiva 3D 
 Abra o terminal na pasta do projeto e execute:
 
 ```powershell
-# Apenas compilar o jogo (gera bin\doom_ascii.exe)
+# Compilar o jogo (instala a Raylib automaticamente caso falte no MSYS2!)
 .\build.bat
 
 # Compilar e abrir o jogo
@@ -40,13 +40,16 @@ Abra o terminal na pasta do projeto e execute:
 
 ## Controles do Jogo
 
-| Tecla | Ação |
+| Tecla / Botão | Ação |
 | :--- | :--- |
-| `W` / `S` ou Seta Cima/Baixo | Andar para frente / para trás |
-| `A` / `D` | Andar lateralmente (strafe) |
-| `Q` / `E` ou `J` / `L` ou Setas Esq/Dir | Girar a câmera |
-| `Espaço` | Atirar |
-| `ESC` | Sair do jogo |
+| `Mouse` (movimento) ou `Q`/`E` / Setas | Girar a câmera (360° fluido) |
+| `W` / `A` / `S` / `D` | Movimentação contínua (com movimento diagonal normalizado) |
+| `Shift` | Correr (*Sprint*) |
+| `Clique Esquerdo` ou `Espaço` | Atirar |
+| `R` | Recarregar munição (`30/30`) |
+| `TAB` | Soltar / travar o cursor do mouse na janela |
+| `F3` | Alternar limite de FPS (`165 FPS` / `Ilimitado`) |
+| `ESC` | Voltar ao menu / Sair |
 
 ---
 
@@ -56,9 +59,9 @@ O código foi estruturado em módulos independentes para que todos possam progra
 
 | Integrante | Módulo | Arquivos Principais | Responsabilidades sugeridas |
 | :--- | :--- | :--- | :--- |
-| **Pessoa 1** | Mapa, Arquivos e Colisão | `include/map.h`, `src/map.c`, `assets/maps/` | Novos mapas `.txt`, portas/itens no mapa, seleção de fases |
-| **Pessoa 2** | Jogador, Física e Input | `include/player.h`, `src/player.c` | Movimentação, vida, munição, recarga, corrida, dano |
-| **Pessoa 3** | Motor Gráfico ASCII e HUD | `include/renderer.h`, `src/renderer.c` | Texturas ASCII, desenho da arma na tela, inimigos/sprites, HUD |
+| **Pessoa 1** | Mapa, Arquivos e Colisão | `include/map.h`, `src/map.c`, `assets/maps/` | Novos mapas `.txt` com materiais coloridos (`#`, `@`, `%`), portas/itens, seleção de fases |
+| **Pessoa 2** | Jogador, Física e Input | `include/player.h`, `src/player.c` | Movimentação com Delta Time, vida, munição, recarga, corrida, dano |
+| **Pessoa 3** | Motor Gráfico ASCII e HUD | `include/renderer.h`, `src/renderer.c` | Efeitos visuais ASCII RGB, sprites de inimigos, animação da arma, HUD |
 | **Pessoa 4** | Multiplayer LAN/UDP e Fluxo | `include/network.h`, `src/network.c`, `src/main.c` | Sincronização de tiros/vida, placar multiplayer, inimigos/IA |
 
 ---
@@ -66,5 +69,5 @@ O código foi estruturado em módulos independentes para que todos possam progra
 ## Documentação da Equipe
 
 - **Tutorial para o grupo usar Git, GitHub e configurar o PC:** [`docs/GUIA_GITHUB_E_AMBIENTE.md`](docs/GUIA_GITHUB_E_AMBIENTE.md)
-- **Como o código funciona por dentro (Raycasting, Loop e Rede):** [`docs/ARQUITETURA_DO_CODIGO.md`](docs/ARQUITETURA_DO_CODIGO.md)
+- **Como o código funciona por dentro (Raycasting, Delta Time e Rede):** [`docs/ARQUITETURA_DO_CODIGO.md`](docs/ARQUITETURA_DO_CODIGO.md)
 - **Documento base da Etapa 1 / Etapa 2 (para o Word):** [`docs/ETAPA1_DOCUMENTO_BASE.md`](docs/ETAPA1_DOCUMENTO_BASE.md)

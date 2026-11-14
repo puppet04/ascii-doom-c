@@ -1,6 +1,12 @@
 #include "network.h"
 #include <string.h>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
 int net_init(NetContext *net, NetMode mode, const char *ip, int port) {
     if (!net) {
         return 0;
@@ -33,7 +39,7 @@ int net_init(NetContext *net, NetMode mode, const char *ip, int port) {
         return 0;
     }
 
-    net->sock = s;
+    net->sock_handle = (unsigned long long)s;
     net->initialized = 1;
 
     if (mode == NET_MODE_HOST) {
@@ -49,14 +55,13 @@ int net_init(NetContext *net, NetMode mode, const char *ip, int port) {
         }
     } else if (mode == NET_MODE_CLIENT) {
         const char *target_ip = (ip && ip[0] != '\0') ? ip : "127.0.0.1";
-        memset(&net->peer_addr, 0, sizeof(net->peer_addr));
-        net->peer_addr.sin_family = AF_INET;
-        net->peer_addr.sin_port = htons((u_short)net->port);
-
-        if (inet_pton(AF_INET, target_ip, &net->peer_addr.sin_addr) != 1) {
+        struct in_addr addr;
+        if (inet_pton(AF_INET, target_ip, &addr) != 1) {
             net_close(net);
             return 0;
         }
+        net->peer_ip = (unsigned int)addr.s_addr;
+        net->peer_port = (unsigned short)htons((u_short)net->port);
         net->has_peer_addr = 1;
     }
 
@@ -84,13 +89,20 @@ int net_send_state(NetContext *net, const Player *local_player, int shooting) {
     pkt.health = local_player->health;
     pkt.shooting = shooting;
 
+    struct sockaddr_in target_addr;
+    memset(&target_addr, 0, sizeof(target_addr));
+    target_addr.sin_family = AF_INET;
+    target_addr.sin_addr.s_addr = (ULONG)net->peer_ip;
+    target_addr.sin_port = (USHORT)net->peer_port;
+
+    SOCKET s = (SOCKET)net->sock_handle;
     int sent = sendto(
-        net->sock,
+        s,
         (const char *)&pkt,
         (int)sizeof(pkt),
         0,
-        (const struct sockaddr *)&net->peer_addr,
-        (int)sizeof(net->peer_addr)
+        (const struct sockaddr *)&target_addr,
+        (int)sizeof(target_addr)
     );
 
     return (sent == (int)sizeof(pkt)) ? 1 : 0;
@@ -107,6 +119,7 @@ int net_receive_state(NetContext *net) {
 
 #ifdef _WIN32
     int received_any = 0;
+    SOCKET s = (SOCKET)net->sock_handle;
 
     for (;;) {
         NetPacket pkt;
@@ -114,7 +127,7 @@ int net_receive_state(NetContext *net) {
         int sender_len = (int)sizeof(sender);
 
         int bytes = recvfrom(
-            net->sock,
+            s,
             (char *)&pkt,
             (int)sizeof(pkt),
             0,
@@ -124,7 +137,8 @@ int net_receive_state(NetContext *net) {
 
         if (bytes == (int)sizeof(pkt)) {
             net->remote_state = pkt;
-            net->peer_addr = sender;
+            net->peer_ip = (unsigned int)sender.sin_addr.s_addr;
+            net->peer_port = (unsigned short)sender.sin_port;
             net->has_peer_addr = 1;
             net->connected = 1;
             received_any = 1;
@@ -146,11 +160,15 @@ void net_close(NetContext *net) {
 
 #ifdef _WIN32
     if (net->initialized) {
-        closesocket(net->sock);
+        SOCKET s = (SOCKET)net->sock_handle;
+        closesocket(s);
         WSACleanup();
     }
 #endif
 
+    net->sock_handle = 0;
+    net->peer_ip = 0;
+    net->peer_port = 0;
     net->initialized = 0;
     net->connected = 0;
     net->has_peer_addr = 0;

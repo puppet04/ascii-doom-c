@@ -1,10 +1,7 @@
 #include "player.h"
+#include "raylib.h"
 #include <math.h>
 #include <stddef.h>
-
-#ifdef _WIN32
-#include <conio.h>
-#endif
 
 static float normalize_angle(float angle) {
     float two_pi = 2.0f * PI_F;
@@ -41,6 +38,8 @@ void player_init(Player *p, float x, float y, float angle) {
     p->health = 100;
     p->ammo = 30;
     p->score = 0;
+    p->bob_phase = 0.0f;
+    p->shoot_timer = 0.0f;
 }
 
 int player_move(Player *p, const GameMap *map, float forward, float strafe) {
@@ -71,85 +70,78 @@ void player_rotate(Player *p, float delta_angle) {
     p->angle = normalize_angle(p->angle + delta_angle);
 }
 
-void player_handle_input(Player *p, const GameMap *map, int *running, int *did_shoot) {
+void player_handle_input(Player *p, const GameMap *map, float dt,
+                         int *running, int *did_shoot) {
     if (!p || !map || !running || !did_shoot) {
         return;
     }
 
     *did_shoot = 0;
 
-#ifdef _WIN32
-    while (_kbhit()) {
-        int key = _getch();
-
-        /* Teclas estendidas (setas do teclado) chegam com prefixo 0 ou 224 */
-        if (key == 0 || key == 224) {
-            int ext = _getch();
-            switch (ext) {
-                case 72: /* Seta cima */
-                    player_move(p, map, MOVE_SPEED, 0.0f);
-                    break;
-                case 80: /* Seta baixo */
-                    player_move(p, map, -MOVE_SPEED, 0.0f);
-                    break;
-                case 75: /* Seta esquerda */
-                    player_rotate(p, -ROT_SPEED);
-                    break;
-                case 77: /* Seta direita */
-                    player_rotate(p, ROT_SPEED);
-                    break;
-                default:
-                    break;
-            }
-            continue;
-        }
-
-        switch (key) {
-            case 'w':
-            case 'W':
-                player_move(p, map, MOVE_SPEED, 0.0f);
-                break;
-            case 's':
-            case 'S':
-                player_move(p, map, -MOVE_SPEED, 0.0f);
-                break;
-            case 'a':
-            case 'A':
-                player_move(p, map, 0.0f, -MOVE_SPEED);
-                break;
-            case 'd':
-            case 'D':
-                player_move(p, map, 0.0f, MOVE_SPEED);
-                break;
-            case 'q':
-            case 'Q':
-            case 'j':
-            case 'J':
-                player_rotate(p, -ROT_SPEED);
-                break;
-            case 'e':
-            case 'E':
-            case 'l':
-            case 'L':
-                player_rotate(p, ROT_SPEED);
-                break;
-            case ' ':
-                if (p->ammo > 0) {
-                    p->ammo--;
-                    *did_shoot = 1;
-                }
-                break;
-            case 27: /* ESC */
-                *running = 0;
-                break;
-            default:
-                break;
+    if (p->shoot_timer > 0.0f) {
+        p->shoot_timer -= dt;
+        if (p->shoot_timer < 0.0f) {
+            p->shoot_timer = 0.0f;
         }
     }
-#else
-    (void)p;
-    (void)map;
-    (void)running;
-    (void)did_shoot;
-#endif
+
+    /* Rotacao pelo mouse (Mouse Look 360) quando o cursor esta preso */
+    if (IsCursorHidden()) {
+        Vector2 mouse_delta = GetMouseDelta();
+        if (mouse_delta.x != 0.0f) {
+            player_rotate(p, mouse_delta.x * MOUSE_SENSITIVITY);
+        }
+    }
+
+    /* Rotacao opcional por teclado (Q/E ou Setas esquerda/direita) */
+    float rot_dir = 0.0f;
+    if (IsKeyDown(KEY_Q) || IsKeyDown(KEY_LEFT))  rot_dir -= 1.0f;
+    if (IsKeyDown(KEY_E) || IsKeyDown(KEY_RIGHT)) rot_dir += 1.0f;
+    if (rot_dir != 0.0f) {
+        player_rotate(p, rot_dir * ROT_SPEED * dt);
+    }
+
+    /* Movimentacao continua em WASD (ou setas cima/baixo) */
+    float fwd_input = 0.0f;
+    float str_input = 0.0f;
+    if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP))   fwd_input += 1.0f;
+    if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN)) fwd_input -= 1.0f;
+    if (IsKeyDown(KEY_A)) str_input -= 1.0f;
+    if (IsKeyDown(KEY_D)) str_input += 1.0f;
+
+    if (fwd_input != 0.0f || str_input != 0.0f) {
+        /* Normaliza vetor diagonal para nao correr mais rapido na diagonal */
+        float mag = sqrtf(fwd_input * fwd_input + str_input * str_input);
+        fwd_input /= mag;
+        str_input /= mag;
+
+        float speed = MOVE_SPEED;
+        int sprinting = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+        if (sprinting) {
+            speed *= SPRINT_MULT;
+        }
+
+        if (player_move(p, map, fwd_input * speed * dt, str_input * speed * dt)) {
+            p->bob_phase += dt * (sprinting ? 14.0f : 10.0f);
+        }
+    }
+
+    /* Recarregar municao */
+    if (IsKeyPressed(KEY_R) && p->ammo < 30) {
+        p->ammo = 30;
+    }
+
+    /* Disparo com clique esquerdo ou Espaco, limitado por FIRE_COOLDOWN (dt) */
+    int want_shoot = (IsCursorHidden() && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) ||
+                     IsKeyDown(KEY_SPACE);
+    if (want_shoot && p->shoot_timer <= 0.0f && p->ammo > 0) {
+        p->ammo--;
+        p->shoot_timer = FIRE_COOLDOWN;
+        *did_shoot = 1;
+    }
+
+    /* ESC solicita encerramento da partida */
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        *running = 0;
+    }
 }

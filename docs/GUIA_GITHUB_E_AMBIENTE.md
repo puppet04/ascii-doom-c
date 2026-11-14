@@ -14,13 +14,14 @@ Cada integrante precisa ter 3 ferramentas instaladas no computador: **VS Code**,
    - **C/C++** (da Microsoft)
    - **Portuguese (Brazil) Language Pack** (opcional, se preferir em português)
 
-### 2. Instalar o Compilador C (MSYS2 + GCC)
+### 2. Instalar o Compilador C (MSYS2 + GCC + Raylib)
 Se você ainda não tem o `gcc` instalado:
 1. Baixe o instalador do [MSYS2](https://www.msys2.org/) e instale usando as opções padrão.
 2. Abra o terminal **MSYS2 UCRT64** (procure no Menu Iniciar) e rode:
    ```bash
-   pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-gdb mingw-w64-ucrt-x86_64-make git
+   pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-gdb mingw-w64-ucrt-x86_64-make mingw-w64-ucrt-x86_64-raylib git
    ```
+   *(Observação: se você já tiver o MSYS2 e esquecer de instalar a Raylib, o próprio script `.\build.bat` detecta e instala a Raylib automaticamente antes de compilar!)*
 3. Adicione as pastas abaixo no **PATH do Windows** (para o `gcc` e o `git` funcionarem em qualquer terminal):
    - Aperte a tecla `Windows`, digite **variáveis de ambiente** e abra *"Editar as variáveis de ambiente do sistema"*.
    - Clique em **Variáveis de Ambiente...**

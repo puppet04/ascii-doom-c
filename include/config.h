@@ -1,9 +1,16 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-/* Dimensoes da area de renderizacao 3D no terminal */
-#define SCREEN_WIDTH  96
-#define SCREEN_HEIGHT 26
+/* Dimensoes da janela grafica (Raylib) */
+#define WINDOW_WIDTH  1280
+#define WINDOW_HEIGHT 720
+#define HUD_HEIGHT    80
+
+/* Grade ASCII de alta resolucao (160x80 celulas de 8x8 pixels = 1280x640) */
+#define SCREEN_WIDTH  160
+#define SCREEN_HEIGHT 80
+#define CELL_WIDTH    8
+#define CELL_HEIGHT   8
 
 /* Dimensoes padrao da matriz do mapa */
 #define MAP_WIDTH  16
@@ -14,14 +21,17 @@
 #define FOV       (PI_F / 3.0f) /* 60 graus de campo de visao */
 #define MAX_DEPTH 16.0f
 
-/* Parametros de fisica e movimentacao */
-#define MOVE_SPEED    0.14f
-#define ROT_SPEED     0.09f
-#define PLAYER_RADIUS 0.22f
+/* Parametros fisicos baseados em segundos (independentes de FPS via Delta Time) */
+#define MOVE_SPEED        4.2f    /* blocos por segundo */
+#define SPRINT_MULT       1.55f   /* multiplicador ao segurar Shift */
+#define ROT_SPEED         2.6f    /* radianos por segundo no teclado */
+#define MOUSE_SENSITIVITY 0.0022f /* radianos por pixel do mouse */
+#define FIRE_COOLDOWN     0.25f   /* intervalo minimo entre disparos (s) */
+#define PLAYER_RADIUS     0.22f
 
-/* Configuracoes de rede e loop */
-#define DEFAULT_PORT  5000
-#define FRAME_DELAY_MS 33 /* ~30 FPS */
-#define MAX_SPRITES   8
+/* Configuracoes de rede e taxa de quadros */
+#define DEFAULT_PORT 5000
+#define TARGET_FPS   165
+#define MAX_SPRITES  8
 
 #endif /* CONFIG_H */

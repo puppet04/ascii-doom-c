@@ -3,16 +3,13 @@
 
 #include "player.h"
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#endif
-
 /*
  * MODULO 4: MULTIPLAYER LAN/UDP VIA WINSOCK2
  * Responsavel pela comunicacao em tempo real entre dois jogadores na mesma rede
  * (ou no mesmo PC via 127.0.0.1) usando sockets UDP nao-bloqueantes.
+ *
+ * Obs: Os headers do Windows (<winsock2.h>) ficam isolados em src/network.c
+ * para evitar conflito de nomes com a biblioteca grafica Raylib.
  */
 
 typedef enum {
@@ -35,12 +32,9 @@ typedef struct {
     int initialized;
     int connected;
     int port;
-#ifdef _WIN32
-    SOCKET sock;
-    struct sockaddr_in peer_addr;
-#else
-    int sock;
-#endif
+    unsigned long long sock_handle;
+    unsigned int peer_ip;
+    unsigned short peer_port;
     int has_peer_addr;
     NetPacket remote_state;
 } NetContext;

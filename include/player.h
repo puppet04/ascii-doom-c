@@ -7,7 +7,7 @@
 /*
  * MODULO 2: JOGADOR, FISICA E INPUT
  * Responsavel pelo estado do jogador, movimentacao com deteccao de colisao
- * contra o mapa, rotacao da camera e leitura do teclado.
+ * independente de FPS (via Delta Time), rotacao por mouse/teclado e disparos.
  */
 
 typedef struct {
@@ -19,6 +19,8 @@ typedef struct {
     int health;
     int ammo;
     int score;
+    float bob_phase;
+    float shoot_timer;
 } Player;
 
 /* Inicializa o jogador com posicao, angulo e status padrao. */
@@ -36,10 +38,10 @@ int player_move(Player *p, const GameMap *map, float forward, float strafe);
 void player_rotate(Player *p, float delta_angle);
 
 /*
- * Le as teclas pressionadas no terminal sem bloquear o game loop.
- * Atualiza *running = 0 caso o usuario pressione ESC.
- * Define *did_shoot = 1 caso o usuario atire (Espaco) e tenha municao.
+ * Processa teclado (WASD/Shift/R/ESC) e mouse (Mouse Look + Clique Esquerdo)
+ * multiplicando todas as velocidades por dt (Delta Time).
  */
-void player_handle_input(Player *p, const GameMap *map, int *running, int *did_shoot);
+void player_handle_input(Player *p, const GameMap *map, float dt,
+                         int *running, int *did_shoot);
 
 #endif /* PLAYER_H */
