@@ -5,25 +5,46 @@
 #include "map.h"
 
 /*
- * MODULO 2: JOGADOR, FISICA E INPUT
- * Responsavel pelo estado do jogador, movimentacao com deteccao de colisao
- * independente de FPS (via Delta Time), rotacao por mouse/teclado e disparos.
+ * MODULO 2: PERSONAGENS, CRIADOR DE PERSONAGEM E FISICA
+ * (Responsavel: Strazzer - branch strazzer)
+ * Responsavel pelos 4 personagens base, criador de personagem customizado,
+ * movimentacao com colisao por Delta Time, mouse look e disparos.
  */
+
+#define PRESET_CLASS_COUNT 4
+
+typedef struct {
+    char name[32];
+    int max_health;
+    int start_ammo;
+    float move_speed;
+    int start_weapon;
+} CharacterClass;
 
 typedef struct {
     int id;
+    char class_name[32];
     float x;
     float y;
     float angle;
     float fov;
+    float move_speed;
     int health;
+    int max_health;
     int ammo;
+    int active_weapon;
     int score;
     float bob_phase;
     float shoot_timer;
 } Player;
 
-/* Inicializa o jogador com posicao, angulo e status padrao. */
+/* Retorna um dos 4 personagens base pre-definidos (indice de 0 a 3). */
+CharacterClass player_get_preset_class(int index);
+
+/* Aplica os atributos de uma classe (base ou customizada) ao jogador. */
+void player_apply_class(Player *p, const CharacterClass *cls);
+
+/* Inicializa o jogador com posicao, angulo e atributos da classe padrao. */
 void player_init(Player *p, float x, float y, float angle);
 
 /*

@@ -1,7 +1,8 @@
 #include "player.h"
 #include "raylib.h"
 #include <math.h>
-#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
 
 static float normalize_angle(float angle) {
     float two_pi = 2.0f * PI_F;
@@ -25,6 +26,33 @@ static int is_position_blocked(const GameMap *map, float x, float y) {
     return 0;
 }
 
+CharacterClass player_get_preset_class(int index) {
+    static const CharacterClass PRESETS[PRESET_CLASS_COUNT] = {
+        {"Fuzileiro",  100, 30, 4.2f, 0},
+        {"Batedor",     80, 24, 5.4f, 1},
+        {"Blindado",   150, 40, 3.3f, 2},
+        {"Engenheiro", 110, 35, 4.5f, 3}
+    };
+
+    if (index < 0 || index >= PRESET_CLASS_COUNT) {
+        return PRESETS[0];
+    }
+    return PRESETS[index];
+}
+
+void player_apply_class(Player *p, const CharacterClass *cls) {
+    if (!p || !cls) {
+        return;
+    }
+
+    snprintf(p->class_name, sizeof(p->class_name), "%s", cls->name);
+    p->max_health = (cls->max_health > 0) ? cls->max_health : 100;
+    p->health = p->max_health;
+    p->ammo = (cls->start_ammo > 0) ? cls->start_ammo : 30;
+    p->move_speed = (cls->move_speed > 0.5f) ? cls->move_speed : MOVE_SPEED;
+    p->active_weapon = cls->start_weapon;
+}
+
 void player_init(Player *p, float x, float y, float angle) {
     if (!p) {
         return;
@@ -35,11 +63,12 @@ void player_init(Player *p, float x, float y, float angle) {
     p->y = y;
     p->angle = normalize_angle(angle);
     p->fov = FOV;
-    p->health = 100;
-    p->ammo = 30;
     p->score = 0;
     p->bob_phase = 0.0f;
     p->shoot_timer = 0.0f;
+
+    CharacterClass base_cls = player_get_preset_class(0);
+    player_apply_class(p, &base_cls);
 }
 
 int player_move(Player *p, const GameMap *map, float forward, float strafe) {
@@ -115,7 +144,7 @@ void player_handle_input(Player *p, const GameMap *map, float dt,
         fwd_input /= mag;
         str_input /= mag;
 
-        float speed = MOVE_SPEED;
+        float speed = (p->move_speed > 0.5f) ? p->move_speed : MOVE_SPEED;
         int sprinting = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
         if (sprinting) {
             speed *= SPRINT_MULT;

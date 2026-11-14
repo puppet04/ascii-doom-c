@@ -89,10 +89,10 @@ Depois de aceitar o convite no GitHub:
 
 **Nunca programe diretamente na branch `main`!** Cada integrante já tem a sua própria branch pronta lá no GitHub para testar e commitar à vontade antes de juntar na `main`:
 
-- **Checchia:** `checchia` *(Multiplayer / Game Loop)*
-- **Strazzer:** `strazzer` *(Mapa / Fases / Colisão)*
-- **Guilherme:** `guilherme` *(Jogador / Física / Armas)*
-- **Lucas:** `lucas` *(Gráficos ASCII / Sprites / HUD)*
+- **Strazzer:** `strazzer` *(Criador de personagens e 4 personagens base)*
+- **Lucas:** `lucas` *(Criação do mapa, fases e colisão)*
+- **Guilherme:** `guilherme` *(Criação das armas e dos inimigos)*
+- **Checchia:** `checchia` *(HUD, gráficos ASCII, menu e integração multiplayer)*
 
 ### 1. Logo após clonar: entre na SUA branch
 Substitua `SUA_BRANCH` pelo seu nome (`checchia`, `strazzer`, `guilherme` ou `lucas`):
@@ -165,10 +165,10 @@ Se você não gosta de digitar comandos no terminal, dá para usar apenas botõe
 ## Parte 5: Regras de Ouro para NÃO dar conflito no código em C
 
 1. **Respeite os módulos da equipe:**
-   - **Checchia** (`checchia`): `src/network.c`, `include/network.h` e `src/main.c`
-   - **Strazzer** (`strazzer`): `src/map.c`, `include/map.h` e `assets/maps/`
-   - **Guilherme** (`guilherme`): `src/player.c` e `include/player.h`
-   - **Lucas** (`lucas`): `src/renderer.c` e `include/renderer.h`
+   - **Strazzer** (`strazzer`): `src/player.c` e `include/player.h` *(criador de personagens e 4 personagens base)*
+   - **Lucas** (`lucas`): `src/map.c`, `include/map.h` e `assets/maps/` *(criação do mapa e fases)*
+   - **Guilherme** (`guilherme`): `src/entities.c` e `include/entities.h` *(armas e inimigos)*
+   - **Checchia** (`checchia`): `src/renderer.c`, `include/renderer.h`, `src/main.c` e `src/network.c` *(HUD, gráficos e integração)*
 2. **Combinem no grupo antes de editar `.h` ou `src/main.c`:** se duas pessoas mudarem `include/player.h` ao mesmo tempo, vai dar conflito na hora do merge.
 3. **Nunca suba arquivo `.exe` ou `.o`:** o `.gitignore` já bloqueia `bin/` e `*.exe`, mas sempre cheque com `git status`.
 4. **Commits pequenos e frequentes:** melhor subir 1 funcionalidade pronta por vez do que acumular 5 dias de alterações.

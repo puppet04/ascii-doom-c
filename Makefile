@@ -6,8 +6,8 @@ BIN_DIR = bin
 TARGET = $(BIN_DIR)/doom_ascii.exe
 TEST_TARGET = $(BIN_DIR)/test_runner.exe
 
-GAME_SRCS = src/map.c src/player.c src/renderer.c src/network.c src/main.c
-TEST_SRCS = src/map.c src/player.c src/network.c tests/test_main.c
+GAME_SRCS = src/map.c src/player.c src/entities.c src/renderer.c src/network.c src/main.c
+TEST_SRCS = src/map.c src/player.c src/entities.c src/network.c tests/test_main.c
 
 .PHONY: all run test clean
 

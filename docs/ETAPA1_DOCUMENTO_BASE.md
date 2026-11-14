@@ -10,10 +10,10 @@
 - **Avaliação:** Projeto Final — Segunda Avaliação (A2)
 - **Título do Projeto:** ASCII DOOM em C — Jogo FPS Interativo em Janela Gráfica (Raylib) com Suporte Multiplayer LAN
 - **Integrantes da Equipe (4 alunos):**
-  1. **Checchia** — RA: `[000000]` *(Responsável: Multiplayer UDP em Rede e Game Loop — branch `checchia`)*
-  2. **Strazzer** — RA: `[000000]` *(Responsável: Mapa, Arquivos e Colisão — branch `strazzer`)*
-  3. **Guilherme** — RA: `[000000]` *(Responsável: Jogador, Física e Controles — branch `guilherme`)*
-  4. **Lucas** — RA: `[000000]` *(Responsável: Motor Gráfico Raycasting ASCII e HUD — branch `lucas`)*
+  1. **Strazzer** — RA: `[000000]` *(Responsável: Criador de personagens e 4 personagens base — branch `strazzer`)*
+  2. **Lucas** — RA: `[000000]` *(Responsável: Criação do mapa, fases e colisão — branch `lucas`)*
+  3. **Guilherme** — RA: `[000000]` *(Responsável: Criação das armas e dos inimigos — branch `guilherme`)*
+  4. **Checchia** — RA: `[000000]` *(Responsável: HUD, gráficos ASCII 3D, menu e multiplayer — branch `checchia`)*
 
 ---
 
@@ -36,11 +36,11 @@ Desenvolver um jogo de tiro em primeira pessoa (FPS) inspirado no clássico **DO
 
 O desenvolvimento aplica diretamente os principais conteúdos da disciplina:
 
-- **Tipos Compostos (`struct` e `enum`):** representação de entidades como `GameMap`, `Player`, `SpriteEntity`, `NetPacket` e `NetContext`.
-- **Ponteiros e Passagem por Referência:** atualização eficiente do estado do jogador, buffers de tela e sockets de rede sem cópias desnecessárias em memória.
+- **Tipos Compostos (`struct` e `enum`):** representação de entidades como `GameMap`, `Player`, `CharacterClass`, `Weapon`, `Enemy`, `SpriteEntity`, `NetPacket` e `NetContext`.
+- **Ponteiros e Passagem por Referência:** atualização eficiente do estado do jogador, inimigos, buffers de tela e sockets de rede sem cópias desnecessárias em memória.
 - **Matrizes e Vetores (Arrays):** armazenamento do mapa bidimensional (`tiles[16][17]`), grade ASCII colorida (`screen_grid[80][160]`) e `z_buffer`.
-- **Manipulação de Arquivos (`FILE *`, `fopen`, `fgets`):** leitura dinâmica de arquivos de fase (`assets/maps/level1.txt`).
-- **Modularização (`.h` e `.c`):** separação clara de responsabilidades em quatro módulos independentes (`map`, `player`, `renderer`, `network`).
+- **Manipulação de Arquivos (`FILE *`, `fopen`, `fgets`):** leitura dinâmica de arquivos de fase (`assets/maps/level1.txt`) e salvamento/leitura de personagens.
+- **Modularização (`.h` e `.c`):** separação clara de responsabilidades em cinco módulos independentes (`map`, `player`, `entities`, `renderer`, `network`).
 - **Entrada/Saída em Tempo Real e Renderização Gráfica (Raylib):** leitura contínua de teclado e mouse (`Mouse Look`), controle de taxa de quadros (`165 FPS`) e movimentação por *Delta Time*.
 - **Comunicação em Rede (Sockets UDP / Winsock2):** serialização de estruturas em pacotes de rede para partidas entre duas máquinas.
 
@@ -50,10 +50,10 @@ O desenvolvimento aplica diretamente os principais conteúdos da disciplina:
 
 O projeto está hospedado no GitHub (`https://github.com/puppet04/ascii-doom-c`) com uma branch dedicada para cada integrante testar antes de integrar à `main` e conta com suíte de testes automatizados (`.\build.bat test`):
 
-- **Checchia (branch `checchia` — Módulo `network` e `main`):** gerenciamento do Game Loop, menu gráfico, conexão Host/Client via UDP e validação de acertos em rede.
-- **Strazzer (branch `strazzer` — Módulo `map`):** carregamento de fases, criação de novos mapas, detecção de paredes/portas/itens.
-- **Guilherme (branch `guilherme` — Módulo `player`):** controles por mouse/teclado com Delta Time, movimentação com colisão, cálculo de dano, recarga e pontuação.
-- **Lucas (branch `lucas` — Módulo `renderer`):** projeção 3D por Raycasting ASCII colorido, desenho da arma/mira, HUD e sprites de inimigos/jogadores.
+- **Strazzer (branch `strazzer` — Módulo `player`):** criador de personagens, definição dos 4 personagens base (`CharacterClass`), atributos, movimentação e controles.
+- **Lucas (branch `lucas` — Módulo `map`):** criação e carregamento de mapas/fases, materiais do cenário e detecção de colisão.
+- **Guilherme (branch `guilherme` — Módulo `entities`):** criação das armas (arsenal, dano, cadência) e dos inimigos (spawn, inteligência de movimento e combate).
+- **Checchia (branch `checchia` — Módulos `renderer`, `network` e `main`):** HUD, motor gráfico ASCII colorido em Raylib, menu inicial, efeitos visuais e integração multiplayer.
 
 ---
 

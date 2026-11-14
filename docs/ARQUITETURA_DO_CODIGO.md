@@ -14,13 +14,15 @@ Projeto DOOM - C/
 ├── docs/                       # Documentacao da equipe e entregas da A2
 ├── include/                    # Arquivos de cabecalho (.h) com structs e prototipos
 │   ├── config.h                # Resolucao (1280x720 / 160x80 ASCII), TARGET_FPS=165, velocidades
-│   ├── map.h                   # Modulo 1: Mapa e colisao
-│   ├── player.h                # Modulo 2: Jogador, fisica com Delta Time e mouse look
-│   ├── renderer.h              # Modulo 3: Motor grafico ASCII RGB em Raylib + HUD
-│   └── network.h               # Modulo 4: Multiplayer UDP (headers Win32 isolados)
+│   ├── map.h                   # Modulo 1 (Lucas): Mapa, fases e colisao
+│   ├── player.h                # Modulo 2 (Strazzer): Criador de personagens, 4 classes base e fisica
+│   ├── renderer.h              # Modulo 3 (Checchia): Motor grafico ASCII RGB em Raylib + HUD
+│   ├── network.h               # Modulo 4 (Checchia): Multiplayer UDP (headers Win32 isolados)
+│   └── entities.h              # Modulo 5 (Guilherme): Armas e inimigos
 ├── src/                        # Implementacoes (.c)
 │   ├── map.c
 │   ├── player.c
+│   ├── entities.c
 │   ├── renderer.c
 │   ├── network.c
 │   └── main.c                  # Menu grafico e Game Loop a 165 FPS

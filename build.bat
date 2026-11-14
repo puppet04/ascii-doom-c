@@ -21,8 +21,8 @@ set CC=gcc
 set CFLAGS=-Wall -Wextra -std=c11 -O2 -Iinclude
 set LDFLAGS=-lraylib -lopengl32 -lgdi32 -lwinmm -lws2_32 -lm
 
-set SRCS=src\map.c src\player.c src\renderer.c src\network.c src\main.c
-set TEST_SRCS=src\map.c src\player.c src\network.c tests\test_main.c
+set SRCS=src\map.c src\player.c src\entities.c src\renderer.c src\network.c src\main.c
+set TEST_SRCS=src\map.c src\player.c src\entities.c src\network.c tests\test_main.c
 
 set TARGET=bin\doom_ascii.exe
 set TEST_TARGET=bin\test_runner.exe
