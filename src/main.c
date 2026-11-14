@@ -116,10 +116,21 @@ static float calc_effective_density_scale(int quality, int sw, int sh) {
 
 static int g_borderless_mode = 0;
 static int g_borderless_unfocused_shrunk = 0;
+static int g_f12_cleanup_frames = 0;
 static int g_saved_win_x = 100;
 static int g_saved_win_y = 80;
 static int g_saved_win_w = 1280;
 static int g_saved_win_h = 720;
+
+static void cleanup_raylib_screenshots(void) {
+    char path[32];
+    for (int i = 0; i <= 15; i++) {
+        snprintf(path, sizeof(path), "screenshot%03d.png", i);
+        if (FileExists(path)) {
+            (void)remove(path);
+        }
+    }
+}
 
 static void toggle_borderless_window(void) {
     if (!g_borderless_mode) {
@@ -184,6 +195,14 @@ static int sync_window_focus_and_borderless(void) {
                 g_borderless_unfocused_shrunk = 0;
             }
         }
+    }
+
+    if (IsKeyPressed(KEY_F12)) {
+        g_f12_cleanup_frames = 2;
+    }
+    if (g_f12_cleanup_frames > 0) {
+        cleanup_raylib_screenshots();
+        g_f12_cleanup_frames--;
     }
 
     return win_active;
@@ -1276,7 +1295,8 @@ static void update_bind_capture(AppConfig *cfg, int *listening_bind) {
         return;
     }
     int pressed = GetKeyPressed();
-    if (pressed > 0 && pressed != KEY_F11 && pressed != KEY_F3 && pressed != KEY_F2) {
+    if (pressed > 0 && pressed != KEY_F11 && pressed != KEY_F12 &&
+        pressed != KEY_F3 && pressed != KEY_F2) {
         int *bind_ptrs[9] = {
             &cfg->binds.move_forward,
             &cfg->binds.move_backward,
@@ -2102,6 +2122,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    cleanup_raylib_screenshots();
     renderer_close();
     return 0;
 }
