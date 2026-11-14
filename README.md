@@ -49,20 +49,21 @@ Abra o terminal na pasta do projeto e execute:
 | `R` | Recarregar munição (`30/30`) |
 | `TAB` | Soltar / travar o cursor do mouse na janela |
 | `F3` | Alternar limite de FPS (`165 FPS` / `Ilimitado`) |
+| `F11` | Alternar Tela Cheia sem bordas |
 | `ESC` | Voltar ao menu / Sair |
 
 ---
 
-## Divisão Modular para a Equipe (até 4 integrantes)
+## Divisão Modular para a Equipe (Branches no GitHub)
 
-O código foi estruturado em módulos independentes para que todos possam programar ao mesmo tempo no GitHub sem gerar conflitos:
+Cada integrante possui sua própria branch de desenvolvimento para testar e commitar antes de enviar para a `main`:
 
-| Integrante | Módulo | Arquivos Principais | Responsabilidades sugeridas |
-| :--- | :--- | :--- | :--- |
-| **Pessoa 1** | Mapa, Arquivos e Colisão | `include/map.h`, `src/map.c`, `assets/maps/` | Novos mapas `.txt` com materiais coloridos (`#`, `@`, `%`), portas/itens, seleção de fases |
-| **Pessoa 2** | Jogador, Física e Input | `include/player.h`, `src/player.c` | Movimentação com Delta Time, vida, munição, recarga, corrida, dano |
-| **Pessoa 3** | Motor Gráfico ASCII e HUD | `include/renderer.h`, `src/renderer.c` | Efeitos visuais ASCII RGB, sprites de inimigos, animação da arma, HUD |
-| **Pessoa 4** | Multiplayer LAN/UDP e Fluxo | `include/network.h`, `src/network.c`, `src/main.c` | Sincronização de tiros/vida, placar multiplayer, inimigos/IA |
+| Integrante | Branch | Módulo | Arquivos Principais | Responsabilidades sugeridas |
+| :--- | :--- | :--- | :--- | :--- |
+| **Checchia** | `checchia` | Multiplayer LAN/UDP e Fluxo | `include/network.h`, `src/network.c`, `src/main.c` | Sincronização de tiros/vida, placar multiplayer, inimigos/IA |
+| **Strazzer** | `strazzer` | Mapa, Arquivos e Colisão | `include/map.h`, `src/map.c`, `assets/maps/` | Novos mapas `.txt` com materiais coloridos (`#`, `@`, `%`), portas/itens, seleção de fases |
+| **Guilherme** | `guilherme` | Jogador, Física e Input | `include/player.h`, `src/player.c` | Movimentação com Delta Time, vida, munição, recarga, corrida, dano |
+| **Lucas** | `lucas` | Motor Gráfico ASCII e HUD | `include/renderer.h`, `src/renderer.c` | Efeitos visuais ASCII RGB, sprites de inimigos, animação da arma, HUD |
 
 ---
 

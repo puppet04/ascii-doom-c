@@ -87,29 +87,34 @@ Depois de aceitar o convite no GitHub:
 
 ## Parte 3: Fluxo Diário de Trabalho (Comandos no Terminal)
 
-Nunca programe diretamente na branch `main`! Cada tarefa ou módulo deve ser feito em uma **branch** separada.
+**Nunca programe diretamente na branch `main`!** Cada integrante já tem a sua própria branch pronta lá no GitHub para testar e commitar à vontade antes de juntar na `main`:
 
-### 1. Antes de começar a programar: atualize a `main`
+- **Checchia:** `checchia` *(Multiplayer / Game Loop)*
+- **Strazzer:** `strazzer` *(Mapa / Fases / Colisão)*
+- **Guilherme:** `guilherme` *(Jogador / Física / Armas)*
+- **Lucas:** `lucas` *(Gráficos ASCII / Sprites / HUD)*
+
+### 1. Logo após clonar: entre na SUA branch
+Substitua `SUA_BRANCH` pelo seu nome (`checchia`, `strazzer`, `guilherme` ou `lucas`):
 ```powershell
-git checkout main
+git checkout SUA_BRANCH
+```
+
+### 2. Para trazer novidades que os colegas já aprovaram na `main`
+```powershell
+git checkout SUA_BRANCH
 git pull origin main
 ```
-
-### 2. Crie sua branch para a tarefa do dia
-Use um nome curto indicando o que você vai fazer (sem espaços):
-```powershell
-git checkout -b feat/melhorar-mapa
-```
-*(Outros exemplos: `feat/hud-arma`, `feat/dano-inimigo`, `fix/colisao-parede`)*
 
 ### 3. Programe, compile e teste bastante!
 Sempre confira antes de subir:
 ```powershell
 .\build.bat
 .\build.bat test
+.\build.bat run
 ```
 
-### 4. Salve suas alterações no Git (Add + Commit)
+### 4. Salve suas alterações na sua branch (Add + Commit)
 Veja quais arquivos você modificou:
 ```powershell
 git status
@@ -117,19 +122,20 @@ git status
 Adicione os arquivos e crie um commit explicando o que fez:
 ```powershell
 git add .
-git commit -m "feat: adiciona selecao de fases no map.c"
+git commit -m "feat: adiciona nova melhoria no meu modulo"
 ```
 
 ### 5. Envie sua branch para o GitHub (Push)
 ```powershell
-git push -u origin feat/melhorar-mapa
+git push origin SUA_BRANCH
 ```
+*(Ex.: `git push origin strazzer`, `git push origin guilherme`, `git push origin lucas`, `git push origin checchia`)*
 
-### 6. Abra um Pull Request (PR) no GitHub
-1. Acesse a página do repositório no GitHub.
-2. Vai aparecer um botão verde **"Compare & pull request"** — clique nele.
-3. Preencha o checklist que aparece automaticamente, descreva o que mudou e clique em **Create pull request**.
-4. O GitHub Actions vai compilar e rodar os testes automaticamente! Quando ficar verde e um colega revisar, clique em **Merge pull request**.
+### 6. Quando estiver testado e pronto: abra um Pull Request (PR) para a `main`
+1. Acesse a página do repositório no GitHub (`https://github.com/puppet04/ascii-doom-c`).
+2. Vai aparecer um botão verde **"Compare & pull request"** para a sua branch — clique nele (ou vá na aba **Pull requests -> New pull request** comparando `base: main` <- `compare: sua_branch`).
+3. Preencha o checklist, descreva o que mudou e clique em **Create pull request**.
+4. Depois que estiver tudo testado, clique em **Merge pull request** para levar sua parte para a `main`!
 
 ---
 
@@ -138,35 +144,35 @@ git push -u origin feat/melhorar-mapa
 Se você não gosta de digitar comandos no terminal, dá para usar apenas botões!
 
 ### Opção A: Direto no VS Code (aba Source Control)
-1. **Trocar ou criar branch:** No canto inferior esquerdo do VS Code, clique no nome da branch atual (ex.: `main`) -> **+ Create new branch...** -> digite o nome (ex.: `feat/minha-parte`) e aperte `Enter`.
-2. **Baixar novidades (`pull`):** Clique no ícone de `...` na aba **Source Control** (ícone dos três pontinhos conectados na barra lateral esquerda, ou `Ctrl + Shift + G`) -> **Pull**.
+1. **Entrar na sua branch:** No canto inferior esquerdo do VS Code, clique no nome da branch atual (`main`) e selecione `origin/checchia`, `origin/strazzer`, `origin/guilherme` ou `origin/lucas`.
+2. **Baixar novidades da `main` (`pull`):** Clique no ícone de `...` na aba **Source Control** (`Ctrl + Shift + G`) -> **Pull from...** -> selecione `origin/main`.
 3. **Salvar commit:**
    - Passe o mouse em *Changes* e clique no `+` para preparar os arquivos (*Stage All Changes*).
    - Digite a mensagem na caixinha acima (ex.: `feat: melhora mira da arma`) e clique no botão azul **Commit**.
-4. **Enviar para o GitHub (`push`):** Clique no botão **Publish Branch** (ou **Sync Changes**).
+4. **Enviar para o GitHub (`push`):** Clique no botão **Sync Changes** (ou **Publish Branch**).
 5. **Compilar sem terminal:** Aperte `Ctrl + Shift + B` no VS Code!
 
 ### Opção B: Usando o GitHub Desktop
 1. Baixe o [GitHub Desktop](https://desktop.github.com/) e faça login com sua conta do GitHub.
-2. Vá em **File -> Clone repository** e escolha o repositório do grupo (ou **Add local repository** se já baixou).
-3. No topo, clique em **Current branch -> New branch** para criar sua branch.
+2. Vá em **File -> Clone repository** e escolha `puppet04/ascii-doom-c`.
+3. No topo, clique em **Current branch** e escolha a sua branch (`checchia`, `strazzer`, `guilherme` ou `lucas`).
 4. Quando terminar de editar no VS Code, volte no GitHub Desktop: ele mostra todas as linhas alteradas.
 5. Escreva o título do commit no canto inferior esquerdo, clique em **Commit to ...** e depois em **Push origin** no topo.
-6. Clique em **Preview Pull Request -> Create Pull Request** para abrir no site.
+6. Quando estiver pronto para juntar na `main`, clique em **Preview Pull Request -> Create Pull Request**.
 
 ---
 
 ## Parte 5: Regras de Ouro para NÃO dar conflito no código em C
 
 1. **Respeite os módulos da equipe:**
-   - Pessoa 1 foca em `src/map.c` e `assets/maps/`
-   - Pessoa 2 foca em `src/player.c`
-   - Pessoa 3 foca em `src/renderer.c`
-   - Pessoa 4 foca em `src/network.c` e `src/main.c`
+   - **Checchia** (`checchia`): `src/network.c`, `include/network.h` e `src/main.c`
+   - **Strazzer** (`strazzer`): `src/map.c`, `include/map.h` e `assets/maps/`
+   - **Guilherme** (`guilherme`): `src/player.c` e `include/player.h`
+   - **Lucas** (`lucas`): `src/renderer.c` e `include/renderer.h`
 2. **Combinem no grupo antes de editar `.h` ou `src/main.c`:** se duas pessoas mudarem `include/player.h` ao mesmo tempo, vai dar conflito na hora do merge.
 3. **Nunca suba arquivo `.exe` ou `.o`:** o `.gitignore` já bloqueia `bin/` e `*.exe`, mas sempre cheque com `git status`.
 4. **Commits pequenos e frequentes:** melhor subir 1 funcionalidade pronta por vez do que acumular 5 dias de alterações.
-5. **Só dê Merge se compilar e passar nos testes (`.\build.bat test`).**
+5. **Só dê Merge na `main` se compilar e passar nos testes (`.\build.bat test`).**
 
 ---
 

@@ -8,12 +8,12 @@
 
 - **Disciplina:** Linguagem de Programação — Engenharia da Computação
 - **Avaliação:** Projeto Final — Segunda Avaliação (A2)
-- **Título do Projeto:** ASCII DOOM em C — Jogo FPS Interativo em Terminal com Suporte Multiplayer LAN
-- **Integrantes da Equipe (até 4 alunos):**
-  1. `[Nome Completo 1]` — RA: `[000000]` *(Responsável: Mapa, Arquivos e Colisão)*
-  2. `[Nome Completo 2]` — RA: `[000000]` *(Responsável: Jogador, Física e Controles)*
-  3. `[Nome Completo 3]` — RA: `[000000]` *(Responsável: Motor Gráfico Raycasting ASCII e HUD)*
-  4. `[Nome Completo 4]` — RA: `[000000]` *(Responsável: Multiplayer UDP em Rede e Game Loop)*
+- **Título do Projeto:** ASCII DOOM em C — Jogo FPS Interativo em Janela Gráfica (Raylib) com Suporte Multiplayer LAN
+- **Integrantes da Equipe (4 alunos):**
+  1. **Checchia** — RA: `[000000]` *(Responsável: Multiplayer UDP em Rede e Game Loop — branch `checchia`)*
+  2. **Strazzer** — RA: `[000000]` *(Responsável: Mapa, Arquivos e Colisão — branch `strazzer`)*
+  3. **Guilherme** — RA: `[000000]` *(Responsável: Jogador, Física e Controles — branch `guilherme`)*
+  4. **Lucas** — RA: `[000000]` *(Responsável: Motor Gráfico Raycasting ASCII e HUD — branch `lucas`)*
 
 ---
 
@@ -48,12 +48,12 @@ O desenvolvimento aplica diretamente os principais conteúdos da disciplina:
 
 ## 4. Divisão de Trabalho na Equipe (GitHub Flow)
 
-O projeto está hospedado no GitHub com divisão de arquivos por módulo para evitar conflitos de código e conta com suíte de testes automatizados (`.\build.bat test`):
+O projeto está hospedado no GitHub (`https://github.com/puppet04/ascii-doom-c`) com uma branch dedicada para cada integrante testar antes de integrar à `main` e conta com suíte de testes automatizados (`.\build.bat test`):
 
-- **Integrante 1 (Módulo `map`):** carregamento de fases, criação de novos mapas, detecção de paredes/portas/itens.
-- **Integrante 2 (Módulo `player`):** controles, movimentação com colisão, cálculo de dano, recarga e pontuação.
-- **Integrante 3 (Módulo `renderer`):** projeção 3D por Raycasting, desenho da arma/mira, HUD e sprites de inimigos/jogadores.
-- **Integrante 4 (Módulo `network` e `main`):** gerenciamento do Game Loop, menu, conexão Host/Client via UDP e validação de acertos em rede.
+- **Checchia (branch `checchia` — Módulo `network` e `main`):** gerenciamento do Game Loop, menu gráfico, conexão Host/Client via UDP e validação de acertos em rede.
+- **Strazzer (branch `strazzer` — Módulo `map`):** carregamento de fases, criação de novos mapas, detecção de paredes/portas/itens.
+- **Guilherme (branch `guilherme` — Módulo `player`):** controles por mouse/teclado com Delta Time, movimentação com colisão, cálculo de dano, recarga e pontuação.
+- **Lucas (branch `lucas` — Módulo `renderer`):** projeção 3D por Raycasting ASCII colorido, desenho da arma/mira, HUD e sprites de inimigos/jogadores.
 
 ---
 
