@@ -1,6 +1,4 @@
-# Documento Base — Projeto Final A2 (Etapa 1 e Etapa 2)
-
-> **Instruções de uso:** Copie e cole as seções abaixo no documento Word da equipe, substituindo os campos entre `[colchetes]` pelos nomes, RAs e detalhes do grupo.
+# Projeto Final — Segunda Avaliação (A2): ASCII DOOM em C
 
 ---
 
@@ -10,10 +8,10 @@
 - **Avaliação:** Projeto Final — Segunda Avaliação (A2)
 - **Título do Projeto:** ASCII DOOM em C — Jogo FPS Interativo em Janela Gráfica (Raylib) com Suporte Multiplayer LAN
 - **Integrantes da Equipe (4 alunos):**
-  1. **Strazzer** — RA: `[000000]` *(Responsável: Criador de personagens e 4 personagens base — branch `strazzer`)*
-  2. **Lucas** — RA: `[000000]` *(Responsável: Criação do mapa, fases e colisão — branch `lucas`)*
-  3. **Guilherme** — RA: `[000000]` *(Responsável: Criação das armas e dos inimigos — branch `guilherme`)*
-  4. **Checchia** — RA: `[000000]` *(Responsável: HUD, gráficos ASCII 3D, menu e multiplayer — branch `checchia`)*
+  1. **Rafael Strazzer** *(Responsável: Criador de personagens e 4 personagens base — branch `strazzer`)*
+  2. **Lucas** *(Responsável: Criação do mapa, fases e colisão — branch `lucas`)*
+  3. **Guilherme Trentin** *(Responsável: Criação das armas e dos inimigos — branch `guilherme`)*
+  4. **Guilherme Checchia** *(Responsável: HUD, gráficos ASCII 3D, menu e multiplayer — branch `checchia`)*
 
 ---
 
@@ -50,10 +48,10 @@ O desenvolvimento aplica diretamente os principais conteúdos da disciplina:
 
 O projeto está hospedado no GitHub (`https://github.com/puppet04/ascii-doom-c`) com uma branch dedicada para cada integrante testar antes de integrar à `main` e conta com suíte de testes automatizados (`.\build.bat test`):
 
-- **Strazzer (branch `strazzer` — Módulo `player`):** criador de personagens, definição dos 4 personagens base (`CharacterClass`), atributos, movimentação e controles.
+- **Rafael Strazzer (branch `strazzer` — Módulo `player`):** criador de personagens, definição dos 4 personagens base (`CharacterClass`), atributos, movimentação e controles.
 - **Lucas (branch `lucas` — Módulo `map`):** criação e carregamento de mapas/fases, materiais do cenário e detecção de colisão.
-- **Guilherme (branch `guilherme` — Módulo `entities`):** criação das armas (arsenal, dano, cadência) e dos inimigos (spawn, inteligência de movimento e combate).
-- **Checchia (branch `checchia` — Módulos `renderer`, `network` e `main`):** HUD, motor gráfico ASCII colorido em Raylib, menu inicial, efeitos visuais e integração multiplayer.
+- **Guilherme Trentin (branch `guilherme` — Módulo `entities`):** criação das armas (arsenal, dano, cadência) e dos inimigos (spawn, inteligência de movimento e combate).
+- **Guilherme Checchia (branch `checchia` — Módulos `renderer`, `network` e `main`):** HUD, motor gráfico ASCII colorido em Raylib, menu inicial, efeitos visuais e integração multiplayer.
 
 ---
 

@@ -60,10 +60,10 @@ Cada integrante possui sua própria branch de desenvolvimento para testar e comm
 
 | Integrante | Branch | Módulo | Arquivos Principais | Responsabilidades |
 | :--- | :--- | :--- | :--- | :--- |
-| **Strazzer** | `strazzer` | Personagens e Criador | `include/player.h`, `src/player.c` | Criador de personagens, 4 personagens base (atributos/classes), física e controles |
+| **Rafael Strazzer** | `strazzer` | Personagens e Criador | `include/player.h`, `src/player.c` | Criador de personagens, 4 personagens base (atributos/classes), física e controles |
 | **Lucas** | `lucas` | Mapa, Fases e Colisão | `include/map.h`, `src/map.c`, `assets/maps/` | Criação dos mapas `.txt`, materiais coloridos (`#`, `@`, `%`), portas e seleção de fases |
-| **Guilherme** | `guilherme` | Armas e Inimigos | `include/entities.h`, `src/entities.c` | Criação das armas (dano, cadência, alcance) e dos inimigos (spawn, IA e combate) |
-| **Checchia** | `checchia` | HUD, Gráficos e Integração | `include/renderer.h`, `src/renderer.c`, `src/main.c`, `src/network.c` | Motor gráfico ASCII 3D (Raylib), HUD, menu, efeitos visuais e multiplayer UDP |
+| **Guilherme Trentin** | `guilherme` | Armas e Inimigos | `include/entities.h`, `src/entities.c` | Criação das armas (dano, cadência, alcance) e dos inimigos (spawn, IA e combate) |
+| **Guilherme Checchia** | `checchia` | HUD, Gráficos e Integração | `include/renderer.h`, `src/renderer.c`, `src/main.c`, `src/network.c` | Motor gráfico ASCII 3D (Raylib), HUD, menu, efeitos visuais e multiplayer UDP |
 
 ---
 
