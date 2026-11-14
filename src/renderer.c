@@ -70,6 +70,7 @@ static char get_wall_shade(float dist, int side) {
 void renderer_init(void) {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "ASCII DOOM C - 165 FPS (Raylib)");
+    SetWindowMinSize(640, 480);
     SetExitKey(KEY_NULL);
     SetTargetFPS(TARGET_FPS);
     ui_font = GetFontDefault();
@@ -478,17 +479,37 @@ void renderer_present_window(const Player *player, int is_multiplayer,
         return;
     }
 
+    int sw = GetScreenWidth();
+    int sh = GetScreenHeight();
+    int hud_h = (int)((float)sh * 0.115f);
+    if (hud_h < 68) {
+        hud_h = 68;
+    }
+    int view_h = sh - hud_h;
+    if (view_h < SCREEN_HEIGHT) {
+        view_h = SCREEN_HEIGHT;
+    }
+
+    float cell_w = (float)sw / (float)SCREEN_WIDTH;
+    float cell_h = (float)view_h / (float)SCREEN_HEIGHT;
+    float glyph_size = cell_h * 1.15f;
+    if (glyph_size < 8.0f) {
+        glyph_size = 8.0f;
+    }
+    int rect_w = (int)ceilf(cell_w);
+    int rect_h = (int)ceilf(cell_h);
+
     BeginDrawing();
     ClearBackground((Color){10, 11, 16, 255});
 
     for (int y = 0; y < SCREEN_HEIGHT; y++) {
-        int py = y * CELL_HEIGHT;
+        float py = (float)y * cell_h;
         for (int x = 0; x < SCREEN_WIDTH; x++) {
             AsciiCell cell = screen_grid[y][x];
-            int px = x * CELL_WIDTH;
+            float px = (float)x * cell_w;
 
             if (cell.bg.r != 0 || cell.bg.g != 0 || cell.bg.b != 0) {
-                DrawRectangle(px, py, CELL_WIDTH, CELL_HEIGHT,
+                DrawRectangle((int)px, (int)py, rect_w, rect_h,
                               (Color){cell.bg.r, cell.bg.g, cell.bg.b, 255});
             }
 
@@ -496,35 +517,48 @@ void renderer_present_window(const Player *player, int is_multiplayer,
                 DrawTextCodepoint(
                     ui_font,
                     (int)cell.ch,
-                    (Vector2){(float)px, (float)py},
-                    10.0f,
+                    (Vector2){px, py},
+                    glyph_size,
                     (Color){cell.fg.r, cell.fg.g, cell.fg.b, 255}
                 );
             }
         }
     }
 
-    /* Painel inferior de HUD (y = 640..720) */
-    int hud_y = SCREEN_HEIGHT * CELL_HEIGHT;
-    DrawRectangle(0, hud_y, WINDOW_WIDTH, HUD_HEIGHT, (Color){18, 20, 28, 255});
-    DrawRectangle(0, hud_y, WINDOW_WIDTH, 3, (Color){190, 45, 45, 255});
+    /* Painel inferior de HUD responsivo */
+    int hud_y = view_h;
+    int hud_font = (int)((float)hud_h * 0.28f);
+    if (hud_font < 16) hud_font = 16;
+    int hint_font = (int)((float)hud_h * 0.19f);
+    if (hint_font < 12) hint_font = 12;
+
+    DrawRectangle(0, hud_y, sw, hud_h, (Color){18, 20, 28, 255});
+    DrawRectangle(0, hud_y, sw, 3, (Color){190, 45, 45, 255});
 
     if (player) {
         Color hp_col = (player->health > 60) ? (Color){70, 220, 110, 255}
                      : (player->health > 30) ? (Color){245, 200, 60, 255}
                                              : (Color){235, 65, 65, 255};
 
-        DrawText(TextFormat("VIDA: %d%%", player->health), 24, hud_y + 14, 22, hp_col);
-        DrawRectangle(24, hud_y + 42, 160, 10, (Color){40, 44, 56, 255});
-        int hp_w = (player->health * 160) / 100;
+        int x_hp = (int)((float)sw * 0.02f);
+        int hp_bar_w = (int)((float)sw * 0.13f);
+        if (hp_bar_w < 100) hp_bar_w = 100;
+        int row1_y = hud_y + (int)((float)hud_h * 0.16f);
+        int bar_y = hud_y + (int)((float)hud_h * 0.52f);
+
+        DrawText(TextFormat("VIDA: %d%%", player->health), x_hp, row1_y, hud_font, hp_col);
+        DrawRectangle(x_hp, bar_y, hp_bar_w, 8, (Color){40, 44, 56, 255});
+        int hp_w = (player->health * hp_bar_w) / 100;
         if (hp_w < 0) hp_w = 0;
-        if (hp_w > 160) hp_w = 160;
-        DrawRectangle(24, hud_y + 42, hp_w, 10, hp_col);
+        if (hp_w > hp_bar_w) hp_w = hp_bar_w;
+        DrawRectangle(x_hp, bar_y, hp_w, 8, hp_col);
 
         Color ammo_col = (player->ammo > 5) ? (Color){250, 210, 80, 255}
                                             : (Color){240, 75, 75, 255};
-        DrawText(TextFormat("MUNICAO: %02d/30", player->ammo), 220, hud_y + 14, 22, ammo_col);
-        DrawText(TextFormat("PONTOS: %d", player->score), 445, hud_y + 14, 22, (Color){120, 215, 255, 255});
+        DrawText(TextFormat("MUNICAO: %02d/30", player->ammo),
+                 (int)((float)sw * 0.19f), row1_y, hud_font, ammo_col);
+        DrawText(TextFormat("PONTOS: %d", player->score),
+                 (int)((float)sw * 0.37f), row1_y, hud_font, (Color){120, 215, 255, 255});
 
         const char *mode_str = is_multiplayer
             ? (remote_connected ? "MP: ONLINE" : "MP: AGUARDANDO")
@@ -532,17 +566,17 @@ void renderer_present_window(const Player *player, int is_multiplayer,
         Color mode_col = (is_multiplayer && !remote_connected)
             ? (Color){250, 185, 65, 255}
             : (Color){115, 235, 145, 255};
-        DrawText(mode_str, 650, hud_y + 14, 22, mode_col);
+        DrawText(mode_str, (int)((float)sw * 0.53f), row1_y, hud_font, mode_col);
 
         const char *cap_str = (fps_cap > 0) ? TextFormat("%d", fps_cap) : "MAX";
         DrawText(TextFormat("FPS: %d (Alvo: %s)", GetFPS(), cap_str),
-                 940, hud_y + 14, 22, (Color){235, 235, 245, 255});
+                 (int)((float)sw * 0.74f), row1_y, hud_font, (Color){235, 235, 245, 255});
 
         const char *mouse_hint = mouse_locked ? "[TAB] Soltar Mouse" : "[TAB] Travar Mouse";
         DrawText(
-            TextFormat("[Mouse] Mirar/Atirar   [WASD+Shift] Mover/Correr   [R] Recarregar   %s   [F3] FPS   [ESC] Menu",
+            TextFormat("[Mouse] Mirar/Atirar  [WASD+Shift] Mover  [R] Recarregar  %s  [F3] FPS  [F11] Tela Cheia  [ESC] Menu",
                        mouse_hint),
-            24, hud_y + 58, 15, (Color){165, 175, 195, 255}
+            x_hp, hud_y + (int)((float)hud_h * 0.72f), hint_font, (Color){165, 175, 195, 255}
         );
     }
 

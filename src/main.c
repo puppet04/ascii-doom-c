@@ -48,6 +48,11 @@ static float angle_diff_abs(float a, float b) {
     return fabsf(diff);
 }
 
+static void draw_centered_text(const char *text, int center_x, int y, int font_size, Color color) {
+    int width = MeasureText(text, font_size);
+    DrawText(text, center_x - width / 2, y, font_size, color);
+}
+
 static int run_menu_screen(char *ip_buf, size_t ip_size, int *port_out, const char *status_msg) {
     static const char *LOGO[] = {
         "    ___   _____ ______________    ____  ____  ____  __  ___",
@@ -72,7 +77,29 @@ static int run_menu_screen(char *ip_buf, size_t ip_size, int *port_out, const ch
         EnableCursor();
     }
 
+    Font font = GetFontDefault();
+
     while (!WindowShouldClose()) {
+        int sw = GetScreenWidth();
+        int sh = GetScreenHeight();
+        float sc = fminf((float)sw / 1280.0f, (float)sh / 720.0f);
+        if (sc < 0.55f) sc = 0.55f;
+
+        int cx = sw / 2;
+        int box_w = (int)(780.0f * sc);
+        int box_h = (int)(260.0f * sc);
+        int box_x = cx - box_w / 2;
+        int box_y = (int)((float)sh * 0.36f);
+        int item_x = box_x + (int)(25.0f * sc);
+        int item_w = box_w - (int)(50.0f * sc);
+        int item_h = (int)(44.0f * sc);
+        int item_step = (int)(56.0f * sc);
+        int first_item_y = box_y + (int)(26.0f * sc);
+
+        if (IsKeyPressed(KEY_F11)) {
+            ToggleBorderlessWindowed();
+        }
+
         if (!editing_ip) {
             if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S)) {
                 selected = (selected + 1) % 4;
@@ -84,6 +111,27 @@ static int run_menu_screen(char *ip_buf, size_t ip_size, int *port_out, const ch
             if (IsKeyPressed(KEY_TWO))   return 2;
             if (IsKeyPressed(KEY_THREE)) { selected = 2; editing_ip = 1; }
             if (IsKeyPressed(KEY_FOUR) || IsKeyPressed(KEY_ESCAPE)) return 4;
+
+            /* Suporte a mouse no menu (hover seleciona, clique esquerdo confirma) */
+            Vector2 mouse = GetMousePosition();
+            for (int i = 0; i < 4; i++) {
+                Rectangle btn = {
+                    (float)item_x,
+                    (float)(first_item_y + i * item_step - (int)(6.0f * sc)),
+                    (float)item_w,
+                    (float)item_h
+                };
+                if (CheckCollisionPointRec(mouse, btn)) {
+                    selected = i;
+                    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                        if (i == 2) {
+                            editing_ip = 1;
+                        } else {
+                            return i + 1;
+                        }
+                    }
+                }
+            }
 
             if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) {
                 if (selected == 2) {
@@ -123,42 +171,81 @@ static int run_menu_screen(char *ip_buf, size_t ip_size, int *port_out, const ch
         BeginDrawing();
         ClearBackground((Color){12, 13, 20, 255});
 
-        for (int i = 0; i < 5; i++) {
-            DrawText(LOGO[i], 235, 65 + i * 26, 22, (Color){230, 65, 55, 255});
-        }
-        DrawText("PROJETO FINAL (A2) - LINGUAGEM DE PROGRAMACAO | RAYLIB 165 FPS",
-                 265, 215, 20, (Color){165, 180, 210, 255});
+        /* Desenha logo ASCII em grade monoespacada fixa para nao entortar */
+        int logo_cols = (int)strlen(LOGO[0]);
+        float logo_cell_w = 13.0f * sc;
+        float logo_cell_h = 24.0f * sc;
+        float logo_font_sz = 22.0f * sc;
+        float logo_start_x = (float)cx - ((float)logo_cols * logo_cell_w) * 0.5f;
+        float logo_start_y = (float)sh * 0.08f;
 
-        DrawRectangleLines(250, 270, 780, 270, (Color){70, 80, 110, 255});
+        for (int r = 0; r < 5; r++) {
+            for (int c = 0; c < logo_cols; c++) {
+                char ch = LOGO[r][c];
+                if (ch != ' ') {
+                    DrawTextCodepoint(
+                        font,
+                        (int)ch,
+                        (Vector2){logo_start_x + (float)c * logo_cell_w,
+                                  logo_start_y + (float)r * logo_cell_h},
+                        logo_font_sz,
+                        (Color){230, 65, 55, 255}
+                    );
+                }
+            }
+        }
+
+        int sub_font = (int)(20.0f * sc);
+        if (sub_font < 14) sub_font = 14;
+        draw_centered_text("PROJETO FINAL (A2) - LINGUAGEM DE PROGRAMACAO | RAYLIB 165 FPS",
+                           cx, (int)(logo_start_y + 5.0f * logo_cell_h + 18.0f * sc),
+                           sub_font, (Color){165, 180, 210, 255});
+
+        DrawRectangleLines(box_x, box_y, box_w, box_h, (Color){70, 80, 110, 255});
+
+        int opt_font = (int)(22.0f * sc);
+        if (opt_font < 15) opt_font = 15;
 
         for (int i = 0; i < 4; i++) {
-            int y = 298 + i * 52;
+            int y = first_item_y + i * item_step;
             int is_sel = (i == selected);
             if (is_sel) {
-                DrawRectangle(275, y - 8, 730, 40, (Color){45, 28, 34, 255});
-                DrawRectangleLines(275, y - 8, 730, 40, (Color){230, 75, 65, 255});
+                DrawRectangle(item_x, y - (int)(6.0f * sc), item_w, item_h, (Color){45, 28, 34, 255});
+                DrawRectangleLines(item_x, y - (int)(6.0f * sc), item_w, item_h, (Color){230, 75, 65, 255});
             }
             Color text_col = is_sel ? (Color){255, 230, 100, 255} : (Color){210, 215, 225, 255};
-            DrawText(options[i], 300, y, 22, text_col);
+            DrawText(options[i], item_x + (int)(24.0f * sc), y + (int)(4.0f * sc), opt_font, text_col);
         }
 
+        int footer_y = box_y + box_h + (int)(22.0f * sc);
         if (editing_ip) {
-            DrawRectangle(310, 560, 660, 76, (Color){22, 26, 38, 255});
-            DrawRectangleLines(310, 560, 660, 76, (Color){100, 195, 255, 255});
+            int ip_w = (int)(660.0f * sc);
+            int ip_h = (int)(78.0f * sc);
+            int ip_x = cx - ip_w / 2;
+            DrawRectangle(ip_x, footer_y, ip_w, ip_h, (Color){22, 26, 38, 255});
+            DrawRectangleLines(ip_x, footer_y, ip_w, ip_h, (Color){100, 195, 255, 255});
             DrawText("Digite o IP do Host e aperte ENTER (ESC para voltar):",
-                     330, 570, 18, (Color){165, 215, 255, 255});
+                     ip_x + (int)(20.0f * sc), footer_y + (int)(10.0f * sc),
+                     (int)(18.0f * sc), (Color){165, 215, 255, 255});
             DrawText(TextFormat("IP: %s_", ip_buf),
-                     330, 598, 24, (Color){255, 240, 110, 255});
+                     ip_x + (int)(20.0f * sc), footer_y + (int)(40.0f * sc),
+                     (int)(24.0f * sc), (Color){255, 240, 110, 255});
         } else {
-            DrawText("Use [Setas] ou [1-4] + [ENTER] para escolher   |   [Mouse + WASD] dentro do jogo",
-                     235, 578, 18, (Color){145, 155, 175, 255});
+            int hint_font = (int)(18.0f * sc);
+            if (hint_font < 13) hint_font = 13;
+            draw_centered_text("Use [Mouse], [Setas] ou [1-4] + [ENTER]   |   [F11] Tela Cheia   |   [Mouse + WASD] no jogo",
+                               cx, footer_y + (int)(12.0f * sc),
+                               hint_font, (Color){145, 155, 175, 255});
         }
 
         if (status_msg && status_msg[0] != '\0') {
-            DrawText(status_msg, 250, 655, 18, (Color){245, 95, 85, 255});
+            draw_centered_text(status_msg, cx, footer_y + (int)(92.0f * sc),
+                               (int)(18.0f * sc), (Color){245, 95, 85, 255});
         }
 
-        DrawText(TextFormat("FPS: %d", GetFPS()), 1165, 20, 18, (Color){115, 225, 135, 255});
+        const char *fps_txt = TextFormat("FPS: %d  |  %dx%d", GetFPS(), sw, sh);
+        int fps_w = MeasureText(fps_txt, 18);
+        DrawText(fps_txt, sw - fps_w - 20, 16, 18, (Color){115, 225, 135, 255});
         EndDrawing();
     }
 
@@ -213,6 +300,10 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         if (IsKeyPressed(KEY_F3)) {
             *fps_cap = (*fps_cap == TARGET_FPS) ? 0 : TARGET_FPS;
             SetTargetFPS(*fps_cap);
+        }
+
+        if (IsKeyPressed(KEY_F11)) {
+            ToggleBorderlessWindowed();
         }
 
         int did_shoot = 0;
