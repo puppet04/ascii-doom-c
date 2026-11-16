@@ -3,6 +3,19 @@ setlocal enabledelayedexpansion
 
 set "PATH=C:\msys64\ucrt64\bin;C:\msys64\usr\bin;%PATH%"
 
+if not exist "C:\msys64\ucrt64\bin\gcc.exe" (
+    if not exist "C:\msys64\usr\bin\pacman.exe" (
+        echo [ERRO] MSYS2 nao encontrado em C:\msys64. Consulte docs\GUIA_GITHUB_E_AMBIENTE.md.
+        exit /b 1
+    )
+    echo [SETUP] Instalando compilador GCC UCRT64...
+    C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-ucrt-x86_64-gcc
+    if errorlevel 1 (
+        echo [ERRO] Nao foi possivel instalar o GCC UCRT64.
+        exit /b 1
+    )
+)
+
 if not exist "C:\msys64\ucrt64\include\raylib.h" (
     if exist "C:\msys64\usr\bin\pacman.exe" (
         echo [SETUP] Raylib nao encontrada. Instalando automaticamente via MSYS2...
@@ -17,7 +30,7 @@ if not exist "C:\msys64\ucrt64\include\raylib.h" (
     )
 )
 
-set CC=gcc
+set "CC=C:\msys64\ucrt64\bin\gcc.exe"
 set CFLAGS=-Wall -Wextra -std=c11 -O2 -Iinclude
 set LDFLAGS=-lraylib -lopengl32 -lgdi32 -lwinmm -lws2_32 -lm
 
@@ -47,7 +60,7 @@ if /i "%~1"=="test" (
     echo [TEST] Executando testes...
     echo.
     %TEST_TARGET%
-    exit /b %errorlevel%
+    exit /b !errorlevel!
 )
 
 echo [BUILD] Compilando %TARGET%...
@@ -61,7 +74,7 @@ echo [BUILD] Compilado com sucesso: %TARGET%
 if /i "%~1"=="run" (
     echo [RUN] Iniciando ASCII DOOM...
     %TARGET%
-    exit /b %errorlevel%
+    exit /b !errorlevel!
 )
 
 exit /b 0

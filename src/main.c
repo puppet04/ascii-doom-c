@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "config.h"
+#include "entities.h"
 #include "map.h"
 #include "network.h"
 #include "player.h"
@@ -18,7 +19,8 @@ typedef enum {
     MENU_PAGE_MAIN = 0,
     MENU_PAGE_MULTIPLAYER = 1,
     MENU_PAGE_CUSTOMIZE = 2,
-    MENU_PAGE_SETTINGS = 3
+    MENU_PAGE_SETTINGS = 3,
+    MENU_PAGE_CREATE = 4
 } MenuPage;
 
 typedef struct {
@@ -55,6 +57,8 @@ typedef struct {
     int show_fps;
     int res_idx;
     int ascii_quality;
+    int selected_character;
+    CharacterRoster roster;
 } AppConfig;
 
 static void binds_init_default(MenuKeyBinds *b) {
@@ -64,7 +68,7 @@ static void binds_init_default(MenuKeyBinds *b) {
     b->move_left     = KEY_A;
     b->move_right    = KEY_D;
     b->turn_left     = KEY_Q;
-    b->turn_right    = KEY_E;
+    b->turn_right    = KEY_RIGHT;
     b->sprint        = KEY_LEFT_SHIFT;
     b->reload        = KEY_R;
     b->shoot_key     = KEY_SPACE;
@@ -75,6 +79,8 @@ static void app_config_init(AppConfig *cfg) {
     if (!cfg) return;
     binds_init_default(&cfg->binds);
     cfg->fps_cap = TARGET_FPS;
+    cfg->selected_character = PRESET_FUZILEIRO;
+    player_roster_init(&cfg->roster);
     cfg->show_fps = 0; /* Desativado por padrao */
     cfg->res_idx = 1;  /* 1280 x 720 padrao */
     cfg->ascii_quality = ASCII_QUALITY_AUTO;
@@ -321,13 +327,6 @@ static int run_single_test_frame(void) {
     return 0;
 }
 
-static float angle_diff_abs(float a, float b) {
-    float diff = a - b;
-    while (diff > PI_F) diff -= 2.0f * PI_F;
-    while (diff < -PI_F) diff += 2.0f * PI_F;
-    return fabsf(diff);
-}
-
 static void handle_custom_input(Player *p, const GameMap *map, const MenuKeyBinds *b,
                                 float dt, int *running, int *did_shoot,
                                 float *pitch_offset) {
@@ -375,7 +374,7 @@ static void handle_custom_input(Player *p, const GameMap *map, const MenuKeyBind
         fwd /= mag;
         str /= mag;
 
-        float speed = (p->move_speed > 0.5f) ? p->move_speed : MOVE_SPEED;
+        float speed = player_effective_speed(p);
         int sprinting = IsKeyDown(b->sprint) || IsKeyDown(KEY_RIGHT_SHIFT);
         if (sprinting) {
             speed *= SPRINT_MULT;
@@ -392,11 +391,7 @@ static void handle_custom_input(Player *p, const GameMap *map, const MenuKeyBind
 
     int want_shoot = (IsCursorHidden() && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) ||
                      IsKeyDown(b->shoot_key);
-    if (want_shoot && p->shoot_timer <= 0.0f && p->ammo > 0) {
-        p->ammo--;
-        p->shoot_timer = FIRE_COOLDOWN;
-        *did_shoot = 1;
-    }
+    if (want_shoot) *did_shoot = player_begin_attack(p);
 
     (void)running;
 }
@@ -552,8 +547,18 @@ static ShowcaseLayout calc_showcase_layout(int sw, int sh, float sc, int page, i
 }
 
 /* Avalia geometria 2.5D continua do soldado placeholder no espaco canonico gx in [-34..34], gy in [0..86] */
+static int showcase_character = PRESET_FUZILEIRO;
+static CharacterAppearance showcase_appearance;
+static char showcase_name[32] = "Fuzileiro";
+
 static void eval_showcase_point(float gx, float gy, float breath,
                                 int *mat_out, float *nx_out, float *ny_out) {
+    if (player_appearance_visual(showcase_character, &showcase_appearance).custom_sprite && gy < 74.0f) {
+        *mat_out = player_appearance_material(showcase_character, &showcase_appearance, gx / 28.0f, (gy - breath) / 74.0f, 0);
+        *nx_out = gx / 40.0f;
+        *ny_out = 0.0f;
+        return;
+    }
     float uy = gy - breath;
     float ax = fabsf(gx);
 
@@ -1212,6 +1217,12 @@ static void draw_dense_character_showcase(Font font, int sw, int sh, float sc, f
                 cr = 102.0f; cg = 118.0f; cb = 140.0f;
             }
 
+            if (player_appearance_visual(showcase_character, &showcase_appearance).custom_sprite && mat != 5) {
+                CharacterColor color = player_get_material_color(mat);
+                cr = color.r; cg = color.g; cb = color.b;
+                ndotl = 0.85f;
+                spec = rim = scan = 0.0f;
+            }
             float lum = ndotl * 1.05f + spec + rim * 0.44f + scan;
             float px = (float)L.x0 + (float)c * L.cw;
 
@@ -1264,7 +1275,7 @@ static void draw_dense_character_showcase(Font font, int sw, int sh, float sc, f
     int tag_y = L.y0 + (int)L.total_h - (int)(6.0f * sc);
     int tag_sz = (int)(15.0f * sc);
     if (tag_sz < 10) tag_sz = 10;
-    const char *tag = "[ PLACEHOLDER  //  SELECIONADO EM PERSONALIZAR ]";
+    const char *tag = TextFormat("[ %s ]", showcase_name[0] ? showcase_name : "NOVO PERSONAGEM");
     while (tag_sz > 9 && MeasureText(tag, tag_sz) + 24 > (sw / 2)) {
         tag_sz--;
     }
@@ -1295,8 +1306,8 @@ static void update_bind_capture(AppConfig *cfg, int *listening_bind) {
         return;
     }
     int pressed = GetKeyPressed();
-    if (pressed > 0 && pressed != KEY_F11 && pressed != KEY_F12 &&
-        pressed != KEY_F3 && pressed != KEY_F2) {
+    if (pressed > 0 && pressed != KEY_E && pressed != KEY_F11 &&
+        pressed != KEY_F12 && pressed != KEY_F3 && pressed != KEY_F2) {
         int *bind_ptrs[9] = {
             &cfg->binds.move_forward,
             &cfg->binds.move_backward,
@@ -1540,17 +1551,73 @@ static int draw_settings_panel(AppConfig *cfg, int panel_x, int panel_y,
     return clicked_back;
 }
 
+/* Criador usa apenas dados do modulo player; nenhuma regra visual no renderer. */
+static int draw_character_creator(CharacterClass *draft, int x, int y, int w, int h,
+                                   float sc, int *editing, const char *error) {
+    int pad = (int)(18 * sc), row = h / 11;
+    int font = (int)(16 * sc); if (font < 11) font = 11;
+    int bh = row - 6;
+    Color bg = {35, 40, 52, 255}, hover = {145, 55, 90, 255};
+    DrawRectangle(x, y, w, h, (Color){14, 18, 25, 245});
+    DrawText("+ CRIAR SKIN", x + pad, y + 10, font + 2, (Color){255, 150, 180, 255});
+    Rectangle name_box = {(float)(x + pad), (float)(y + row), (float)(w - 2 * pad), (float)bh};
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) *editing = CheckCollisionPointRec(GetMousePosition(), name_box);
+    if (*editing) {
+        int ch;
+        while ((ch = GetCharPressed()) > 0) {
+            size_t len = strlen(draft->name);
+            int bytes = 0;
+            const char *encoded = CodepointToUTF8(ch, &bytes);
+            if (ch >= 32 && ch != 127 && bytes > 0 && len + bytes <= 24) {
+                memcpy(draft->name + len, encoded, bytes);
+                draft->name[len + bytes] = '\0';
+            }
+        }
+        size_t len = strlen(draft->name);
+        if (IsKeyPressed(KEY_BACKSPACE) && len) {
+            do { len--; } while (len && ((unsigned char)draft->name[len] & 0xc0) == 0x80);
+            draft->name[len] = '\0';
+        }
+    }
+    DrawRectangleRec(name_box, bg);
+    DrawRectangleLinesEx(name_box, 1, *editing ? (Color){255, 150, 180, 255} : GRAY);
+    DrawText(TextFormat("Nome: %s%s", draft->name, *editing ? "_" : ""), x + pad + 8, y + row + 8, font, WHITE);
+    int half = (w - 2 * pad - 8) / 2;
+    for (int part = 0; part < CHARACTER_PART_COUNT; part++) {
+        int ry = y + (2 + part) * row;
+        int value = draft->appearance.choice[part];
+        DrawText(TextFormat("%s: %s", player_part_label(part), player_part_option(part, value)),
+                 x + pad, ry + (bh - font) / 2, font, WHITE);
+        int delta = 0;
+        if (draw_small_button(x + w - pad - 2 * bh - 6, ry, bh, bh, "<", font, bg, hover)) delta = -1;
+        if (draw_small_button(x + w - pad - bh, ry, bh, bh, ">", font, bg, hover)) delta = 1;
+        int count = player_part_count(part);
+        draft->appearance.choice[part] = (value + delta + count) % count;
+    }
+    DrawText(error[0] ? error : "Disponivel enquanto o jogo estiver aberto.", x + pad, y + 9 * row + 4,
+             font - 1, error[0] ? (Color){255, 100, 100, 255} : LIGHTGRAY);
+    if (draw_small_button(x + pad, y + 10 * row, half, bh, "CANCELAR", font, bg, hover)) return -1;
+    if (draw_small_button(x + pad + half + 8, y + 10 * row, half, bh, "SALVAR", font,
+                          (Color){40, 105, 75, 255}, (Color){65, 150, 100, 255})) return 1;
+    return 0;
+}
+
 static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                            int *port_out, const char *status_msg) {
     const char *main_items[5] = {
         "JOGAR SINGLEPLAYER",
         "JOGAR MULTIPLAYER",
-        "PERSONALIZAR",
+        "SELECIONAR PERSONAGEM",
         "CONFIGURACOES",
         "SAIR"
     };
 
     MenuPage page = MENU_PAGE_MAIN;
+    CharacterClass draft = player_get_preset_class(PRESET_FUZILEIRO);
+    int list_page = cfg->selected_character / 4;
+    int name_editing = 1;
+
+    const char *creator_error = "";
     int main_sel = 0;
     int mp_editing_ip = 0;
     int settings_tab = 0; /* 0 = Geral/Video, 1 = Controles/Binds */
@@ -1565,6 +1632,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
     SetTextureFilter(font.texture, TEXTURE_FILTER_POINT);
 
     while (!WindowShouldClose()) {
+        MenuPage page_at_frame_start = page;
         sync_window_focus_and_borderless();
         int sw = GetScreenWidth();
         int sh = GetScreenHeight();
@@ -1591,7 +1659,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             } else {
                 mp_editing_ip = 0;
                 listening_bind = -1;
-                page = MENU_PAGE_MAIN;
+                page = page == MENU_PAGE_CREATE ? MENU_PAGE_CUSTOMIZE : MENU_PAGE_MAIN;
             }
         }
 
@@ -1632,6 +1700,10 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
 
         /* ======================== DESENHO DO FRAME ======================== */
         BeginDrawing();
+        CharacterClass preview = page == MENU_PAGE_CREATE ? draft : player_roster_get(&cfg->roster, cfg->selected_character);
+        showcase_character = preview.visual_id;
+        showcase_appearance = preview.appearance;
+        snprintf(showcase_name, sizeof(showcase_name), "%s", preview.name);
         draw_cyber_arena_backdrop(font, sw, sh, sc, now, (int)page, cfg->ascii_quality);
 
         /* Showcase do personagem placeholder grande em Micro-ASCII 3D */
@@ -1731,49 +1803,84 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                 page = MENU_PAGE_MAIN;
             }
         } else if (page == MENU_PAGE_CUSTOMIZE) {
-            int desc_sz = (int)(15.0f * sc);
-            if (desc_sz < 12) desc_sz = 12;
-            const char *line_longest = "O personagem selecionado aqui sera exibido no pedestal";
-            int min_cw = MeasureText(line_longest, desc_sz) + pad_x * 2 + 12;
-            int pw = (int)(520.0f * sc);
-            if (pw < min_cw) pw = min_cw;
-            int ph = (int)(300.0f * sc);
-            if (content_y + ph > footer_top) ph = footer_top - content_y;
+            int pw = (int)(490.0f * sc);
+            int ph = footer_top - content_y;
+            int row_h = (ph - (int)(155 * sc)) / 5;
+            int text_sz = (int)(16.0f * sc);
+            if (text_sz < 11) text_sz = 11;
+            int total = player_roster_count(&cfg->roster);
+            int pages = (total + 3) / 4;
+            DrawRectangle(left_x, content_y, pw, ph, (Color){14, 18, 25, 240});
+            DrawText("SELECIONAR PERSONAGEM", left_x + pad_x, content_y + 12,
+                     btn_font, (Color){255, 150, 180, 255});
+            if (IsKeyPressed(KEY_DOWN)) {
+                cfg->selected_character = (cfg->selected_character + 1) % total;
+                list_page = cfg->selected_character / 4;
+            }
+            if (IsKeyPressed(KEY_UP)) {
+                cfg->selected_character = (cfg->selected_character + total - 1) % total;
+                list_page = cfg->selected_character / 4;
+            }
+            int list_y = content_y + (int)(48 * sc);
+            for (int slot = 0; slot < 4; slot++) {
+                int i = list_page * 4 + slot;
+                if (i >= total) break;
+                CharacterClass cls = player_roster_get(&cfg->roster, i);
+                int selected = cfg->selected_character == i;
+                if (draw_small_button(left_x + pad_x, list_y + slot * row_h,
+                                      pw - pad_x * 2, row_h - 4, cls.name, text_sz,
+                                      selected ? (Color){140, 38, 70, 255} : (Color){35, 40, 52, 255},
+                                      (Color){190, 55, 95, 255})) cfg->selected_character = i;
+            }
+            int create_y = list_y + 4 * row_h;
+            int full = cfg->roster.count >= MAX_CUSTOM_CHARACTERS;
+            int create = draw_small_button(left_x + pad_x, create_y, pw - pad_x * 2, row_h - 4,
+                            full ? "LIMITE DE 8 PERSONAGENS CRIADOS" : "+ CRIAR SKIN [N]", text_sz,
+                            full ? (Color){45, 45, 50, 255} : (Color){35, 95, 75, 255}, (Color){50, 135, 95, 255});
+            if (!full && (create || IsKeyPressed(KEY_N))) {
+                draft = player_get_preset_class(PRESET_FUZILEIRO);
+                player_appearance_init(&draft.appearance);
 
-            DrawRectangle(left_x, content_y, pw, ph, (Color){14, 18, 25, 236});
-            DrawRectangleLinesEx((Rectangle){(float)left_x, (float)content_y, (float)pw, (float)ph},
-                                 2.0f, (Color){225, 145, 55, 255});
-
-            DrawText("PERSONALIZAR PERSONAGEM", left_x + pad_x, content_y + (int)(18.0f * sc),
-                     btn_font, (Color){255, 200, 90, 255});
-
-            int badge_sz = (int)(16.0f * sc);
-            if (badge_sz < 13) badge_sz = 13;
-            DrawText("[ PLACEHOLDER - MODULO DO RAFAEL STRAZZER ]",
-                     left_x + pad_x, content_y + (int)(58.0f * sc),
-                     badge_sz, (Color){155, 240, 125, 255});
-
-            int dy = content_y + (int)(98.0f * sc);
-            int dstep = (int)(26.0f * sc);
-            Color desc_col = (Color){210, 220, 230, 255};
-
-            DrawText("Espaco reservado para a integracao do Criador de",
-                     left_x + pad_x, dy, desc_sz, desc_col);
-            DrawText("Personagens e selecao dos 4 Personagens Base.",
-                     left_x + pad_x, dy + dstep, desc_sz, desc_col);
-            DrawText(line_longest,
-                     left_x + pad_x, dy + dstep * 2 + 6, desc_sz, desc_col);
-            DrawText("do menu principal e aplicado ao iniciar a partida.",
-                     left_x + pad_x, dy + dstep * 3 + 6, desc_sz, desc_col);
-
-            int v_font = (int)(15.0f * sc);
-            if (v_font < 13) v_font = 13;
-            int vw = calc_fit_w("VOLTAR", v_font, (int)(120.0f * sc), sc);
-            int vh = (int)(36.0f * sc);
-            if (draw_small_button(left_x + pad_x, content_y + ph - vh - (int)(16.0f * sc),
-                                  vw, vh, "VOLTAR", v_font,
-                                  (Color){38, 42, 52, 255}, (Color){195, 75, 30, 255})) {
+                draft.name[0] = '\0';
+                name_editing = 1;
+                creator_error = "";
+                while (GetCharPressed() > 0) {} /* N nao entra no campo de nome. */
+                page = MENU_PAGE_CREATE;
+            }
+            int pager_y = create_y + row_h;
+            int arrow_w = (int)(35 * sc), pager_h = (int)(25 * sc);
+            if (draw_small_button(left_x + pad_x, pager_y, arrow_w, pager_h, "<", text_sz,
+                                  (Color){35,40,52,255}, (Color){85,70,95,255})) {
+                list_page = (list_page + pages - 1) % pages;
+                cfg->selected_character = list_page * 4;
+            }
+            DrawText(TextFormat("PAGINA %d/%d", list_page + 1, pages), left_x + pad_x + arrow_w + 10,
+                     pager_y + 4, text_sz, LIGHTGRAY);
+            if (draw_small_button(left_x + pw - pad_x - arrow_w, pager_y, arrow_w, pager_h, ">", text_sz,
+                                  (Color){35,40,52,255}, (Color){85,70,95,255})) {
+                list_page = (list_page + 1) % pages;
+                cfg->selected_character = list_page * 4;
+            }
+            CharacterClass cls = player_roster_get(&cfg->roster, cfg->selected_character);
+            DrawText(TextFormat("VIDA %d  |  MUN %d  |  VEL %.1f", cls.max_health, cls.start_ammo, cls.move_speed),
+                     left_x + pad_x, pager_y + pager_h + (int)(9 * sc), text_sz, WHITE);
+            if (draw_small_button(left_x + pad_x, content_y + ph - (int)(43 * sc),
+                                  pw - pad_x * 2, (int)(32 * sc), "CONFIRMAR / VOLTAR", text_sz,
+                                  (Color){65, 38, 52, 255}, (Color){190, 55, 95, 255}) ||
+                (page == MENU_PAGE_CUSTOMIZE && page_at_frame_start == MENU_PAGE_CUSTOMIZE && IsKeyPressed(KEY_ENTER)))
                 page = MENU_PAGE_MAIN;
+        } else if (page == MENU_PAGE_CREATE) {
+            int result = draw_character_creator(&draft, left_x, content_y, (int)(490 * sc),
+                                                 footer_top - content_y, sc, &name_editing, creator_error);
+            if (result < 0) page = MENU_PAGE_CUSTOMIZE;
+            if (result > 0) {
+                int created = player_roster_add(&cfg->roster, &draft);
+                if (created < 0) creator_error = "Informe um nome para salvar.";
+                else {
+                    cfg->selected_character = created;
+                    list_page = created / 4;
+                    page = MENU_PAGE_CUSTOMIZE;
+                }
             }
         } else if (page == MENU_PAGE_SETTINGS) {
             if (draw_settings_panel(cfg, left_x, content_y, footer_top - content_y,
@@ -1826,6 +1933,9 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         player_init(&player, 2.5f, 4.5f, 0.0f);
     }
 
+    CharacterClass selected_class = player_roster_get(&cfg->roster, cfg->selected_character);
+    player_apply_class(&player, &selected_class);
+
     if (!net_init(&net, mode, host_ip, port)) {
         snprintf(err_buf, err_size,
                  "Erro ao iniciar rede UDP na porta %d (IP: %s).", port, host_ip);
@@ -1847,6 +1957,11 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
     int is_multiplayer = (mode != NET_MODE_OFFLINE);
     float cam_pitch = 0.0f;
     int third_person = 0;
+    EnemyManager enemies = {0};
+    Weapon weapons[MAX_WEAPONS];
+    weapons_init_defaults(weapons);
+    if (!is_multiplayer) enemies_spawn_wave(&enemies, &map, &player);
+    float wave_timer = 3.0f;
 
     while (!WindowShouldClose() && running) {
         int win_active = sync_window_focus_and_borderless();
@@ -1919,59 +2034,43 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
                 third_person = !third_person;
             }
 
+            player_tick_ability(&player, dt);
+            if (IsKeyPressed(KEY_E)) player_activate_ability(&player);
             handle_custom_input(&player, &map, &cfg->binds, dt, &running, &did_shoot, &cam_pitch);
         }
 
+        if (!paused) {
+            if (did_shoot) enemies_check_hit(&enemies, &map, &player, &weapons[WEAPON_PISTOL]);
+            enemies_update_fireball(&enemies, &map, &player, dt);
+            enemies_update(&enemies, &map, &player, dt);
+            if (!is_multiplayer && enemies_alive(&enemies) == 0) {
+                wave_timer -= dt;
+                if (wave_timer <= 0) { enemies_spawn_wave(&enemies, &map, &player); wave_timer = 3; }
+            }
+            if (player.health <= 0) {
+                snprintf(err_buf, err_size, "Fim de partida: %d kills. Inicie outra para tentar novamente.", player.ability_state.kills);
+                running = 0;
+            }
+        }
         if (is_multiplayer) {
             net_receive_state(&net);
             net_send_state(&net, &player, did_shoot);
-
-            if (!paused && did_shoot && net.connected) {
-                float dx = net.remote_state.x - player.x;
-                float dy = net.remote_state.y - player.y;
-                float dist = sqrtf(dx * dx + dy * dy);
-                float target_angle = atan2f(dy, dx);
-                if (dist < 10.0f && angle_diff_abs(target_angle, player.angle) < 0.12f) {
-                    player.score += 10;
-                }
-            }
         }
-
-        SpriteEntity remote_sprite;
+        SpriteEntity sprites[MAX_SPRITES];
         int sprite_count = 0;
-
-        if (is_multiplayer && net.connected) {
-            remote_sprite.x = net.remote_state.x;
-            remote_sprite.y = net.remote_state.y;
-            remote_sprite.active = 1;
-            remote_sprite.shooting = net.remote_state.shooting;
-            remote_sprite.label = 'O';
-            sprite_count = 1;
-        } else if (!is_multiplayer) {
-            remote_sprite.x = 7.5f;
-            remote_sprite.y = 4.5f;
-            remote_sprite.active = 1;
-            remote_sprite.shooting = 0;
-            remote_sprite.label = 'X';
-            sprite_count = 1;
-
-            if (!paused && did_shoot) {
-                float dx = remote_sprite.x - player.x;
-                float dy = remote_sprite.y - player.y;
-                float dist = sqrtf(dx * dx + dy * dy);
-                float target_angle = atan2f(dy, dx);
-                if (dist < 10.0f && angle_diff_abs(target_angle, player.angle) < 0.10f) {
-                    player.score += 10;
-                }
-            }
+        for (int i = 0; i < enemies.count && sprite_count < MAX_SPRITES; i++) {
+            Enemy *e = &enemies.enemies[i];
+            if (e->active) sprites[sprite_count++] = (SpriteEntity){e->x, e->y, 1, 0, e->symbol};
         }
-
+        if (is_multiplayer && net.connected && sprite_count < MAX_SPRITES)
+            sprites[sprite_count++] = (SpriteEntity){net.remote_state.x, net.remote_state.y, 1, net.remote_state.shooting, 'O'};
         renderer_set_ascii_density(cfg->ascii_quality, sw, sh);
         renderer_set_camera_view(cam_pitch, third_person);
         renderer_clear();
         renderer_draw_walls(&map, &player);
-        renderer_draw_sprites(&player, &remote_sprite, sprite_count);
-        renderer_draw_minimap(&map, &player, &remote_sprite, sprite_count);
+        renderer_draw_sprites(&player, sprites, sprite_count);
+        renderer_draw_ability_effects(&player);
+        renderer_draw_minimap(&map, &player, sprites, sprite_count);
         renderer_draw_weapon(&player);
         renderer_draw_hud(&player);
 

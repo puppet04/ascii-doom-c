@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 /* Grade interna 3D dinamica com limites maximos estaticos */
 #define MAX_R_WIDTH  420
@@ -24,6 +25,12 @@ static int font_loaded = 0;
 /* Estado da camera e animacao de caminhada sincronizados entre paredes, arma e sprites */
 static float cam_pitch = 0.0f;
 static int cam_third_person = 0;
+
+static Color character_color(int material) {
+    CharacterColor c = player_get_material_color(material);
+    return (Color){c.r, c.g, c.b, c.a};
+}
+
 static float cam_view_x = 0.0f;
 static float cam_view_y = 0.0f;
 static float cam_view_angle = 0.0f;
@@ -463,6 +470,21 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
 
                 float wx = cam_view_x + ray_dir_x * row_dist;
                 float wy = cam_view_y + ray_dir_y * row_dist;
+                /* Anel rosa no chao: borda continua no raio exato do bonus. */
+                if (player->ability_state.zone_time > 0) {
+                    float dx = wx - player->ability_state.zone_x;
+                    float dy = wy - player->ability_state.zone_y;
+                    float edge = fabsf(sqrtf(dx*dx + dy*dy) - TETO_ZONE_RADIUS);
+                    float thickness = 0.07f + row_dist / r_height * 0.65f;
+                    if (edge < thickness) {
+                        set_cell(x, y, '#', make_color(255, 80, 170), bg_black);
+                        continue;
+                    }
+                    if (edge < thickness * 2.0f) {
+                        set_cell(x, y, '+', make_color(190, 55, 120), bg_black);
+                        continue;
+                    }
+                }
                 float fu = wx - floorf(wx);
                 float fv = wy - floorf(wy);
                 int checker = (((int)floorf(wx) + (int)floorf(wy)) & 1);
@@ -621,6 +643,15 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
 
                 float v = ((float)(sy - top_y) + 0.5f) / (float)sprite_h;
                 float vu = v + bounce * 0.026f;
+                if (is_self && player_appearance_visual(player->visual_id, &player->appearance).custom_sprite) {
+                    int mat = player_render_material(player, sx_u, vu, 1);
+                    if (mat) {
+                        Color color = character_color(mat);
+                        set_cell(sx, sy, mat == 3 ? '@' : '#',
+                                 scale_rgb(color.r, color.g, color.b, fog), bg_black);
+                    }
+                    continue;
+                }
                 int hit_part = 0; /* 1=armadura, 2=visor/reator/tiro, 3=escuro/arma */
                 float nx = 0.0f, ny = 0.0f;
                 float depth_shade = 1.0f;
@@ -744,11 +775,77 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
     }
 }
 
+/* Projecao de efeitos na mesma grade e camera do raycasting. */
+static int project_effect(const Player *p, float x, float y, float height,
+                          int *sx, int *sy, float *depth) {
+    float vx = cam_view_ready ? cam_view_x : p->x;
+    float vy = cam_view_ready ? cam_view_y : p->y;
+    float angle = cam_view_ready ? cam_view_angle : p->angle;
+    float dx=x-vx, dy=y-vy;
+    float dist=sqrtf(dx*dx+dy*dy);
+    float delta=wrap_angle_signed(atan2f(dy,dx)-angle);
+    if (dist < 0.15f || dist > MAX_DEPTH || fabsf(delta)>p->fov*0.6f) return 0;
+    *sx=(int)((0.5f+delta/p->fov)*r_width);
+    float bob=cam_third_person ? 0 : sinf(p->bob_phase*2)*1.6f*walk_amp*((float)r_height/180);
+    *sy=(int)(r_height*0.5f + cam_pitch*((float)r_height/180) + bob + (EYE_FLOOR_H-height)*r_height/dist);
+    *depth=dist;
+    return *sx>=0 && *sx<r_width && dist<z_buffer[*sx];
+}
+
+void renderer_draw_ability_effects(const Player *p) {
+    const AbilityState *s=&p->ability_state;
+    AsciiColor black=make_color(0,0,0);
+    float time=IsWindowReady() ? (float)GetTime() : 0;
+    if (s->zone_time>0) {
+        for (int i=0;i<16;i++) {
+            float a=i*2.4f;
+            float radius=0.5f+(i%4)*0.42f;
+            float height=0.15f+fmodf(time*0.45f+i*0.17f,0.8f);
+            int sx,sy; float depth;
+            if (!project_effect(p,s->zone_x+cosf(a)*radius,s->zone_y+sinf(a)*radius,height,&sx,&sy,&depth)) continue;
+            static const char *heart[]={"@ @","@@@"," @ "};
+            for (int r=0;r<3;r++) for (int c=0;c<3;c++) {
+                int px=sx+c-1;
+                if (heart[r][c]!=' ' && px>=0 && px<r_width && depth<z_buffer[px])
+                    set_cell(px,sy+r,heart[r][c],make_color(255,115,180),black);
+            }
+        }
+    }
+    if (s->fireball_active) {
+        int sx,sy; float depth;
+        if (project_effect(p,s->fireball_x,s->fireball_y,0.48f,&sx,&sy,&depth)) {
+            int radius=(int)(r_height*0.11f/depth);
+            if (radius<2) radius=2;
+            if (radius>30) radius=30;
+            for (int y=-radius;y<=radius;y++) for (int x=-radius;x<=radius;x++) {
+                float d=(float)(x*x+y*y)/(radius*radius);
+                int px=sx+x;
+                if (d>1 || px<0 || px>=r_width || depth>=z_buffer[px]) continue;
+                set_cell(px,sy+y,d>0.65f?'*':'@',d>0.65f ? make_color(155,65,215) : make_color(30,15,44),black);
+            }
+        }
+    }
+}
 void renderer_draw_weapon(const Player *player) {
     if (!player || cam_third_person) {
         return;
     }
 
+    if (player->ability_state.berserk_time > 0) {
+        float swing = player->shoot_timer > 0 ? sinf(player->shoot_timer / 0.60f * PI_F) : 0;
+        for (int y=r_height/3;y<r_height;y++) {
+            float t=(float)(y-r_height/3)/(r_height*2/3);
+            int center=(int)(r_width*(0.68f-t*0.18f-swing*0.28f));
+            int width=(int)(r_width*(0.016f+t*0.045f));
+            if (t>0.80f) width=(int)(r_width*0.09f);
+            if (t>0.85f) width=(int)(r_width*0.015f);
+            for (int x=-width;x<=width;x++) {
+                AsciiColor color=t>0.85f?make_color(65,45,42):abs(x)>width-2?make_color(220,225,235):make_color(105,115,132);
+                set_cell(center+x,y,t>0.85f?'#':'=',color,make_color(0,0,0));
+            }
+        }
+        return;
+    }
     int w_cols = (r_width * 23) / 100;
     int w_rows = (r_height * 27) / 100;
     if (w_cols < 36) w_cols = 36;
@@ -998,6 +1095,26 @@ static int fit_hud_font(const char *txt, int want_sz, int max_w) {
 }
 
 static void draw_hud_mugshot(int bx, int by, int bw, int bh, const Player *player) {
+    if (player && player_appearance_visual(player->visual_id, &player->appearance).custom_sprite) {
+        DrawRectangle(bx, by, bw, bh, (Color){10, 12, 17, 255});
+        DrawRectangleLines(bx, by, bw, bh, (Color){235, 55, 100, 255});
+        CharacterVisual visual = player_appearance_visual(player->visual_id, &player->appearance);
+        int rows = visual.portrait_rows;
+        int cols = visual.portrait_cols;
+        float crop_x = visual.portrait_crop_x;
+        float crop_y = visual.portrait_crop_y;
+        for (int r = 0; r < rows; r++) {
+            for (int c = 0; c < cols; c++) {
+                int mat = player_render_material(player,
+                    (((float)c + 0.5f) / cols * 2.0f - 1.0f) * crop_x,
+                    ((float)r + 0.5f) / rows * crop_y, 0);
+                if (mat) DrawTextCodepoint(GetFontDefault(), mat == 3 ? '@' : '#',
+                    (Vector2){bx + 3 + c * (float)(bw - 6) / cols, by + 3 + r * (float)(bh - 6) / rows},
+                    (float)(bh - 6) / rows * 1.5f, character_color(mat));
+            }
+        }
+        return;
+    }
     int hp = player ? player->health : 100;
     int firing = (player && player->shoot_timer > 0.12f);
     double t = GetTime();
@@ -1313,13 +1430,13 @@ void renderer_draw_scene_and_hud(const Player *player, int is_multiplayer,
         Color hp_col = (player->health > 60) ? (Color){75, 228, 120, 255}
                      : (player->health > 30) ? (Color){248, 200, 58, 255}
                                              : (Color){240, 68, 68, 255};
-        const char *hp_val = TextFormat("%d%%", player->health);
+        const char *hp_val = TextFormat("%d", player->health);
         int hp_lf = fit_hud_font("VIDA", lbl_font, (s1_w - 20) / 2);
         int hp_vf = fit_hud_font(hp_val, val_font, s1_w - MeasureText("VIDA", hp_lf) - 24);
         DrawText("VIDA", s1_x + 10, card_y + 8, hp_lf, lbl_col);
         DrawText(hp_val, s1_x + s1_w - MeasureText(hp_val, hp_vf) - 10, card_y + 6, hp_vf, hp_col);
         draw_hud_ascii_meter(s1_x + 10, bar_y, s1_w - 20, bar_h,
-                             (float)player->health / 100.0f, hp_col);
+                             (float)player->health / (float)(player->max_health > 0 ? player->max_health : 100), hp_col);
 
         /* Bloco 2: PONTOS + indicador da densidade ASCII */
         const char *sc_val = TextFormat("%04d", player->score);
@@ -1339,15 +1456,16 @@ void renderer_draw_scene_and_hud(const Player *player, int is_multiplayer,
         /* Bloco 4: MUNICAO (rotulo a esquerda, valor a direita, barra livre abaixo) */
         Color ammo_col = (player->ammo > 5) ? (Color){252, 208, 72, 255}
                                             : (Color){245, 72, 72, 255};
-        const char *am_val = TextFormat("%02d/30", player->ammo);
+        int melee = player->ability_state.berserk_time > 0;
+        const char *am_val = melee ? "1.5m" : TextFormat("%02d/30", player->ammo);
         int am_lf = fit_hud_font("MUN", lbl_font, (s4_w - 20) / 2);
-        const char *am_lbl = (MeasureText("MUNICAO", am_lf) + MeasureText(am_val, val_font) + 28 <= s4_w)
-            ? "MUNICAO" : "MUN";
+        const char *am_lbl = melee ? "ESPADA" :
+            (MeasureText("MUNICAO", am_lf) + MeasureText(am_val, val_font) + 28 <= s4_w) ? "MUNICAO" : "MUN";
         int am_vf = fit_hud_font(am_val, val_font, s4_w - MeasureText(am_lbl, am_lf) - 24);
         DrawText(am_lbl, s4_x + 10, card_y + 8, am_lf, lbl_col);
         DrawText(am_val, s4_x + s4_w - MeasureText(am_val, am_vf) - 10, card_y + 6, am_vf, ammo_col);
         draw_hud_ascii_meter(s4_x + 10, bar_y, s4_w - 20, bar_h,
-                             (float)player->ammo / 30.0f, ammo_col);
+                             melee ? 1.0f - fminf(1, player->shoot_timer / 0.60f) : (float)player->ammo / 30.0f, ammo_col);
 
         /* Bloco 5: STATUS / CAMERA / MIRA / FPS */
         int row_gap = (card_h - 12) / 3;
@@ -1377,6 +1495,36 @@ void renderer_draw_scene_and_hud(const Player *player, int is_multiplayer,
             int f5_2 = fit_hud_font(lock_str, stat_font, s5_w - 18);
             DrawText(lock_str, s5_x + 9, card_y + card_h - f5_2 - 6, f5_2, lock_col);
         }
+    }
+    if (player) {
+        const AbilityState *a=&player->ability_state;
+        const char *status="SEM HABILIDADE";
+        Color accent={190,205,220,255};
+        if (player->ability == ABILITY_TETO) {
+            accent=(Color){255,115,180,255};
+            status=player_attack_damage(player,100)>100 ? TextFormat("DANO +25%% | VEL +35%% | %.1fs",a->zone_time) :
+                   a->zone_time>0 ? TextFormat("CORACOES %.1fs | RECARGA %.0fs",a->zone_time,ceilf(a->cooldown)) :
+                   a->cooldown>0 ? TextFormat("CORACOES: RECARGA %.0fs",ceilf(a->cooldown)) : "CORACOES: PRONTO (AO ELIMINAR)";
+        } else if (player->ability == ABILITY_SHADOW) {
+            accent=(Color){185,125,245,255};
+            status=a->cooldown>0 ? TextFormat("FOGO NEGRO: %.0fs",ceilf(a->cooldown)) : "[E] FOGO NEGRO: PRONTO";
+        } else if (player->ability == ABILITY_GUERRILLA) {
+            accent=(Color){175,225,115,255};
+            status=a->guerrilla_time>=GUERRILLA_CHARGE_TIME ? "GUERRILHEIRO: PROXIMO TIRO x2" :
+                TextFormat("GUERRILHEIRO: %.1fs SEM DANO",GUERRILLA_CHARGE_TIME-a->guerrilla_time);
+        } else if (player->ability == ABILITY_BERSERK) {
+            accent=(Color){255,95,80,255};
+            status=a->berserk_time>0 ? TextFormat("BERSERK %.1fs | ESPADA | DANO RECEBIDO x2",a->berserk_time) :
+                   a->berserk_used ? "BERSERK: JA UTILIZADO" : a->kills>=BERSERK_KILLS ? "[E] BERSERK: PRONTO" :
+                   TextFormat("BERSERK: %d/5 KILLS",a->kills);
+        }
+        int f=GetScreenWidth()<1000?12:16;
+        int width=MeasureText(status,f)+24;
+        DrawRectangle(GetScreenWidth()-width-12,12,width,f+14,(Color){12,14,22,225});
+        DrawText(status,GetScreenWidth()-width,19,f,accent);
+        const char *kills=TextFormat("KILLS: %d",a->kills);
+        DrawText(kills,GetScreenWidth()-MeasureText(kills,f)-24,f+34,f,WHITE);
+        if (a->berserk_time>0) DrawRectangleLinesEx((Rectangle){2,2,(float)GetScreenWidth()-4,(float)GetScreenHeight()-4},4,(Color){190,20,30,220});
     }
 }
 

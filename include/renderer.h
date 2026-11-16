@@ -18,6 +18,7 @@ typedef struct {
     unsigned char b;
 } AsciiColor;
 
+
 typedef struct {
     char ch;
     AsciiColor fg;
@@ -63,6 +64,8 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
 
 /* Desenha a arma em ASCII Art colorido com animacao de caminhada e disparo. */
 void renderer_draw_weapon(const Player *player);
+/* Particulas da area da Teto e projetil do Arauto, com oclusao por paredes. */
+void renderer_draw_ability_effects(const Player *player);
 
 /* Desenha o minimapa 2D colorido no canto superior esquerdo da tela. */
 void renderer_draw_minimap(const GameMap *map, const Player *player,
