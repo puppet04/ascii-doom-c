@@ -40,9 +40,67 @@ Abra o terminal na pasta do projeto e execute:
 
 ## Controles do Jogo
 
+No menu, abra **Selecionar personagem**, escolha **Fuzileiro**, **Kasane Teto**,
+**Arauto das Sombras** ou **Guts** e use **Confirmar / Voltar** antes de iniciar uma partida.
+Fuzileiro vem selecionado por padrao (100 de vida, 30 de municao e velocidade 4.2). Use o mouse ou as setas; Enter confirma. A escolha vale enquanto o jogo estiver
+aberto, tanto no singleplayer quanto no multiplayer.
+
+Teto tem 100 de vida, 30 de municao e velocidade 4.8, com visual ASCII proprio
+no pedestal, no retrato do HUD e na camera local em terceira pessoa (`V`).
+O visual escolhido ainda nao e transmitido aos outros jogadores pela rede.
+
+Use **+ Criar skin** (ou `N` na selecao) para informar um nome e montar
+seu avatar: 3 cabecas, 3 corpos, 5 cabelos, 4 roupas,
+6 cores de cabelo, 6 cores de roupa e 4 tons de pele. As setas de cada linha
+trocam somente aquela parte, com previa ao lado. A combinacao aparece tambem
+no HUD e na camera em terceira pessoa.
+As criacoes sao apenas cosmeticas: usam os atributos do Fuzileiro
+(100 de vida, 30 de municao e velocidade 4.2). **Salvar** adiciona e seleciona a skin; **Cancelar**
+ou `Esc` descarta o rascunho. As setas `<` e `>` mudam a pagina da lista.
+Ha oito vagas de criacao por sessao: os personagens criados permanecem ao voltar
+das partidas, mas nao sao gravados em disco ao fechar o jogo.
+
+Arauto das Sombras tem 120 de vida, 30 de municao e velocidade 4.0. Seu visual
+ASCII inclui capuz, manto de penas, correntes e detalhes vermelhos, sem cajado.
+
+Guts tem 150 de vida, 30 de municao e velocidade 3.8. Seu visual inclui armadura
+escura, capa, braco metalico e Dragonslayer nas costas, no menu, HUD e terceira
+pessoa. No modo Berserk, a espada passa a ser a arma de combate corpo a corpo.
+
+**Rambo** esta disponivel na segunda pagina da selecao (`>`), com bandana vermelha,
+cabelo comprido, cartucheira e calca camuflada. Tem 100 de vida, 30 de municao e
+velocidade 4.2. Sua passiva e Guerrilheiro, descrita abaixo.
+
+### Habilidades e combate singleplayer
+
+- **Kasane Teto:** uma kill, quando a habilidade esta pronta, cria uma area no
+  local do inimigo com coracoes flutuantes e um circulo rosa no chao. Dura 10 segundos, tem raio de 2 blocos
+  e concede +35% de velocidade e +25% de dano nos tiros somente dentro dela
+  (dano arredondado para inteiro). Cooldown de 30 segundos
+  contado a partir da criacao; kills durante a recarga nao criam outra area.
+- **Arauto das Sombras:** `E` dispara uma bola de fogo negra que causa 5 de dano
+  ao primeiro inimigo atingido. Para nas paredes. Cooldown de 30 segundos.
+- **Guts:** depois de 5 kills, `E` ativa Berserk por 10 segundos, uma vez por
+  partida. Troca para a armadura Berserker e espada com alcance de 1.5 bloco,
+  eliminacao em um golpe, sem gastar municao, e dano recebido dobrado.
+  Clique esquerdo/Espaco golpeia; ao terminar, a arma e o visual originais voltam.
+- **Fuzileiro e skins criadas:** sem habilidades.
+- **Rambo — Guerrilheiro:** apos 5 segundos sem sofrer dano, o proximo tiro
+  causa dano dobrado. O disparo consome a carga mesmo se errar e inicia uma nova
+  contagem de 5 segundos. Sofrer dano zera a carga; tentar atirar sem municao nao
+  a consome. O HUD indica quando o tiro dobrado esta pronto.
+
+O singleplayer agora usa inimigos com vida, ataques e mortes reais. Ha seis
+inimigos por onda e uma nova onda chega 3 segundos apos eliminar todos. Kills,
+cooldowns e o uso do Berserk reiniciam em cada partida; a pausa congela os tempos.
+O HUD mostra o progresso e os cooldowns. Ao morrer, o jogador retorna ao menu.
+O multiplayer LAN ainda sincroniza apenas o estado basico dos jogadores: nao
+sincroniza essas habilidades, inimigos ou dano PvP.
+
 | Tecla / Botão | Ação |
 | :--- | :--- |
-| `Mouse` (movimento) ou `Q`/`E` / Setas | Girar a câmera (360° fluido) |
+| `Mouse` (movimento), `Q` ou Setas esquerda/direita | Girar a câmera (360° fluido) |
+| `E` | Habilidade do Arauto / Berserk do Guts quando pronto (tecla reservada) |
 | `W` / `A` / `S` / `D` | Movimentação contínua (com movimento diagonal normalizado) |
 | `Shift` | Correr (*Sprint*) |
 | `Clique Esquerdo` ou `Espaço` | Atirar |
@@ -60,7 +118,7 @@ Cada integrante possui sua própria branch de desenvolvimento para testar e comm
 
 | Integrante | Branch | Módulo | Arquivos Principais | Responsabilidades |
 | :--- | :--- | :--- | :--- | :--- |
-| **Rafael Strazzer** | `strazzer` | Personagens e Criador | `include/player.h`, `src/player.c` | Criador de personagens, 4 personagens base (atributos/classes), física e controles |
+| **Rafael Strazzer** | `strazzer` | Personagens e Criador | `include/player.h`, `src/player.c` | Kasane Teto (visual e atributos), física e controles |
 | **Lucas** | `lucas` | Mapa, Fases e Colisão | `include/map.h`, `src/map.c`, `assets/maps/` | Criação dos mapas `.txt`, materiais coloridos (`#`, `@`, `%`), portas e seleção de fases |
 | **Guilherme Trentin** | `guilherme` | Armas e Inimigos | `include/entities.h`, `src/entities.c` | Criação das armas (dano, cadência, alcance) e dos inimigos (spawn, IA e combate) |
 | **Guilherme Checchia** | `checchia` | HUD, Gráficos e Integração | `include/renderer.h`, `src/renderer.c`, `src/main.c`, `src/network.c` | Motor gráfico ASCII 3D (Raylib), HUD, menu, efeitos visuais e multiplayer UDP |
@@ -72,3 +130,22 @@ Cada integrante possui sua própria branch de desenvolvimento para testar e comm
 - **Tutorial para o grupo usar Git, GitHub e configurar o PC:** [`docs/GUIA_GITHUB_E_AMBIENTE.md`](docs/GUIA_GITHUB_E_AMBIENTE.md)
 - **Como o código funciona por dentro (Raycasting, Delta Time e Rede):** [`docs/ARQUITETURA_DO_CODIGO.md`](docs/ARQUITETURA_DO_CODIGO.md)
 - **Documento base da Etapa 1 / Etapa 2 (para o Word):** [`docs/ETAPA1_DOCUMENTO_BASE.md`](docs/ETAPA1_DOCUMENTO_BASE.md)
+
+### Integracao dos personagens com o renderer
+
+O modulo `player` fornece o visual por `visual_id`, sem depender do nome:
+
+- `player_get_visual(id)`: descricao e configuracao do retrato no HUD.
+- `player_character_material(id, x, y, back_view)`: silhueta frontal/traseira.
+- `player_get_material_color(material)`: paleta RGBA, independente de Raylib.
+
+Avatares montados usam `CharacterAppearance`, copiado da classe para o jogador.
+`player_part_count`, `player_part_label` e `player_part_option` descrevem as pecas
+para o menu. `player_appearance_visual` e `player_appearance_material` fornecem
+o retrato e a silhueta composta ao renderer, preservando os visuais originais
+quando a personalizacao esta desativada.
+
+Para adicionar personagens nesse formato, registre os atributos, o visual e a
+silhueta em `src/player.c`, com o identificador em `include/player.h`.
+O menu e o renderer consomem esses dados automaticamente. O Fuzileiro continua
+usando o desenho original do motor (`custom_sprite = 0`).

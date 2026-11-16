@@ -51,6 +51,9 @@ void weapons_init_defaults(Weapon out_weapons[MAX_WEAPONS]);
 
 /* Inicializa os inimigos iniciais da fase. */
 void enemies_init_defaults(EnemyManager *mgr);
+void enemies_spawn_wave(EnemyManager *mgr, const GameMap *map, const Player *player);
+int enemies_alive(const EnemyManager *mgr);
+void enemies_update_fireball(EnemyManager *mgr, const GameMap *map, Player *player, float dt);
 
 /* Atualiza movimentacao e ataque dos inimigos usando Delta Time (dt). */
 void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float dt);
@@ -60,6 +63,6 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
  * Retorna 1 se acertou (aplicando dano), 0 caso contrario.
  */
 int enemies_check_hit(EnemyManager *mgr, const GameMap *map,
-                      const Player *player, const Weapon *weapon);
+                      Player *player, const Weapon *weapon);
 
 #endif /* ENTITIES_H */
