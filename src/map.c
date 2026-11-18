@@ -92,14 +92,56 @@ int map_load_from_file(GameMap *map, const char *filename) {
     return 1;
 }
 
-char map_get_tile(const GameMap *map, int x, int y) {
+static int g_last_tile_passable = 0;
+
+char map_get_wall_equivalent(char tile) {
+    switch (tile) {
+        case '$': return '#';
+        case '&': return '@';
+        case '/': return '%';
+        default:  return tile;
+    }
+}
+
+int map_is_passable_wall(char tile) {
+    return (tile == '$' || tile == '&' || tile == '/');
+}
+
+int map_last_tile_is_passable(void) {
+    return g_last_tile_passable;
+}
+
+unsigned char map_lighten_channel(unsigned char c) {
+    int v = (int)c + ((255 - (int)c) * 35) / 100;
+    return (unsigned char)((v > 255) ? 255 : v);
+}
+
+char map_get_raw_tile(const GameMap *map, int x, int y) {
     if (!map || x < 0 || x >= map->width || y < 0 || y >= map->height) {
         return '#';
     }
     return map->tiles[y][x];
 }
 
+char map_get_tile(const GameMap *map, int x, int y) {
+    char raw = map_get_raw_tile(map, x, y);
+    g_last_tile_passable = map_is_passable_wall(raw);
+    return map_get_wall_equivalent(raw);
+}
+
 int map_is_wall(const GameMap *map, int x, int y) {
-    char tile = map_get_tile(map, x, y);
-    return (tile != '.' && tile != ' ');
+    if (!map || x < 0 || x >= map->width || y < 0 || y >= map->height) {
+        return 1;
+    }
+    char tile = map_get_raw_tile(map, x, y);
+    return (tile != '.' && tile != ' ' && !map_is_passable_wall(tile));
+}
+
+int map_is_visible_wall(const GameMap *map, int x, int y) {
+    char tile = map_get_raw_tile(map, x, y);
+    if (tile == '.' || tile == ' ') {
+        g_last_tile_passable = 0;
+        return 0;
+    }
+    return 1;
 }
