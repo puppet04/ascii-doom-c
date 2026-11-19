@@ -133,6 +133,64 @@ int map_load_from_file(GameMap *map, const char *filename) {
     return 1;
 }
 
+/*
+ * CATALOGO OFICIAL DE NIVEIS (Modulo Mapas - Lucas)
+ * Para adicionar novas fases sem mexer em main.c:
+ *   1) Via .txt:    { "FASE 3 - ...", "Descricao", "assets/maps/level3.txt", NULL, 2.5f, 4.5f, 0.0f, 13.5f, 11.5f, PI_F },
+ *   2) Via funcao C: { "FASE 3 - ...", "Descricao", NULL, map_load_level3, 2.5f, 4.5f, 0.0f, 13.5f, 11.5f, PI_F },
+ */
+static const MapLevelInfo MAP_LEVELS[] = {
+    {
+        "FASE 1 - COMPLEXO BASE",
+        "Arena inicial com saida E ao sul",
+        "assets/maps/level1.txt",
+        NULL,
+        2.5f, 4.5f, 0.0f,
+        13.5f, 11.5f, PI_F
+    },
+    {
+        "FASE 2 - SETOR SECRETO",
+        "Corredores com passagens ocultas e saida E",
+        "assets/maps/level2.txt",
+        NULL,
+        2.5f, 4.5f, 0.0f,
+        13.5f, 10.5f, PI_F
+    }
+};
+static const int MAP_LEVEL_TOTAL = (int)(sizeof(MAP_LEVELS) / sizeof(MAP_LEVELS[0]));
+
+int map_level_count(void) {
+    return MAP_LEVEL_TOTAL;
+}
+
+int map_level_clamp(int index) {
+    if (MAP_LEVEL_TOTAL <= 0) return 0;
+    if (index < 0) return 0;
+    if (index >= MAP_LEVEL_TOTAL) return MAP_LEVEL_TOTAL - 1;
+    return index;
+}
+
+const MapLevelInfo *map_level_get(int index) {
+    return &MAP_LEVELS[map_level_clamp(index)];
+}
+
+void map_load_level(int index, GameMap *map) {
+    if (!map) {
+        return;
+    }
+    int clamped = map_level_clamp(index);
+    const MapLevelInfo *entry = &MAP_LEVELS[clamped];
+    if (entry->custom_fn && entry->custom_fn(map)) {
+        g_current_level = clamped + 1;
+        return;
+    }
+    if (entry->file_path && map_load_from_file(map, entry->file_path)) {
+        g_current_level = clamped + 1;
+        return;
+    }
+    map_init_default(map);
+}
+
 static int g_last_tile_passable = 0;
 static int g_spawning_enemies = 0;
 static int g_minimap_secret_floor = 0;
@@ -258,6 +316,15 @@ int map_try_advance_level(GameMap *map, float *player_x, float *player_y, float 
         !is_exit_at(map, px, py + 0.15f) &&
         !is_exit_at(map, px, py - 0.15f)) {
         return 0;
+    }
+
+    if (g_current_level >= 1 && g_current_level < MAP_LEVEL_TOTAL) {
+        const MapLevelInfo *next_lvl = &MAP_LEVELS[g_current_level];
+        map_load_level(g_current_level, map);
+        *player_x = next_lvl->spawn1_x;
+        *player_y = next_lvl->spawn1_y;
+        *player_angle = next_lvl->spawn1_angle;
+        return 1;
     }
 
     char next_path[128];

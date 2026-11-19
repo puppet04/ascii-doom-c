@@ -17,10 +17,12 @@
 
 typedef enum {
     MENU_PAGE_MAIN = 0,
-    MENU_PAGE_MULTIPLAYER = 1,
-    MENU_PAGE_CUSTOMIZE = 2,
-    MENU_PAGE_SETTINGS = 3,
-    MENU_PAGE_CREATE = 4
+    MENU_PAGE_SINGLEPLAYER = 1,
+    MENU_PAGE_MULTIPLAYER = 2,
+    MENU_PAGE_LOBBY = 3,
+    MENU_PAGE_CUSTOMIZE = 4,
+    MENU_PAGE_SETTINGS = 5,
+    MENU_PAGE_CREATE = 6
 } MenuPage;
 
 typedef struct {
@@ -58,6 +60,7 @@ typedef struct {
     int res_idx;
     int ascii_quality;
     int selected_character;
+    int selected_level;
     CharacterRoster roster;
 } AppConfig;
 
@@ -80,6 +83,7 @@ static void app_config_init(AppConfig *cfg) {
     binds_init_default(&cfg->binds);
     cfg->fps_cap = TARGET_FPS;
     cfg->selected_character = PRESET_FUZILEIRO;
+    cfg->selected_level = 0;
     player_roster_init(&cfg->roster);
     cfg->show_fps = 0; /* Desativado por padrao */
     cfg->res_idx = 1;  /* 1280 x 720 padrao */
@@ -296,18 +300,12 @@ static const char *key_to_label(int key) {
  * LOGICA DO JOGO E INPUT COM KEYBINDS CUSTOMIZAVEIS
  * ============================================================================ */
 
-static void load_initial_map(GameMap *map) {
-    if (!map_load_from_file(map, "assets/maps/level1.txt")) {
-        map_init_default(map);
-    }
-}
-
 static int run_single_test_frame(void) {
     GameMap map;
     Player player;
     SpriteEntity demo_sprite;
 
-    load_initial_map(&map);
+    map_load_level(0, &map);
     player_init(&player, 2.5f, 4.5f, 0.15f);
 
     demo_sprite.x = 5.5f;
@@ -1602,8 +1600,99 @@ static int draw_character_creator(CharacterClass *draft, int x, int y, int w, in
     return 0;
 }
 
+static void draw_level_minimap_preview(int box_x, int box_y, int box_size, const GameMap *m) {
+    DrawRectangle(box_x, box_y, box_size, box_size, (Color){10, 14, 20, 255});
+    DrawRectangleLinesEx((Rectangle){(float)box_x, (float)box_y, (float)box_size, (float)box_size},
+                         1.5f, (Color){82, 108, 138, 255});
+    if (!m || m->width <= 0 || m->height <= 0) {
+        return;
+    }
+
+    int pad = 6;
+    int inner = box_size - pad * 2;
+    if (inner < 16) return;
+
+    /* Auto-enquadramento: exibe 16x16 em tela cheia no preview ou 32x32 em mapas grandes */
+    int max_x = 0;
+    int max_y = 0;
+    for (int y = 0; y < m->height; y++) {
+        for (int x = 0; x < m->width; x++) {
+            char raw = map_get_raw_tile(m, x, y);
+            if (raw != '#') {
+                if (x > max_x) max_x = x;
+                if (y > max_y) max_y = y;
+            }
+        }
+    }
+    int view_w = (max_x < 16 && max_y < 16 && m->width >= 16) ? 16 : m->width;
+    int view_h = (max_x < 16 && max_y < 16 && m->height >= 16) ? 16 : m->height;
+
+    float cw = (float)inner / (float)view_w;
+    float ch = (float)inner / (float)view_h;
+    int fsz = (int)fmaxf(6.0f, ch * 0.95f);
+
+    for (int y = 0; y < view_h; y++) {
+        for (int x = 0; x < view_w; x++) {
+            char raw = map_get_raw_tile(m, x, y);
+            char t = map_get_wall_equivalent(raw);
+            char glyph = '.';
+            Color col = (Color){44, 54, 72, 255};
+            if (raw == 'E') {
+                glyph = 'E';
+                col = (Color){255, 240, 110, 255};
+            } else if (t == '#') {
+                glyph = '#';
+                col = (Color){220, 74, 58, 255};
+            } else if (t == '@') {
+                glyph = '@';
+                col = (Color){74, 158, 245, 255};
+            } else if (t == '%') {
+                glyph = '%';
+                col = (Color){72, 212, 120, 255};
+            } else if (t != '.' && t != ' ') {
+                glyph = t;
+                col = (Color){225, 172, 70, 255};
+            }
+            char s[2] = {glyph, '\0'};
+            int px = box_x + pad + (int)((float)x * cw + cw * 0.15f);
+            int py = box_y + pad + (int)((float)y * ch + ch * 0.05f);
+            DrawText(s, px, py, fsz, col);
+        }
+    }
+}
+
+static void copy_ip_str(char *dst, size_t dst_size, const char *src) {
+    if (!dst || dst_size == 0) return;
+    size_t j = 0;
+    if (src) {
+        while (j + 1 < dst_size && src[j] != '\0') {
+            dst[j] = src[j];
+            j++;
+        }
+    }
+    dst[j] = '\0';
+}
+
+static void stop_lan_discovery(int *disc_active, unsigned long long *disc_sock, int *disc_count) {
+    if (disc_active && *disc_active) {
+        net_discovery_close(disc_sock);
+        *disc_active = 0;
+    }
+    if (disc_count) {
+        *disc_count = 0;
+    }
+}
+
+static void leave_mp_lobby(int *lobby_active, NetContext *lobby_net) {
+    if (lobby_active && *lobby_active) {
+        net_send_lobby_leave(lobby_net);
+        net_close(lobby_net);
+        *lobby_active = 0;
+    }
+}
+
 static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
-                           int *port_out, const char *status_msg) {
+                           int *port_out, NetContext *net_out, const char *status_msg) {
     const char *main_items[5] = {
         "JOGAR SINGLEPLAYER",
         "JOGAR MULTIPLAYER",
@@ -1624,6 +1713,26 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
     int listening_bind = -1;
     *port_out = DEFAULT_PORT;
 
+    unsigned long long disc_sock = 0;
+    int disc_active = 0;
+    NetDiscoveredRoom disc_rooms[4];
+    memset(disc_rooms, 0, sizeof(disc_rooms));
+    int disc_count = 0;
+    double last_probe_t = 0.0;
+
+    NetContext lobby_net;
+    memset(&lobby_net, 0, sizeof(lobby_net));
+    int lobby_active = 0;
+    int lobby_ready = 0;
+    int lobby_started_burst = 0;
+    double last_lobby_tx_t = 0.0;
+    double last_lobby_rx_t = 0.0;
+    char local_ip_str[64] = "127.0.0.1";
+    char mp_err_msg[128] = "";
+
+    GameMap level_preview_map;
+    int preview_loaded_idx = -1;
+
     if (IsCursorHidden()) {
         EnableCursor();
     }
@@ -1638,7 +1747,88 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
         int sh = GetScreenHeight();
         float sc = fminf((float)sw / 1280.0f, (float)sh / 720.0f);
         if (sc < 0.48f) sc = 0.48f;
-        float now = (float)GetTime();
+        double now_d = GetTime();
+        float now = (float)now_d;
+
+        /* Garante que o mapa exibido em previa esteja sempre atualizado */
+        cfg->selected_level = map_level_clamp(cfg->selected_level);
+        if (preview_loaded_idx != cfg->selected_level) {
+            map_load_level(cfg->selected_level, &level_preview_map);
+            preview_loaded_idx = cfg->selected_level;
+        }
+
+        /* Gerencia descoberta automatica LAN enquanto estiver na tela Multiplayer */
+        if (page == MENU_PAGE_MULTIPLAYER) {
+            if (!disc_active) {
+                if (net_discovery_open(&disc_sock)) {
+                    disc_active = 1;
+                    last_probe_t = 0.0;
+                }
+            }
+            if (disc_active) {
+                if ((now_d - last_probe_t) >= 0.45) {
+                    net_discovery_send_probe(disc_sock, *port_out);
+                    last_probe_t = now_d;
+                }
+                net_discovery_poll(disc_sock, disc_rooms, &disc_count, 4, now_d);
+            }
+        } else if (disc_active) {
+            stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
+        }
+
+        /* Sincronizacao continua do Lobby enquanto aguarda ou prepara partida */
+        if (page == MENU_PAGE_LOBBY && lobby_active) {
+            CharacterClass my_cls = player_roster_get(&cfg->roster, cfg->selected_character);
+            const MapLevelInfo *cur_lvl = map_level_get(cfg->selected_level);
+
+            NetCtrlPacket my_pkt;
+            memset(&my_pkt, 0, sizeof(my_pkt));
+            my_pkt.magic = NET_CTRL_MAGIC;
+            my_pkt.msg_type = NET_MSG_LOBBY_STATE;
+            my_pkt.level_idx = cfg->selected_level;
+            my_pkt.character_idx = cfg->selected_character;
+            my_pkt.ready = (lobby_net.mode == NET_MODE_HOST) ? 1 : lobby_ready;
+            my_pkt.game_started = (lobby_net.mode == NET_MODE_HOST && lobby_started_burst > 0) ? 1 : 0;
+            my_pkt.port = *port_out;
+            snprintf(my_pkt.player_name, sizeof(my_pkt.player_name), "%s", my_cls.name);
+            snprintf(my_pkt.map_name, sizeof(my_pkt.map_name), "%s", cur_lvl->name);
+
+            int peer_left = 0;
+            int got_lobby = net_poll_lobby(&lobby_net,
+                                           (lobby_net.mode == NET_MODE_HOST) ? &my_pkt : NULL,
+                                           &peer_left);
+            if (got_lobby) {
+                last_lobby_rx_t = now_d;
+                mp_err_msg[0] = '\0';
+            }
+            if (peer_left) {
+                lobby_ready = 0;
+                if (lobby_net.mode == NET_MODE_CLIENT) {
+                    mp_err_msg[0] = '\0';
+                    snprintf(mp_err_msg, sizeof(mp_err_msg), "O Anfitriao fechou a sala.");
+                }
+            }
+            if (lobby_net.connected && (now_d - last_lobby_rx_t) > 3.5) {
+                lobby_net.connected = 0;
+                lobby_net.remote_ready = 0;
+                if (lobby_net.mode == NET_MODE_HOST) {
+                    lobby_net.has_peer_addr = 0;
+                }
+            }
+
+            if (lobby_net.has_peer_addr && (now_d - last_lobby_tx_t) >= 0.08) {
+                net_send_lobby_state(&lobby_net, &my_pkt);
+                last_lobby_tx_t = now_d;
+            }
+
+            if (lobby_net.mode == NET_MODE_CLIENT && lobby_net.remote_started) {
+                cfg->selected_level = map_level_clamp(lobby_net.remote_level);
+                if (net_out) {
+                    *net_out = lobby_net;
+                }
+                return 3;
+            }
+        }
 
         if (IsKeyPressed(KEY_F11)) {
             toggle_borderless_window();
@@ -1655,15 +1845,20 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             update_bind_capture(cfg, &listening_bind);
         } else if (IsKeyPressed(KEY_ESCAPE)) {
             if (page == MENU_PAGE_MAIN) {
+                stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
+                leave_mp_lobby(&lobby_active, &lobby_net);
                 return 4;
+            } else if (page == MENU_PAGE_LOBBY) {
+                leave_mp_lobby(&lobby_active, &lobby_net);
+                page = MENU_PAGE_MULTIPLAYER;
             } else {
                 mp_editing_ip = 0;
                 listening_bind = -1;
-                page = page == MENU_PAGE_CREATE ? MENU_PAGE_CUSTOMIZE : MENU_PAGE_MAIN;
+                page = (page == MENU_PAGE_CREATE) ? MENU_PAGE_CUSTOMIZE : MENU_PAGE_MAIN;
             }
         }
 
-        /* Navegacao por teclado no menu principal */
+        /* Navegacao por teclado nas telas */
         if (page == MENU_PAGE_MAIN) {
             if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S)) {
                 main_sel = (main_sel + 1) % 5;
@@ -1672,11 +1867,33 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                 main_sel = (main_sel + 4) % 5;
             }
             if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE)) {
-                if (main_sel == 0) return 1;
-                if (main_sel == 1) page = MENU_PAGE_MULTIPLAYER;
+                if (main_sel == 0) page = MENU_PAGE_SINGLEPLAYER;
+                if (main_sel == 1) {
+                    mp_err_msg[0] = '\0';
+                    net_get_local_ipv4(local_ip_str, (int)sizeof(local_ip_str));
+                    page = MENU_PAGE_MULTIPLAYER;
+                }
                 if (main_sel == 2) page = MENU_PAGE_CUSTOMIZE;
                 if (main_sel == 3) page = MENU_PAGE_SETTINGS;
-                if (main_sel == 4) return 4;
+                if (main_sel == 4) {
+                    stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
+                    leave_mp_lobby(&lobby_active, &lobby_net);
+                    return 4;
+                }
+            }
+        } else if (page == MENU_PAGE_SINGLEPLAYER) {
+            int total_lvls = map_level_count();
+            if (total_lvls > 1) {
+                if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A)) {
+                    cfg->selected_level = (cfg->selected_level + total_lvls - 1) % total_lvls;
+                }
+                if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D)) {
+                    cfg->selected_level = (cfg->selected_level + 1) % total_lvls;
+                }
+            }
+            if (page_at_frame_start == MENU_PAGE_SINGLEPLAYER &&
+                (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_SPACE))) {
+                return 1;
             }
         } else if (page == MENU_PAGE_MULTIPLAYER && mp_editing_ip) {
             int ch = GetCharPressed();
@@ -1700,14 +1917,18 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
 
         /* ======================== DESENHO DO FRAME ======================== */
         BeginDrawing();
-        CharacterClass preview = page == MENU_PAGE_CREATE ? draft : player_roster_get(&cfg->roster, cfg->selected_character);
+        CharacterClass preview = (page == MENU_PAGE_CREATE)
+            ? draft
+            : player_roster_get(&cfg->roster, cfg->selected_character);
         showcase_character = preview.visual_id;
         showcase_appearance = preview.appearance;
         snprintf(showcase_name, sizeof(showcase_name), "%s", preview.name);
         draw_cyber_arena_backdrop(font, sw, sh, sc, now, (int)page, cfg->ascii_quality);
 
-        /* Showcase do personagem placeholder grande em Micro-ASCII 3D */
-        draw_dense_character_showcase(font, sw, sh, sc, now, (int)page, cfg->ascii_quality);
+        if (page != MENU_PAGE_LOBBY) {
+            /* Showcase do personagem grande em Micro-ASCII 3D a direita */
+            draw_dense_character_showcase(font, sw, sh, sc, now, (int)page, cfg->ascii_quality);
+        }
 
         int left_x = (int)((float)sw * 0.050f);
         int top_y = (int)((float)sh * 0.048f);
@@ -1739,46 +1960,232 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                                                   main_sel == i, &hovered);
                 if (hovered) main_sel = i;
                 if (clicked) {
-                    if (i == 0) { EndDrawing(); return 1; }
-                    if (i == 1) page = MENU_PAGE_MULTIPLAYER;
+                    if (i == 0) page = MENU_PAGE_SINGLEPLAYER;
+                    if (i == 1) {
+                        mp_err_msg[0] = '\0';
+                        net_get_local_ipv4(local_ip_str, (int)sizeof(local_ip_str));
+                        page = MENU_PAGE_MULTIPLAYER;
+                    }
                     if (i == 2) page = MENU_PAGE_CUSTOMIZE;
                     if (i == 3) page = MENU_PAGE_SETTINGS;
-                    if (i == 4) { EndDrawing(); return 4; }
+                    if (i == 4) {
+                        EndDrawing();
+                        stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
+                        leave_mp_lobby(&lobby_active, &lobby_net);
+                        return 4;
+                    }
                 }
             }
-        } else if (page == MENU_PAGE_MULTIPLAYER) {
-            int pw = (int)(490.0f * sc);
+        } else if (page == MENU_PAGE_SINGLEPLAYER) {
+            int pw = (int)(525.0f * sc);
             if (pw < 350) pw = 350;
-            int ph = (int)(345.0f * sc);
+            int ph = (int)(415.0f * sc);
             if (content_y + ph > footer_top) ph = footer_top - content_y;
 
-            DrawRectangle(left_x, content_y, pw, ph, (Color){14, 18, 25, 236});
+            DrawRectangle(left_x, content_y, pw, ph, (Color){14, 18, 25, 238});
+            DrawRectangleLinesEx((Rectangle){(float)left_x, (float)content_y, (float)pw, (float)ph},
+                                 2.0f, (Color){230, 108, 38, 255});
+
+            DrawText("SELECIONAR NIVEL (SINGLEPLAYER)", left_x + pad_x,
+                     content_y + (int)(16.0f * sc), btn_font, (Color){255, 200, 90, 255});
+
+            /* Barra seletora de fase (< FASE >) */
+            int sel_y = content_y + (int)(52.0f * sc);
+            int sel_h = (int)(38.0f * sc);
+            if (sel_h < 28) sel_h = 28;
+            int arrow_w = (int)(40.0f * sc);
+            if (arrow_w < 28) arrow_w = 28;
+            int b_fnt = (int)(16.0f * sc);
+            if (b_fnt < 12) b_fnt = 12;
+
+            int total_lvls = map_level_count();
+            if (total_lvls < 1) total_lvls = 1;
+            if (draw_small_button(left_x + pad_x, sel_y, arrow_w, sel_h, "<", b_fnt,
+                                  (Color){38, 46, 60, 255}, (Color){215, 90, 35, 255})) {
+                cfg->selected_level = (cfg->selected_level + total_lvls - 1) % total_lvls;
+            }
+            int box_x = left_x + pad_x + arrow_w + 8;
+            int box_w = pw - pad_x * 2 - arrow_w * 2 - 16;
+            DrawRectangle(box_x, sel_y, box_w, sel_h, (Color){22, 28, 38, 255});
+            DrawRectangleLinesEx((Rectangle){(float)box_x, (float)sel_y, (float)box_w, (float)sel_h},
+                                 1.5f, (Color){95, 130, 165, 255});
+            const MapLevelInfo *lvl = map_level_get(cfg->selected_level);
+            const char *lvl_hdr = TextFormat("%s  (%d/%d)", lvl->name, cfg->selected_level + 1, total_lvls);
+            int lhw = MeasureText(lvl_hdr, b_fnt);
+            DrawText(lvl_hdr, box_x + (box_w - lhw) / 2, sel_y + (sel_h - b_fnt) / 2,
+                     b_fnt, (Color){120, 225, 255, 255});
+            if (draw_small_button(box_x + box_w + 8, sel_y, arrow_w, sel_h, ">", b_fnt,
+                                  (Color){38, 46, 60, 255}, (Color){215, 90, 35, 255})) {
+                cfg->selected_level = (cfg->selected_level + 1) % total_lvls;
+            }
+
+            /* Preview ASCII do mapa + ficha rapida da fase */
+            int prev_y = sel_y + sel_h + (int)(16.0f * sc);
+            int prev_sz = (int)(168.0f * sc);
+            int avail_prev = ph - (prev_y - content_y) - btn_h - (int)(32.0f * sc);
+            if (prev_sz > avail_prev) prev_sz = avail_prev;
+            if (prev_sz < 96) prev_sz = 96;
+
+            draw_level_minimap_preview(left_x + pad_x, prev_y, prev_sz, &level_preview_map);
+
+            int info_x = left_x + pad_x + prev_sz + (int)(16.0f * sc);
+            int info_sz = (int)(15.0f * sc);
+            if (info_sz < 11) info_sz = 11;
+            DrawText(lvl->subtitle, info_x, prev_y + 4, info_sz, (Color){225, 232, 245, 255});
+            DrawText(TextFormat("Personagem: %s", preview.name),
+                     info_x, prev_y + (int)(32.0f * sc), info_sz, (Color){255, 200, 100, 255});
+            DrawText(TextFormat("Vida: %d  |  Vel: %.1f", preview.max_health, preview.move_speed),
+                     info_x, prev_y + (int)(56.0f * sc), info_sz - 1, (Color){160, 180, 205, 255});
+            DrawText("Ondas de inimigos: 6 por onda",
+                     info_x, prev_y + (int)(84.0f * sc), info_sz - 1, (Color){145, 215, 155, 255});
+            DrawText("Pronto para adicionar novos mapas!",
+                     info_x, prev_y + (int)(110.0f * sc), info_sz - 2, (Color){130, 145, 168, 255});
+
+            /* Acoes: VOLTAR e INICIAR PARTIDA */
+            int act_y = content_y + ph - btn_h - (int)(14.0f * sc);
+            int back_w = (int)(135.0f * sc);
+            if (back_w < 100) back_w = 100;
+            if (draw_small_button(left_x + pad_x, act_y, back_w, btn_h, "VOLTAR",
+                                  b_fnt, (Color){38, 44, 56, 255}, (Color){195, 75, 30, 255})) {
+                page = MENU_PAGE_MAIN;
+            }
+            int go_x = left_x + pad_x + back_w + 12;
+            int go_w = pw - pad_x * 2 - back_w - 12;
+            if (draw_chamfer_button(go_x, act_y, go_w, btn_h, bevel,
+                                    "INICIAR PARTIDA", btn_font - 1, 1, NULL)) {
+                EndDrawing();
+                return 1;
+            }
+        } else if (page == MENU_PAGE_MULTIPLAYER) {
+            int pw = (int)(545.0f * sc);
+            if (pw < 360) pw = 360;
+            int ph = (int)(450.0f * sc);
+            if (content_y + ph > footer_top) ph = footer_top - content_y;
+
+            DrawRectangle(left_x, content_y, pw, ph, (Color){14, 18, 25, 238});
             DrawRectangleLinesEx((Rectangle){(float)left_x, (float)content_y, (float)pw, (float)ph},
                                  2.0f, (Color){225, 105, 35, 255});
 
-            DrawText("MULTIPLAYER LAN / UDP", left_x + pad_x, content_y + (int)(16.0f * sc),
-                     btn_font, (Color){255, 200, 90, 255});
+            DrawText("MULTIPLAYER CO-OP (LAN / MESMO PC)", left_x + pad_x,
+                     content_y + (int)(14.0f * sc), btn_font - 1, (Color){255, 200, 90, 255});
+            int sub_sz = (int)(13.5f * sc);
+            if (sub_sz < 10) sub_sz = 10;
+            DrawText("Crie uma sala para o amigo achar sozinho ou entre abaixo (sem PvP).",
+                     left_x + pad_x, content_y + (int)(42.0f * sc), sub_sz, (Color){165, 185, 210, 255});
 
-            if (draw_chamfer_button(left_x + pad_x, content_y + (int)(56.0f * sc),
-                                    pw - pad_x * 2, btn_h, bevel,
-                                    "HOSPEDAR PARTIDA (HOST UDP)", btn_font - 2, 0, NULL)) {
-                EndDrawing();
-                return 2;
+            int host_btn_y = content_y + (int)(68.0f * sc);
+            int host_btn_h = (int)(48.0f * sc);
+            if (host_btn_h < 34) host_btn_h = 34;
+            if (draw_chamfer_button(left_x + pad_x, host_btn_y, pw - pad_x * 2, host_btn_h, bevel,
+                                    "CRIAR SALA (SER O ANFITRIAO)", btn_font - 2, 1, NULL)) {
+                stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
+                mp_err_msg[0] = '\0';
+                if (net_init(&lobby_net, NET_MODE_HOST, NULL, *port_out)) {
+                    lobby_active = 1;
+                    lobby_ready = 1;
+                    lobby_started_burst = 0;
+                    last_lobby_tx_t = 0.0;
+                    last_lobby_rx_t = now_d;
+                    net_get_local_ipv4(local_ip_str, (int)sizeof(local_ip_str));
+                    page = MENU_PAGE_LOBBY;
+                } else {
+                    snprintf(mp_err_msg, sizeof(mp_err_msg),
+                             "Nao foi possivel abrir a porta %d para hospedar.", *port_out);
+                }
             }
 
-            if (draw_chamfer_button(left_x + pad_x, content_y + (int)(120.0f * sc),
-                                    pw - pad_x * 2, btn_h, bevel,
-                                    "CONECTAR AO HOST (CLIENT UDP)", btn_font - 2, 0, NULL)) {
-                if (ip_buf[0] == '\0') snprintf(ip_buf, ip_size, "127.0.0.1");
-                EndDrawing();
-                return 3;
+            /* Secao de busca automatica de salas abertas na LAN / localhost */
+            int list_hdr_y = host_btn_y + host_btn_h + (int)(14.0f * sc);
+            int dots = ((int)(now * 3.0f)) % 4;
+            const char *dots_str = (dots == 0) ? "" : (dots == 1 ? "." : (dots == 2 ? ".." : "..."));
+            DrawText(TextFormat("SALAS ENCONTRADAS NA REDE%s", dots_str),
+                     left_x + pad_x, list_hdr_y, sub_sz + 1, (Color){115, 220, 255, 255});
+
+            int room_y0 = list_hdr_y + (int)(24.0f * sc);
+            int foot_h = (int)(36.0f * sc);
+            if (foot_h < 28) foot_h = 28;
+            int man_h = (int)(36.0f * sc);
+            if (man_h < 26) man_h = 26;
+            int man_y = content_y + ph - foot_h - (int)(14.0f * sc) - man_h - (int)(26.0f * sc);
+            int room_area_h = man_y - room_y0 - (int)(8.0f * sc);
+
+            int b_fnt = (int)(14.5f * sc);
+            if (b_fnt < 11) b_fnt = 11;
+
+            if (disc_count > 0) {
+                int r_step = (int)(44.0f * sc);
+                if (r_step * disc_count > room_area_h && disc_count > 0) {
+                    r_step = room_area_h / disc_count;
+                }
+                if (r_step < 28) r_step = 28;
+                for (int i = 0; i < disc_count && i < 3; i++) {
+                    int ry = room_y0 + i * r_step;
+                    const char *where = (strcmp(disc_rooms[i].ip, "127.0.0.1") == 0)
+                        ? "Este PC"
+                        : disc_rooms[i].ip;
+                    const char *r_lbl = TextFormat("ENTRAR: %s | %s (%s)",
+                                                   disc_rooms[i].host_name,
+                                                   disc_rooms[i].map_name,
+                                                   where);
+                    if (draw_small_button(left_x + pad_x, ry, pw - pad_x * 2, r_step - 6,
+                                          r_lbl, b_fnt,
+                                          (Color){30, 68, 52, 255}, (Color){52, 138, 88, 255})) {
+                        copy_ip_str(ip_buf, ip_size, disc_rooms[i].ip);
+                        stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
+                        mp_err_msg[0] = '\0';
+                        if (net_init(&lobby_net, NET_MODE_CLIENT, ip_buf, *port_out)) {
+                            lobby_active = 1;
+                            lobby_ready = 0;
+                            lobby_started_burst = 0;
+                            last_lobby_tx_t = 0.0;
+                            last_lobby_rx_t = now_d;
+                            page = MENU_PAGE_LOBBY;
+                        } else {
+                            snprintf(mp_err_msg, sizeof(mp_err_msg),
+                                     "Erro ao conectar em %s.", ip_buf);
+                        }
+                    }
+                }
+            } else {
+                int empty_h = (int)(70.0f * sc);
+                if (empty_h > room_area_h) empty_h = room_area_h;
+                if (empty_h < 42) empty_h = 42;
+                DrawRectangle(left_x + pad_x, room_y0, pw - pad_x * 2, empty_h, (Color){20, 25, 34, 255});
+                DrawRectangleLinesEx((Rectangle){(float)(left_x + pad_x), (float)room_y0,
+                                                 (float)(pw - pad_x * 2), (float)empty_h},
+                                     1.0f, (Color){56, 70, 92, 255});
+                DrawText("Nenhuma sala aberta encontrada ainda no Wi-Fi ou neste PC.",
+                         left_x + pad_x + 12, room_y0 + (int)(10.0f * sc),
+                         sub_sz, (Color){165, 178, 198, 255});
+                int lh_w = (int)(225.0f * sc);
+                if (lh_w < 170) lh_w = 170;
+                int lh_bh = (int)(28.0f * sc);
+                if (lh_bh < 20) lh_bh = 20;
+                if (empty_h >= lh_bh + (int)(32.0f * sc) &&
+                    draw_small_button(left_x + pad_x + 12, room_y0 + empty_h - lh_bh - 6,
+                                      lh_w, lh_bh, "TESTAR MESMO PC (127.0.0.1)", sub_sz - 1,
+                                      (Color){36, 52, 74, 255}, (Color){68, 125, 200, 255})) {
+                    snprintf(ip_buf, ip_size, "127.0.0.1");
+                    stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
+                    mp_err_msg[0] = '\0';
+                    if (net_init(&lobby_net, NET_MODE_CLIENT, ip_buf, *port_out)) {
+                        lobby_active = 1;
+                        lobby_ready = 0;
+                        lobby_started_burst = 0;
+                        last_lobby_tx_t = 0.0;
+                        last_lobby_rx_t = now_d;
+                        page = MENU_PAGE_LOBBY;
+                    }
+                }
             }
 
-            int ip_y = content_y + (int)(190.0f * sc);
-            DrawText("IP do Host (clique para editar):", left_x + pad_x, ip_y,
-                     (int)(15.0f * sc), (Color){175, 190, 210, 255});
-            Rectangle ip_box = {(float)(left_x + pad_x), (float)(ip_y + (int)(22.0f * sc)),
-                                (float)(pw - pad_x * 2), (float)(42.0f * sc)};
+            /* Campo opcional de IP manual (para firewall/VPN) */
+            DrawText("Ou digite o IP manualmente (opcional):", left_x + pad_x,
+                     man_y - (int)(20.0f * sc), sub_sz, (Color){155, 170, 192, 255});
+            int con_bw = (int)(145.0f * sc);
+            if (con_bw < 105) con_bw = 105;
+            Rectangle ip_box = {(float)(left_x + pad_x), (float)man_y,
+                                (float)(pw - pad_x * 2 - con_bw - 10), (float)man_h};
             if (CheckCollisionPointRec(GetMousePosition(), ip_box) &&
                 IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                 mp_editing_ip = 1;
@@ -1787,20 +2194,272 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                                                    : (Color){22, 26, 34, 255});
             DrawRectangleLinesEx(ip_box, 1.5f,
                                  mp_editing_ip ? (Color){100, 205, 255, 255}
-                                               : (Color){85, 95, 115, 255});
-            DrawText(TextFormat("%s%s  (Porta: %d)", ip_buf, mp_editing_ip ? "_" : "", *port_out),
-                     (int)ip_box.x + 12, (int)ip_box.y + (int)(10.0f * sc), (int)(17.0f * sc),
-                     (Color){255, 235, 120, 255});
+                                               : (Color){80, 92, 112, 255});
+            DrawText(TextFormat("%s%s", ip_buf, mp_editing_ip ? "_" : ""),
+                     (int)ip_box.x + 10, (int)ip_box.y + (man_h - b_fnt) / 2,
+                     b_fnt, (Color){255, 232, 120, 255});
 
-            int v_font = (int)(15.0f * sc);
-            if (v_font < 13) v_font = 13;
-            int vw = calc_fit_w("VOLTAR", v_font, (int)(120.0f * sc), sc);
-            int vh = (int)(36.0f * sc);
-            if (draw_small_button(left_x + pad_x, content_y + ph - vh - (int)(16.0f * sc),
-                                  vw, vh, "VOLTAR", v_font,
+            if (draw_small_button((int)ip_box.x + (int)ip_box.width + 10, man_y, con_bw, man_h,
+                                  "CONECTAR IP", b_fnt - 1,
+                                  (Color){42, 72, 108, 255}, (Color){68, 125, 195, 255})) {
+                if (ip_buf[0] == '\0') snprintf(ip_buf, ip_size, "127.0.0.1");
+                mp_editing_ip = 0;
+                stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
+                mp_err_msg[0] = '\0';
+                if (net_init(&lobby_net, NET_MODE_CLIENT, ip_buf, *port_out)) {
+                    lobby_active = 1;
+                    lobby_ready = 0;
+                    lobby_started_burst = 0;
+                    last_lobby_tx_t = 0.0;
+                    last_lobby_rx_t = now_d;
+                    page = MENU_PAGE_LOBBY;
+                } else {
+                    snprintf(mp_err_msg, sizeof(mp_err_msg),
+                             "IP invalido (%s).", ip_buf);
+                }
+            }
+
+            if (mp_err_msg[0] != '\0') {
+                DrawText(mp_err_msg, left_x + pad_x + (int)(135.0f * sc),
+                         content_y + ph - foot_h - (int)(4.0f * sc),
+                         sub_sz, (Color){255, 105, 95, 255});
+            }
+
+            int vw = calc_fit_w("VOLTAR", b_fnt, (int)(115.0f * sc), sc);
+            if (draw_small_button(left_x + pad_x, content_y + ph - foot_h - (int)(10.0f * sc),
+                                  vw, foot_h, "VOLTAR", b_fnt,
                                   (Color){38, 42, 52, 255}, (Color){195, 75, 30, 255})) {
                 mp_editing_ip = 0;
+                stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
                 page = MENU_PAGE_MAIN;
+            }
+        } else if (page == MENU_PAGE_LOBBY && lobby_active) {
+            int is_host = (lobby_net.mode == NET_MODE_HOST);
+            int pw = (int)(920.0f * sc);
+            int max_pw = sw - left_x * 2;
+            if (pw > max_pw) pw = max_pw;
+            if (pw < 520) pw = 520;
+            int ph = (int)(445.0f * sc);
+            if (content_y + ph > footer_top) ph = footer_top - content_y;
+
+            DrawRectangle(left_x, content_y, pw, ph, (Color){12, 16, 24, 244});
+            DrawRectangleLinesEx((Rectangle){(float)left_x, (float)content_y, (float)pw, (float)ph},
+                                 2.0f, lobby_net.connected ? (Color){75, 215, 125, 255}
+                                                           : (Color){230, 125, 45, 255});
+
+            int b_fnt = (int)(15.0f * sc);
+            if (b_fnt < 11) b_fnt = 11;
+            int sub_sz = (int)(13.5f * sc);
+            if (sub_sz < 10) sub_sz = 10;
+
+            /* Cabecalho do Lobby + Pill de Status da Conexao */
+            const char *role_title = is_host
+                ? "SALA DE ESPERA (ANFITRIAO)"
+                : "SALA DE ESPERA (CONVIDADO)";
+            DrawText(role_title, left_x + pad_x, content_y + (int)(14.0f * sc),
+                     btn_font, (Color){255, 205, 95, 255});
+
+            const char *conn_lbl = lobby_net.connected
+                ? "CONECTADO! AMBOS NA SALA"
+                : (is_host ? "AGUARDANDO AMIGO ENTRAR..." : "CONECTANDO NA SALA...");
+            Color conn_bg = lobby_net.connected ? (Color){32, 108, 56, 255} : (Color){135, 78, 22, 255};
+            Color conn_fg = lobby_net.connected ? (Color){135, 255, 165, 255} : (Color){255, 220, 130, 255};
+            int cw = MeasureText(conn_lbl, b_fnt) + 24;
+            int cx = left_x + pw - pad_x - cw;
+            int cy = content_y + (int)(12.0f * sc);
+            DrawRectangle(cx, cy, cw, (int)(30.0f * sc), conn_bg);
+            DrawRectangleLinesEx((Rectangle){(float)cx, (float)cy, (float)cw, (float)(30.0f * sc)},
+                                 1.5f, conn_fg);
+            DrawText(conn_lbl, cx + 12, cy + ((int)(30.0f * sc) - b_fnt) / 2, b_fnt, conn_fg);
+
+            /* Faixa com dica clara de rede / IP para leigos */
+            int tip_y = content_y + (int)(48.0f * sc);
+            const char *tip_str = (mp_err_msg[0] != '\0')
+                ? mp_err_msg
+                : (is_host
+                    ? (lobby_net.connected
+                        ? TextFormat("Conexao ativa na porta %d | Modo Co-op: sem PvP entre jogadores.", *port_out)
+                        : TextFormat("Seu amigo na mesma rede encontra sua sala sozinho! Se precisar digitar: %s (ou 127.0.0.1 aqui)", local_ip_str))
+                    : (lobby_net.connected
+                        ? TextFormat("Conectado ao Anfitriao (%s)! Confirme seu personagem e clique em ESTOU PRONTO.", ip_buf)
+                        : TextFormat("Chamando sala em %s (porta %d)... Confira se o Anfitriao ja abriu a sala.", ip_buf, *port_out)));
+            int tip_sz = sub_sz;
+            while (tip_sz > 10 && MeasureText(tip_str, tip_sz) > pw - pad_x * 2) {
+                tip_sz--;
+            }
+            Color tip_col = (mp_err_msg[0] != '\0')
+                ? (Color){255, 115, 100, 255}
+                : (Color){180, 200, 225, 255};
+            DrawText(tip_str, left_x + pad_x, tip_y, tip_sz, tip_col);
+
+            /* Area central com 3 colunas: Jogador 1 | Jogador 2 | Fase e Config */
+            int col_y = tip_y + (int)(28.0f * sc);
+            int foot_h = (int)(42.0f * sc);
+            if (foot_h < 30) foot_h = 30;
+            int col_h = ph - (col_y - content_y) - foot_h - (int)(22.0f * sc);
+            int col_gap = (int)(12.0f * sc);
+            int col_w = (pw - pad_x * 2 - col_gap * 2) / 3;
+
+            int p1_x = left_x + pad_x;
+            int p2_x = p1_x + col_w + col_gap;
+            int c3_x = p2_x + col_w + col_gap;
+
+            int total_chars = player_roster_count(&cfg->roster);
+            CharacterClass local_cls = player_roster_get(&cfg->roster, cfg->selected_character);
+            int sw_bw = (int)(34.0f * sc);
+            if (sw_bw < 24) sw_bw = 24;
+            int sw_bh = (int)(28.0f * sc);
+            if (sw_bh < 22) sw_bh = 22;
+
+            /* Coluna 1: JOGADOR 1 (ANFITRIAO) */
+            DrawRectangle(p1_x, col_y, col_w, col_h, (Color){20, 25, 36, 255});
+            DrawRectangleLinesEx((Rectangle){(float)p1_x, (float)col_y, (float)col_w, (float)col_h},
+                                 1.5f, is_host ? (Color){115, 195, 255, 255} : (Color){70, 88, 112, 255});
+            DrawText("JOGADOR 1 (ANFITRIAO)", p1_x + 12, col_y + 12, b_fnt, (Color){130, 210, 255, 255});
+            const char *p1_name = is_host
+                ? local_cls.name
+                : (lobby_net.connected && lobby_net.remote_name[0] ? lobby_net.remote_name : "Conectando...");
+            DrawText(p1_name, p1_x + 12, col_y + (int)(44.0f * sc), b_fnt + 1, WHITE);
+            DrawText((is_host || lobby_net.connected) ? "STATUS: PRONTO (HOST)" : "STATUS: AGUARDANDO",
+                     p1_x + 12, col_y + (int)(74.0f * sc), sub_sz, (Color){110, 230, 145, 255});
+            if (is_host && total_chars > 1) {
+                int cy_btn = col_y + col_h - sw_bh - 12;
+                DrawText("Trocar personagem:", p1_x + 12, cy_btn - 18, sub_sz - 1, (Color){165, 180, 200, 255});
+                if (draw_small_button(p1_x + 12, cy_btn, sw_bw, sw_bh, "<", b_fnt,
+                                      (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
+                    cfg->selected_character = (cfg->selected_character + total_chars - 1) % total_chars;
+                }
+                if (draw_small_button(p1_x + 12 + sw_bw + 8, cy_btn, sw_bw, sw_bh, ">", b_fnt,
+                                      (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
+                    cfg->selected_character = (cfg->selected_character + 1) % total_chars;
+                }
+            }
+
+            /* Coluna 2: JOGADOR 2 (CONVIDADO) */
+            DrawRectangle(p2_x, col_y, col_w, col_h, (Color){20, 25, 36, 255});
+            DrawRectangleLinesEx((Rectangle){(float)p2_x, (float)col_y, (float)col_w, (float)col_h},
+                                 1.5f, (!is_host || lobby_net.connected) ? (Color){115, 195, 255, 255}
+                                                                         : (Color){70, 88, 112, 255});
+            DrawText("JOGADOR 2 (CONVIDADO)", p2_x + 12, col_y + 12, b_fnt, (Color){255, 185, 110, 255});
+            const char *p2_name = !is_host
+                ? local_cls.name
+                : (lobby_net.connected && lobby_net.remote_name[0] ? lobby_net.remote_name : "Aguardando entrar...");
+            DrawText(p2_name, p2_x + 12, col_y + (int)(44.0f * sc), b_fnt + 1,
+                     (!is_host || lobby_net.connected) ? WHITE : (Color){135, 145, 165, 255});
+            const char *p2_stat = !is_host
+                ? (lobby_ready ? "STATUS: PRONTO!" : "STATUS: CLIQUE EM PRONTO")
+                : (lobby_net.connected
+                    ? (lobby_net.remote_ready ? "STATUS: PRONTO!" : "STATUS: PREPARANDO...")
+                    : "STATUS: DESCONECTADO");
+            Color p2_col = (!is_host ? lobby_ready : (lobby_net.connected && lobby_net.remote_ready))
+                ? (Color){110, 235, 145, 255}
+                : (Color){245, 195, 85, 255};
+            DrawText(p2_stat, p2_x + 12, col_y + (int)(74.0f * sc), sub_sz, p2_col);
+            if (!is_host && total_chars > 1) {
+                int cy_btn = col_y + col_h - sw_bh - 12;
+                DrawText("Trocar personagem:", p2_x + 12, cy_btn - 18, sub_sz - 1, (Color){165, 180, 200, 255});
+                if (draw_small_button(p2_x + 12, cy_btn, sw_bw, sw_bh, "<", b_fnt,
+                                      (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
+                    cfg->selected_character = (cfg->selected_character + total_chars - 1) % total_chars;
+                }
+                if (draw_small_button(p2_x + 12 + sw_bw + 8, cy_btn, sw_bw, sw_bh, ">", b_fnt,
+                                      (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
+                    cfg->selected_character = (cfg->selected_character + 1) % total_chars;
+                }
+            }
+
+            /* Coluna 3: FASE SELECIONADA + MINI-MAPA */
+            int total_lvls = map_level_count();
+            int active_lvl_idx = is_host ? cfg->selected_level
+                                         : map_level_clamp(lobby_net.connected ? lobby_net.remote_level
+                                                                               : cfg->selected_level);
+            if (!is_host && lobby_net.connected) {
+                cfg->selected_level = active_lvl_idx;
+            }
+            const MapLevelInfo *mp_lvl = map_level_get(active_lvl_idx);
+
+            DrawRectangle(c3_x, col_y, col_w, col_h, (Color){20, 25, 36, 255});
+            DrawRectangleLinesEx((Rectangle){(float)c3_x, (float)col_y, (float)col_w, (float)col_h},
+                                 1.5f, (Color){95, 130, 165, 255});
+            DrawText("FASE / CONFIGURACAO", c3_x + 12, col_y + 12, b_fnt, (Color){135, 230, 175, 255});
+            DrawText(mp_lvl->name, c3_x + 12, col_y + (int)(38.0f * sc), sub_sz, WHITE);
+            DrawText("Modo: Co-op (Sem PvP)", c3_x + 12, col_y + (int)(58.0f * sc),
+                     sub_sz - 1, (Color){165, 195, 220, 255});
+
+            int mp_prev_sz = col_h - (int)(116.0f * sc);
+            if (mp_prev_sz > col_w - 28) mp_prev_sz = col_w - 28;
+            if (mp_prev_sz < 72) mp_prev_sz = 72;
+            draw_level_minimap_preview(c3_x + (col_w - mp_prev_sz) / 2,
+                                       col_y + (int)(80.0f * sc),
+                                       mp_prev_sz, &level_preview_map);
+
+            if (is_host && total_lvls > 1) {
+                int cy_btn = col_y + col_h - sw_bh - 10;
+                if (draw_small_button(c3_x + 12, cy_btn, sw_bw, sw_bh, "<", b_fnt,
+                                      (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
+                    cfg->selected_level = (cfg->selected_level + total_lvls - 1) % total_lvls;
+                }
+                if (draw_small_button(c3_x + col_w - sw_bw - 12, cy_btn, sw_bw, sw_bh, ">", b_fnt,
+                                      (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
+                    cfg->selected_level = (cfg->selected_level + 1) % total_lvls;
+                }
+            }
+
+            /* Rodape de acoes do Lobby */
+            int foot_y = content_y + ph - foot_h - (int)(12.0f * sc);
+            int leave_w = (int)(185.0f * sc);
+            if (leave_w < 135) leave_w = 135;
+            if (draw_small_button(left_x + pad_x, foot_y, leave_w, foot_h,
+                                  is_host ? "FECHAR SALA" : "SAIR DA SALA", b_fnt,
+                                  (Color){62, 36, 40, 255}, (Color){195, 65, 55, 255})) {
+                leave_mp_lobby(&lobby_active, &lobby_net);
+                page = MENU_PAGE_MULTIPLAYER;
+            }
+
+            int go_w = (int)(310.0f * sc);
+            if (go_w > pw - pad_x * 2 - leave_w - 16) go_w = pw - pad_x * 2 - leave_w - 16;
+            int go_x = left_x + pw - pad_x - go_w;
+            if (is_host) {
+                if (lobby_net.connected) {
+                    const char *start_lbl = lobby_net.remote_ready
+                        ? "INICIAR PARTIDA (AMBOS PRONTOS)"
+                        : "INICIAR PARTIDA AGORA";
+                    if (draw_small_button(go_x, foot_y, go_w, foot_h, start_lbl, b_fnt,
+                                          (Color){38, 128, 62, 255}, (Color){56, 178, 86, 255})) {
+                        NetCtrlPacket go_pkt;
+                        memset(&go_pkt, 0, sizeof(go_pkt));
+                        go_pkt.magic = NET_CTRL_MAGIC;
+                        go_pkt.msg_type = NET_MSG_LOBBY_STATE;
+                        go_pkt.level_idx = cfg->selected_level;
+                        go_pkt.character_idx = cfg->selected_character;
+                        go_pkt.ready = 1;
+                        go_pkt.game_started = 1;
+                        go_pkt.port = *port_out;
+                        snprintf(go_pkt.player_name, sizeof(go_pkt.player_name), "%s", local_cls.name);
+                        snprintf(go_pkt.map_name, sizeof(go_pkt.map_name), "%s", mp_lvl->name);
+                        for (int k = 0; k < 4; k++) {
+                            net_send_lobby_state(&lobby_net, &go_pkt);
+                        }
+                        if (net_out) {
+                            *net_out = lobby_net;
+                        }
+                        EndDrawing();
+                        return 2;
+                    }
+                } else {
+                    draw_small_button(go_x, foot_y, go_w, foot_h,
+                                      "AGUARDANDO CONEXAO...", b_fnt,
+                                      (Color){34, 38, 48, 255}, (Color){40, 46, 56, 255});
+                }
+            } else {
+                const char *r_lbl = lobby_ready
+                    ? "PRONTO! (AGUARDANDO ANFITRIAO)"
+                    : "ESTOU PRONTO!";
+                if (draw_small_button(go_x, foot_y, go_w, foot_h, r_lbl, b_fnt,
+                                      lobby_ready ? (Color){38, 128, 62, 255} : (Color){185, 88, 28, 255},
+                                      (Color){64, 172, 92, 255})) {
+                    lobby_ready = !lobby_ready;
+                }
             }
         } else if (page == MENU_PAGE_CUSTOMIZE) {
             int pw = (int)(490.0f * sc);
@@ -1912,31 +2571,38 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
         EndDrawing();
     }
 
+    stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
+    leave_mp_lobby(&lobby_active, &lobby_net);
     return 4;
 }
 
 static void run_game_session(NetMode mode, const char *host_ip, int port,
-                             AppConfig *cfg, char *err_buf, size_t err_size) {
+                             AppConfig *cfg, NetContext *existing_net,
+                             char *err_buf, size_t err_size) {
+    int level_idx = map_level_clamp(cfg ? cfg->selected_level : 0);
+    const MapLevelInfo *lvl_info = map_level_get(level_idx);
     GameMap map;
-    load_initial_map(&map);
+    map_load_level(level_idx, &map);
 
     Player player;
     NetContext net;
 
     if (mode == NET_MODE_HOST) {
-        player_init(&player, 2.5f, 4.5f, 0.0f);
+        player_init(&player, lvl_info->spawn1_x, lvl_info->spawn1_y, lvl_info->spawn1_angle);
         player.id = 1;
     } else if (mode == NET_MODE_CLIENT) {
-        player_init(&player, 13.5f, 11.5f, PI_F);
+        player_init(&player, lvl_info->spawn2_x, lvl_info->spawn2_y, lvl_info->spawn2_angle);
         player.id = 2;
     } else {
-        player_init(&player, 2.5f, 4.5f, 0.0f);
+        player_init(&player, lvl_info->spawn1_x, lvl_info->spawn1_y, lvl_info->spawn1_angle);
     }
 
     CharacterClass selected_class = player_roster_get(&cfg->roster, cfg->selected_character);
     player_apply_class(&player, &selected_class);
 
-    if (!net_init(&net, mode, host_ip, port)) {
+    if (existing_net && existing_net->initialized && mode != NET_MODE_OFFLINE) {
+        net = *existing_net;
+    } else if (!net_init(&net, mode, host_ip, port)) {
         snprintf(err_buf, err_size,
                  "Erro ao iniciar rede UDP na porta %d (IP: %s).", port, host_ip);
         return;
@@ -2204,17 +2870,19 @@ int main(int argc, char *argv[]) {
     int port = DEFAULT_PORT;
 
     while (!WindowShouldClose()) {
-        int choice = run_menu_screen(&cfg, host_ip, sizeof(host_ip), &port, status_msg);
+        NetContext lobby_net;
+        memset(&lobby_net, 0, sizeof(lobby_net));
+        int choice = run_menu_screen(&cfg, host_ip, sizeof(host_ip), &port, &lobby_net, status_msg);
         status_msg[0] = '\0';
 
         if (choice == 1) {
-            run_game_session(NET_MODE_OFFLINE, host_ip, port, &cfg,
+            run_game_session(NET_MODE_OFFLINE, host_ip, port, &cfg, NULL,
                              status_msg, sizeof(status_msg));
         } else if (choice == 2) {
-            run_game_session(NET_MODE_HOST, host_ip, port, &cfg,
+            run_game_session(NET_MODE_HOST, host_ip, port, &cfg, &lobby_net,
                              status_msg, sizeof(status_msg));
         } else if (choice == 3) {
-            run_game_session(NET_MODE_CLIENT, host_ip, port, &cfg,
+            run_game_session(NET_MODE_CLIENT, host_ip, port, &cfg, &lobby_net,
                              status_msg, sizeof(status_msg));
         } else {
             break;

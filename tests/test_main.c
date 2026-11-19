@@ -48,7 +48,7 @@ static void test_map_file_loading(void) {
     int ok_valid = map_load_from_file(&map, "assets/maps/level1.txt");
     ASSERT_TRUE(ok_valid == 1, "Carrega assets/maps/level1.txt com sucesso");
     ASSERT_TRUE(map_get_tile(&map, 0, 0) == '#', "Borda (0,0) do level1.txt e '#'");
-    ASSERT_TRUE(map_is_wall(&map, 3, 2) == 1, "Obstaculo em (3,2) e parede");
+    ASSERT_TRUE(map_is_wall(&map, 3, 3) == 1, "Obstaculo em (3,3) e parede");
     ASSERT_TRUE(map_is_wall(&map, 2, 1) == 0, "Corredor em (2,1) e livre");
 }
 

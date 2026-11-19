@@ -27,6 +27,36 @@ typedef struct {
     int shooting;
 } NetPacket;
 
+#define NET_CTRL_MAGIC 0x4D4F4441u
+
+typedef enum {
+    NET_MSG_DISCOVER_REQ   = 1,
+    NET_MSG_DISCOVER_OFFER = 2,
+    NET_MSG_LOBBY_STATE    = 3,
+    NET_MSG_LOBBY_LEAVE    = 4
+} NetMsgType;
+
+typedef struct {
+    unsigned int magic;
+    int msg_type;
+    int level_idx;
+    int character_idx;
+    int ready;
+    int game_started;
+    int port;
+    char player_name[32];
+    char map_name[32];
+} NetCtrlPacket;
+
+typedef struct {
+    char ip[64];
+    char host_name[32];
+    char map_name[32];
+    int level_idx;
+    int port;
+    double last_seen;
+} NetDiscoveredRoom;
+
 typedef struct {
     NetMode mode;
     int initialized;
@@ -37,10 +67,35 @@ typedef struct {
     unsigned short peer_port;
     int has_peer_addr;
     NetPacket remote_state;
+    int remote_character;
+    int remote_ready;
+    int remote_level;
+    int remote_started;
+    char remote_name[32];
+    char remote_map_name[32];
 } NetContext;
 
 /* Inicializa o subsistema de rede no modo escolhido. Retorna 1 em sucesso, 0 em erro. */
 int net_init(NetContext *net, NetMode mode, const char *ip, int port);
+
+/* Descobre o IPv4 local ativo da maquina (fallback para "127.0.0.1"). */
+void net_get_local_ipv4(char *out_ip, int out_size);
+
+/* Envia estado do lobby (pronto/personagem/fase/inicio) para o par conectado. */
+int net_send_lobby_state(NetContext *net, const NetCtrlPacket *pkt);
+
+/* Notifica o outro jogador que saiu do lobby. */
+int net_send_lobby_leave(NetContext *net);
+
+/* Processa pacotes de lobby e descoberta LAN sem bloquear. */
+int net_poll_lobby(NetContext *net, const NetCtrlPacket *host_offer, int *peer_left_out);
+
+/* Scanner UDP de salas abertas na LAN e em localhost. */
+int net_discovery_open(unsigned long long *out_sock);
+void net_discovery_send_probe(unsigned long long sock_handle, int port);
+int net_discovery_poll(unsigned long long sock_handle, NetDiscoveredRoom *rooms,
+                       int *room_count, int max_rooms, double now);
+void net_discovery_close(unsigned long long *sock_handle);
 
 /* Envia o estado atual do jogador local para o outro participante. */
 int net_send_state(NetContext *net, const Player *local_player, int shooting);

@@ -13,9 +13,9 @@
 #define MINIMAP_SCROLL_MARGIN 3
 
 /*
- * MODULO 1: MAPA, ARQUIVOS E COLISAO
- * Responsavel por armazenar a matriz 2D da fase, carregar mapas de arquivos .txt
- * e fornecer consultas rapidas de colisao para a fisica e o raycasting.
+ * MODULO 1: MAPA, ARQUIVOS E COLISAO (Responsavel: Lucas - branch lucas)
+ * Responsavel por armazenar a matriz 2D da fase, catalogo de niveis/fases,
+ * carregar mapas de arquivos .txt e fornecer consultas rapidas de colisao.
  */
 
 typedef struct {
@@ -24,11 +24,32 @@ typedef struct {
     char tiles[MAP_HEIGHT][MAP_WIDTH + 1];
 } GameMap;
 
+typedef int (*MapCustomLoaderFn)(GameMap *map);
+
+typedef struct {
+    const char *name;
+    const char *subtitle;
+    const char *file_path;
+    MapCustomLoaderFn custom_fn;
+    float spawn1_x;
+    float spawn1_y;
+    float spawn1_angle;
+    float spawn2_x;
+    float spawn2_y;
+    float spawn2_angle;
+} MapLevelInfo;
+
 /* Carrega um mapa padrao embutido no codigo (fallback caso arquivo falhe). */
 void map_init_default(GameMap *map);
 
 /* Carrega o mapa a partir de um arquivo texto. Retorna 1 em sucesso, 0 em erro. */
 int map_load_from_file(GameMap *map, const char *filename);
+
+/* Catalogo de niveis disponiveis para o seletor de fases e multiplayer. */
+int map_level_count(void);
+int map_level_clamp(int index);
+const MapLevelInfo *map_level_get(int index);
+void map_load_level(int index, GameMap *map);
 
 /* Retorna o caractere de textura equivalente na posicao (x, y) ('$'->'#', '&'->'@', '/'->'%'). Fora dos limites retorna '#'. */
 char map_get_tile(const GameMap *map, int x, int y);
