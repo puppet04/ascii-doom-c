@@ -4,26 +4,44 @@
 #include <string.h>
 
 static const char *DEFAULT_MAP_LAYOUT[MAP_HEIGHT] = {
-    "################",
-    "#..............#",
-    "#..##......##..#",
-    "#..#........#..#",
-    "#..............#",
-    "#......##......#",
-    "#......##......#",
-    "#..............#",
-    "#..............#",
-    "#..#........#..#",
-    "#..##......##..#",
-    "#..............#",
-    "#....#....#....#",
-    "#....#....#....#",
-    "#..............#",
-    "################"
+    "################################",
+    "#..............................#",
+    "#..##......##......##......##..#",
+    "#..#........#......#........#..#",
+    "#..............................#",
+    "#......##..............##......#",
+    "#......##..............##......#",
+    "#..............................#",
+    "#..............................#",
+    "#..#........#......#........#..#",
+    "#..##......##......##......##..#",
+    "#..............................#",
+    "#....#....#..........#....#....#",
+    "#....#....#..........#....#....#",
+    "#..............##..............#",
+    "#..............##..............#",
+    "#..............................#",
+    "#..............................#",
+    "#....#....#..........#....#....#",
+    "#....#....#..........#....#....#",
+    "#..............................#",
+    "#..##......##......##......##..#",
+    "#..#........#......#........#..#",
+    "#..............................#",
+    "#..............................#",
+    "#......##..............##......#",
+    "#......##..............##......#",
+    "#..............................#",
+    "#..#........#......#........#..#",
+    "#..##......##......##......##..#",
+    "#..............................#",
+    "################################"
 };
 
 static int g_enemies_alive = 0;
 static int g_current_level = 1;
+static int g_minimap_cam_x = 0;
+static int g_minimap_cam_y = 0;
 
 void map_init_default(GameMap *map) {
     if (!map) {
@@ -32,6 +50,8 @@ void map_init_default(GameMap *map) {
 
     g_enemies_alive = 0;
     g_current_level = 1;
+    g_minimap_cam_x = 0;
+    g_minimap_cam_y = 0;
     map->width = MAP_WIDTH;
     map->height = MAP_HEIGHT;
 
@@ -57,6 +77,8 @@ int map_load_from_file(GameMap *map, const char *filename) {
     }
 
     g_enemies_alive = 0;
+    g_minimap_cam_x = 0;
+    g_minimap_cam_y = 0;
     const char *lvl_ptr = strstr(filename, "level");
     if (lvl_ptr) {
         int lvl = 0;
@@ -248,4 +270,70 @@ int map_try_advance_level(GameMap *map, float *player_x, float *player_y, float 
     }
 
     return -1;
+}
+
+static int clamp_minimap_cam(int val, int map_dim) {
+    int max_cam = map_dim - MINIMAP_VIEW_SIZE;
+    if (max_cam < 0) {
+        max_cam = 0;
+    }
+    if (val < 0) {
+        return 0;
+    }
+    if (val > max_cam) {
+        return max_cam;
+    }
+    return val;
+}
+
+void map_build_minimap_view(const GameMap *src, GameMap *dst, float *player_x, float *player_y) {
+    if (!src || !dst || !player_x || !player_y) {
+        return;
+    }
+
+    int px = (int)floorf(*player_x);
+    int py = (int)floorf(*player_y);
+
+    int min_x = g_minimap_cam_x + MINIMAP_SCROLL_MARGIN;
+    int max_x = g_minimap_cam_x + MINIMAP_VIEW_SIZE - 1 - MINIMAP_SCROLL_MARGIN;
+    if (px < min_x) {
+        g_minimap_cam_x = px - MINIMAP_SCROLL_MARGIN;
+    } else if (px > max_x) {
+        g_minimap_cam_x = px - (MINIMAP_VIEW_SIZE - 1 - MINIMAP_SCROLL_MARGIN);
+    }
+    g_minimap_cam_x = clamp_minimap_cam(g_minimap_cam_x, src->width);
+
+    int min_y = g_minimap_cam_y + MINIMAP_SCROLL_MARGIN;
+    int max_y = g_minimap_cam_y + MINIMAP_VIEW_SIZE - 1 - MINIMAP_SCROLL_MARGIN;
+    if (py < min_y) {
+        g_minimap_cam_y = py - MINIMAP_SCROLL_MARGIN;
+    } else if (py > max_y) {
+        g_minimap_cam_y = py - (MINIMAP_VIEW_SIZE - 1 - MINIMAP_SCROLL_MARGIN);
+    }
+    g_minimap_cam_y = clamp_minimap_cam(g_minimap_cam_y, src->height);
+
+    int view_w = (src->width < MINIMAP_VIEW_SIZE) ? src->width : MINIMAP_VIEW_SIZE;
+    int view_h = (src->height < MINIMAP_VIEW_SIZE) ? src->height : MINIMAP_VIEW_SIZE;
+    dst->width = view_w;
+    dst->height = view_h;
+
+    for (int y = 0; y < view_h; y++) {
+        for (int x = 0; x < view_w; x++) {
+            dst->tiles[y][x] = src->tiles[g_minimap_cam_y + y][g_minimap_cam_x + x];
+        }
+        dst->tiles[y][view_w] = '\0';
+    }
+
+    *player_x -= (float)g_minimap_cam_x;
+    *player_y -= (float)g_minimap_cam_y;
+}
+
+int map_to_minimap_coords(float *x, float *y) {
+    if (!x || !y) {
+        return 0;
+    }
+    *x -= (float)g_minimap_cam_x;
+    *y -= (float)g_minimap_cam_y;
+    return (*x >= 0.0f && *x < (float)MINIMAP_VIEW_SIZE &&
+            *y >= 0.0f && *y < (float)MINIMAP_VIEW_SIZE) ? 1 : 0;
 }

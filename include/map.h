@@ -3,6 +3,15 @@
 
 #include "config.h"
 
+#undef MAP_WIDTH
+#undef MAP_HEIGHT
+#undef MAX_DEPTH
+#define MAP_WIDTH  32
+#define MAP_HEIGHT 32
+#define MAX_DEPTH  36.0f
+#define MINIMAP_VIEW_SIZE     16
+#define MINIMAP_SCROLL_MARGIN 3
+
 /*
  * MODULO 1: MAPA, ARQUIVOS E COLISAO
  * Responsavel por armazenar a matriz 2D da fase, carregar mapas de arquivos .txt
@@ -62,6 +71,12 @@ int map_try_advance_level(GameMap *map, float *player_x, float *player_y, float 
 void map_begin_enemy_spawn(void);
 void map_end_enemy_spawn(void);
 
+/* Monta um recorte 16x16 do mapa 32x32 para o minimapa, movendo a janela apenas quando o jogador chega a 3 blocos da borda. */
+void map_build_minimap_view(const GameMap *src, GameMap *dst, float *player_x, float *player_y);
+
+/* Converte coordenadas do mundo 32x32 para a janela 16x16 atual do minimapa. Retorna 1 se visivel na janela, 0 se fora. */
+int map_to_minimap_coords(float *x, float *y);
+
 #ifdef RENDERER_H
 static float perp_dist __attribute__((unused));
 static int is_block_edge __attribute__((unused));
@@ -100,5 +115,34 @@ static int side __attribute__((unused));
             running = 0; \
         } \
     } while (0)
+#endif
+#endif
+
+#ifdef RENDERER_H
+#ifndef MAP_MINIMAP_HOOKED
+#define MAP_MINIMAP_HOOKED
+#define MAP_RDM_CALL(map_arg, player_arg, sprites_arg, count_arg) \
+    do { \
+        GameMap _mm_map; \
+        Player _mm_player = *(player_arg); \
+        SpriteEntity _mm_sprites[MAX_SPRITES]; \
+        int _mm_cnt = (count_arg); \
+        if (_mm_cnt > MAX_SPRITES) _mm_cnt = MAX_SPRITES; \
+        map_build_minimap_view((map_arg), &_mm_map, &_mm_player.x, &_mm_player.y); \
+        for (int _i = 0; _i < _mm_cnt; _i++) { \
+            _mm_sprites[_i] = (sprites_arg)[_i]; \
+            if (!map_to_minimap_coords(&_mm_sprites[_i].x, &_mm_sprites[_i].y)) { \
+                _mm_sprites[_i].active = 0; \
+            } \
+        } \
+        renderer_draw_minimap(&_mm_map, &_mm_player, _mm_sprites, _mm_cnt); \
+    } while (0
+#define MAP_RDM_int \
+    renderer_draw_minimap(const GameMap *map, const Player *player, const SpriteEntity *sprites, int
+#define MAP_RDM_1 \
+    MAP_RDM_CALL(&map, &player, &demo_sprite, 1)
+#define MAP_RDM_sprite_count \
+    MAP_RDM_CALL(&map, &player, sprites, sprite_count)
+#define renderer_draw_minimap(a, b, c, d) MAP_RDM_##d)
 #endif
 #endif
