@@ -1,31 +1,57 @@
 #include "map.h"
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
 static const char *DEFAULT_MAP_LAYOUT[MAP_HEIGHT] = {
-    "################",
-    "#..............#",
-    "#..##......##..#",
-    "#..#........#..#",
-    "#..............#",
-    "#......##......#",
-    "#......##......#",
-    "#..............#",
-    "#..............#",
-    "#..#........#..#",
-    "#..##......##..#",
-    "#..............#",
-    "#....#....#....#",
-    "#....#....#....#",
-    "#..............#",
-    "################"
+    "################################",
+    "#..............................#",
+    "#..##......##......##......##..#",
+    "#..#........#......#........#..#",
+    "#..............................#",
+    "#......##..............##......#",
+    "#......##..............##......#",
+    "#..............................#",
+    "#..............................#",
+    "#..#........#......#........#..#",
+    "#..##......##......##......##..#",
+    "#..............................#",
+    "#....#....#..........#....#....#",
+    "#....#....#..........#....#....#",
+    "#..............##..............#",
+    "#..............##..............#",
+    "#..............................#",
+    "#..............................#",
+    "#....#....#..........#....#....#",
+    "#....#....#..........#....#....#",
+    "#..............................#",
+    "#..##......##......##......##..#",
+    "#..#........#......#........#..#",
+    "#..............................#",
+    "#..............................#",
+    "#......##..............##......#",
+    "#......##..............##......#",
+    "#..............................#",
+    "#..#........#......#........#..#",
+    "#..##......##......##......##..#",
+    "#..............................#",
+    "################################"
 };
+
+static int g_enemies_alive = 0;
+static int g_current_level = 1;
+static int g_minimap_cam_x = 0;
+static int g_minimap_cam_y = 0;
 
 void map_init_default(GameMap *map) {
     if (!map) {
         return;
     }
 
+    g_enemies_alive = 0;
+    g_current_level = 1;
+    g_minimap_cam_x = 0;
+    g_minimap_cam_y = 0;
     map->width = MAP_WIDTH;
     map->height = MAP_HEIGHT;
 
@@ -42,9 +68,24 @@ int map_load_from_file(GameMap *map, const char *filename) {
 
     FILE *fp = fopen(filename, "r");
     if (!fp) {
-        return 0;
+        char parent_path[256];
+        snprintf(parent_path, sizeof(parent_path), "../%s", filename);
+        fp = fopen(parent_path, "r");
+        if (!fp) {
+            return 0;
+        }
     }
 
+    g_enemies_alive = 0;
+    g_minimap_cam_x = 0;
+    g_minimap_cam_y = 0;
+    const char *lvl_ptr = strstr(filename, "level");
+    if (lvl_ptr) {
+        int lvl = 0;
+        if (sscanf(lvl_ptr + 5, "%d", &lvl) == 1 && lvl >= 1) {
+            g_current_level = lvl;
+        }
+    }
     map->width = MAP_WIDTH;
     map->height = MAP_HEIGHT;
 
@@ -92,14 +133,207 @@ int map_load_from_file(GameMap *map, const char *filename) {
     return 1;
 }
 
-char map_get_tile(const GameMap *map, int x, int y) {
+static int g_last_tile_passable = 0;
+static int g_spawning_enemies = 0;
+static int g_minimap_secret_floor = 0;
+static int g_minimap_secret_x = -1;
+static int g_minimap_secret_y = -1;
+
+char map_get_wall_equivalent(char tile) {
+    switch (tile) {
+        case '$': return '#';
+        case '&': return '@';
+        case '/': return '%';
+        case ',': return '#';
+        default:  return tile;
+    }
+}
+
+void map_begin_enemy_spawn(void) {
+    g_spawning_enemies = 1;
+}
+
+void map_end_enemy_spawn(void) {
+    g_spawning_enemies = 0;
+}
+
+int map_set_enemies_alive(int count) {
+    g_enemies_alive = (count > 0) ? 1 : 0;
+    return count;
+}
+
+int map_are_enemies_alive(void) {
+    return g_enemies_alive;
+}
+
+int map_is_passable_wall(char tile) {
+    if (tile == 'E') {
+        return !g_enemies_alive;
+    }
+    return (tile == '$' || tile == '&' || tile == '/');
+}
+
+int map_last_tile_is_passable(void) {
+    return g_last_tile_passable;
+}
+
+unsigned char map_lighten_channel(unsigned char c) {
+    int v = (int)c + ((255 - (int)c) * 18) / 100;
+    return (unsigned char)((v > 255) ? 255 : v);
+}
+
+char map_get_raw_tile(const GameMap *map, int x, int y) {
     if (!map || x < 0 || x >= map->width || y < 0 || y >= map->height) {
         return '#';
     }
     return map->tiles[y][x];
 }
 
+char map_get_tile(const GameMap *map, int x, int y) {
+    char raw = map_get_raw_tile(map, x, y);
+    g_last_tile_passable = (raw == '$' || raw == '&' || raw == '/');
+    if (raw == ',') {
+        g_minimap_secret_floor = 1;
+        g_minimap_secret_x = x;
+        g_minimap_secret_y = y;
+    } else {
+        g_minimap_secret_floor = 0;
+    }
+    return map_get_wall_equivalent(raw);
+}
+
 int map_is_wall(const GameMap *map, int x, int y) {
-    char tile = map_get_tile(map, x, y);
+    if (!map || x < 0 || x >= map->width || y < 0 || y >= map->height) {
+        return 1;
+    }
+    char tile = map_get_raw_tile(map, x, y);
+    if (tile == ',') {
+        return g_spawning_enemies ? 1 : 0;
+    }
+    return (tile != '.' && tile != ' ' && !map_is_passable_wall(tile));
+}
+
+int map_is_visible_wall(const GameMap *map, int x, int y) {
+    char tile = map_get_raw_tile(map, x, y);
+    g_last_tile_passable = 0;
+    if (tile == ',') {
+        int on_minimap = (g_minimap_secret_floor &&
+                          x == g_minimap_secret_x &&
+                          y == g_minimap_secret_y);
+        g_minimap_secret_floor = 0;
+        return on_minimap ? 1 : 0;
+    }
+    g_minimap_secret_floor = 0;
     return (tile != '.' && tile != ' ');
+}
+
+int map_has_exit_tile(const GameMap *map) {
+    if (!map) {
+        return 0;
+    }
+    for (int y = 0; y < map->height; y++) {
+        for (int x = 0; x < map->width; x++) {
+            if (map->tiles[y][x] == 'E') {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int is_exit_at(const GameMap *map, float x, float y) {
+    return (map_get_raw_tile(map, (int)floorf(x), (int)floorf(y)) == 'E');
+}
+
+int map_try_advance_level(GameMap *map, float *player_x, float *player_y, float *player_angle) {
+    if (!map || !player_x || !player_y || !player_angle || g_enemies_alive) {
+        return 0;
+    }
+
+    float px = *player_x;
+    float py = *player_y;
+    if (!is_exit_at(map, px, py) &&
+        !is_exit_at(map, px + 0.15f, py) &&
+        !is_exit_at(map, px - 0.15f, py) &&
+        !is_exit_at(map, px, py + 0.15f) &&
+        !is_exit_at(map, px, py - 0.15f)) {
+        return 0;
+    }
+
+    char next_path[128];
+    snprintf(next_path, sizeof(next_path), "assets/maps/level%d.txt", g_current_level + 1);
+    if (map_load_from_file(map, next_path)) {
+        *player_x = 2.5f;
+        *player_y = 4.5f;
+        *player_angle = 0.0f;
+        return 1;
+    }
+
+    return -1;
+}
+
+static int clamp_minimap_cam(int val, int map_dim) {
+    int max_cam = map_dim - MINIMAP_VIEW_SIZE;
+    if (max_cam < 0) {
+        max_cam = 0;
+    }
+    if (val < 0) {
+        return 0;
+    }
+    if (val > max_cam) {
+        return max_cam;
+    }
+    return val;
+}
+
+void map_build_minimap_view(const GameMap *src, GameMap *dst, float *player_x, float *player_y) {
+    if (!src || !dst || !player_x || !player_y) {
+        return;
+    }
+
+    int px = (int)floorf(*player_x);
+    int py = (int)floorf(*player_y);
+
+    int min_x = g_minimap_cam_x + MINIMAP_SCROLL_MARGIN;
+    int max_x = g_minimap_cam_x + MINIMAP_VIEW_SIZE - 1 - MINIMAP_SCROLL_MARGIN;
+    if (px < min_x) {
+        g_minimap_cam_x = px - MINIMAP_SCROLL_MARGIN;
+    } else if (px > max_x) {
+        g_minimap_cam_x = px - (MINIMAP_VIEW_SIZE - 1 - MINIMAP_SCROLL_MARGIN);
+    }
+    g_minimap_cam_x = clamp_minimap_cam(g_minimap_cam_x, src->width);
+
+    int min_y = g_minimap_cam_y + MINIMAP_SCROLL_MARGIN;
+    int max_y = g_minimap_cam_y + MINIMAP_VIEW_SIZE - 1 - MINIMAP_SCROLL_MARGIN;
+    if (py < min_y) {
+        g_minimap_cam_y = py - MINIMAP_SCROLL_MARGIN;
+    } else if (py > max_y) {
+        g_minimap_cam_y = py - (MINIMAP_VIEW_SIZE - 1 - MINIMAP_SCROLL_MARGIN);
+    }
+    g_minimap_cam_y = clamp_minimap_cam(g_minimap_cam_y, src->height);
+
+    int view_w = (src->width < MINIMAP_VIEW_SIZE) ? src->width : MINIMAP_VIEW_SIZE;
+    int view_h = (src->height < MINIMAP_VIEW_SIZE) ? src->height : MINIMAP_VIEW_SIZE;
+    dst->width = view_w;
+    dst->height = view_h;
+
+    for (int y = 0; y < view_h; y++) {
+        for (int x = 0; x < view_w; x++) {
+            dst->tiles[y][x] = src->tiles[g_minimap_cam_y + y][g_minimap_cam_x + x];
+        }
+        dst->tiles[y][view_w] = '\0';
+    }
+
+    *player_x -= (float)g_minimap_cam_x;
+    *player_y -= (float)g_minimap_cam_y;
+}
+
+int map_to_minimap_coords(float *x, float *y) {
+    if (!x || !y) {
+        return 0;
+    }
+    *x -= (float)g_minimap_cam_x;
+    *y -= (float)g_minimap_cam_y;
+    return (*x >= 0.0f && *x < (float)MINIMAP_VIEW_SIZE &&
+            *y >= 0.0f && *y < (float)MINIMAP_VIEW_SIZE) ? 1 : 0;
 }
