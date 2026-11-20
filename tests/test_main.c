@@ -326,7 +326,81 @@ static void prepare_combat(Player *p, EnemyManager *mgr, GameMap *map, int prese
     player_apply_class(p,&cls);
     memset(mgr,0,sizeof(*mgr));
     mgr->count=1;
-    mgr->enemies[0]=(Enemy){1,3.5f,4.5f,60,60,10,0,'Z',0};
+    mgr->enemies[0]=(Enemy){
+        .active=1, .x=3.5f, .y=4.5f, .health=60, .max_health=60,
+        .damage=10, .speed=0, .symbol='Z'
+    };
+}
+
+static void test_enemy_projectiles(void) {
+    Player p; EnemyManager mgr; GameMap map;
+    prepare_combat(&p,&mgr,&map,PRESET_FUZILEIRO);
+
+    enemies_init_defaults(&mgr);
+    mgr.count=1;
+    mgr.enemies[0]=(Enemy){
+        .active=1, .x=5.5f, .y=4.5f, .health=60, .max_health=60,
+        .damage=7, .type=ENEMY_DOOM_IMP, .attack_kind=ENEMY_ATTACK_PROJECTILE,
+        .attack_range=8.0f, .attack_cooldown=1.6f, .aggro_range=9.5f
+    };
+    enemies_update(&mgr,&map,&p,0.01f);
+    const EnemyProjectile *projectiles=enemies_projectile_pool();
+    ASSERT_TRUE(projectiles[0].active &&
+                projectiles[0].kind==ENEMY_PROJECTILE_FIREBALL &&
+                projectiles[0].path==ENEMY_PROJECTILE_WAVERING &&
+                fabsf(projectiles[0].speed-3.1f)<0.001f,
+                "Imp dispara bola de fogo mais lenta com trajetoria oscilante");
+    enemies_update(&mgr,&map,&p,0.8f);
+    ASSERT_TRUE(p.health==p.max_health-7 && !projectiles[0].active,
+                "Projetil do Imp move por Delta Time e causa dano ao colidir");
+
+    enemies_init_defaults(&mgr);
+    mgr.count=1;
+    mgr.enemies[0]=(Enemy){
+        .active=1, .x=5.5f, .y=4.5f, .health=50, .max_health=50,
+        .damage=8, .type=ENEMY_BERSERK_KUSHAN, .attack_kind=ENEMY_ATTACK_PROJECTILE,
+        .attack_range=7.0f, .attack_cooldown=2.5f, .aggro_range=9.0f
+    };
+    enemies_update(&mgr,&map,&p,0.01f);
+    ASSERT_TRUE(projectiles[0].active &&
+                projectiles[0].kind==ENEMY_PROJECTILE_ARROW &&
+                projectiles[0].path==ENEMY_PROJECTILE_STRAIGHT &&
+                fabsf(projectiles[0].speed-6.0f)<0.001f,
+                "Kushan dispara flecha veloz em linha reta");
+    map.tiles[4][3]='#';
+    enemies_update(&mgr,&map,&p,0.2f);
+    ASSERT_TRUE(!projectiles[0].active && p.health==p.max_health-7,
+                "Flecha colide com parede sem atingir o jogador");
+    map.tiles[4][3]='.';
+
+    enemies_init_defaults(&mgr);
+    mgr.count=1;
+    mgr.enemies[0]=(Enemy){
+        .active=1, .x=8.5f, .y=4.5f, .health=250, .max_health=250,
+        .damage=18, .type=ENEMY_DOOM_CACODEMON, .attack_kind=ENEMY_ATTACK_PROJECTILE,
+        .attack_range=9.5f, .attack_cooldown=2.6f, .aggro_range=11.5f
+    };
+    enemies_update(&mgr,&map,&p,0.01f);
+    ASSERT_TRUE(projectiles[0].active &&
+                projectiles[0].kind==ENEMY_PROJECTILE_ENERGY_ORB &&
+                projectiles[0].path==ENEMY_PROJECTILE_HOMING &&
+                fabsf(projectiles[0].speed-2.2f)<0.001f,
+                "Cacodemon dispara orbe de energia teleguiado");
+    p.y=7.5f;
+    enemies_update(&mgr,&map,&p,0.5f);
+    ASSERT_TRUE(projectiles[0].dy>0.0f,
+                "Orbe do Cacodemon curva em direcao ao jogador");
+
+    prepare_combat(&p,&mgr,&map,PRESET_GUTS);
+    enemies_init_defaults(&mgr);
+    mgr.count=1;
+    mgr.enemies[0]=(Enemy){
+        .active=1, .x=3.2f, .y=4.5f, .health=60, .max_health=60,
+        .damage=7, .speed=0, .symbol='Z'
+    };
+    enemies_update(&mgr,&map,&p,0.01f);
+    ASSERT_TRUE(p.health==p.max_health-11,
+                "Dano inimigo escala proporcionalmente a vida maxima da classe");
 }
 
 static void test_character_abilities(void) {
@@ -391,10 +465,11 @@ static void test_character_abilities(void) {
     mgr.enemies[0].x=5.5f;
     ASSERT_TRUE(!enemies_check_hit(&mgr,&map,&p,&weapons[0]) && mgr.enemies[0].health==60,
                 "Berserk nao acerta inimigo distante");
-    mgr.enemies[0].x=3.5f; mgr.enemies[0].health=5000;
+    mgr.enemies[0].x=3.5f; mgr.enemies[0].health=250;
     enemies_check_hit(&mgr,&map,&p,&weapons[0]);
-    ASSERT_TRUE(!mgr.enemies[0].active && p.ability_state.kills==6,
-                "Espada mata inimigo proximo com um golpe");
+    ASSERT_TRUE(mgr.enemies[0].active && mgr.enemies[0].health==150 &&
+                p.ability_state.kills==5,
+                "Golpe Berserk causa quatro vezes o dano sem matar tanque de uma vez");
     int hp=p.health; player_take_damage(&p,10);
     ASSERT_TRUE(p.health==hp-20, "Berserk recebe dano dobrado");
     player_tick_ability(&p,10);
@@ -423,10 +498,14 @@ static void test_character_abilities(void) {
         if(map_is_wall(&map,(int)mgr.enemies[i].x,(int)mgr.enemies[i].y)||dx*dx+dy*dy<12.25f) valid=0;
     }
     ASSERT_TRUE(valid,"Onda tem inimigos suficientes para cinco kills e spawn seguro");
-    mgr.count=1; mgr.enemies[0]=(Enemy){1,3.1f,4.5f,60,60,10,0,'Z',0};
+    mgr.count=1; mgr.enemies[0]=(Enemy){
+        .active=1, .x=3.1f, .y=4.5f, .health=60, .max_health=60,
+        .damage=10, .speed=0, .symbol='Z'
+    };
     p.ability_state.berserk_time=1; hp=p.health;
     enemies_update(&mgr,&map,&p,0.1f);
-    ASSERT_TRUE(p.health==hp-20, "Ataque real da IA respeita vulnerabilidade do Berserk");
+    ASSERT_TRUE(p.health==hp-20,
+                "Ataque real da IA respeita vulnerabilidade do Berserk");
 }
 
 static void test_guerrilla(void) {
@@ -501,6 +580,7 @@ int main(void) {
     test_character_visual_api();
     test_character_creator();
     test_modular_appearance();
+    test_enemy_projectiles();
     test_character_abilities();
     test_guerrilla();
     test_teto_damage_bonus();

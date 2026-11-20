@@ -1,6 +1,7 @@
 #include "entities.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static float wrap_angle(float a) {
@@ -48,21 +49,124 @@ void weapons_init_defaults(Weapon out_weapons[MAX_WEAPONS]) {
     }
 }
 
+typedef struct {
+    const char *name;
+    char symbol;
+    int health;
+    float speed;
+    int damage;
+    EnemyAttackKind attack_kind;
+    float attack_range;
+    float attack_cooldown;
+    float aggro_range;
+    float precision;
+    EnemyProjectileKind projectile_kind;
+    EnemyProjectilePath projectile_path;
+    float projectile_speed;
+    float projectile_turn_rate;
+} EnemyStats;
+
+/* Projeteis: flecha 6, bola 3.1 e orbe 2.2; cerca de 40% mais lentos. */
+/* Precision is retained for compatibility with manually configured hitscan enemies. */
+static const EnemyStats ENEMY_STATS[ENEMY_TYPE_COUNT] = {
+    {"Z legado",       'Z',  60, 1.4f,  7, ENEMY_ATTACK_MELEE,      0.85f, 2.20f,  9.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"D legado",       'D', 100, 1.8f, 10, ENEMY_ATTACK_MELEE,      0.85f, 3.20f,  9.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"I legado",       'I',  80, 1.6f,  8, ENEMY_ATTACK_MELEE,      0.85f, 2.50f,  9.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Arma: bola de fogo oscilante, lenta e de dano moderado. */
+    {"Imp",            'M',  60, 1.2f,  5, ENEMY_ATTACK_PROJECTILE, 8.00f, 1.90f,  9.5f, 0.95f, ENEMY_PROJECTILE_FIREBALL,   ENEMY_PROJECTILE_WAVERING,  3.1f, 0.9f},
+    /* Ataque: investida curta de ombro, com alcance e intervalo proprios. */
+    {"Pinky",          'Y',  75, 2.0f,  8, ENEMY_ATTACK_MELEE,      1.20f, 2.50f,  9.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Arma: orbe de energia teleguiado, lento e devastador. */
+    {"Cacodemon",      'C', 250, 1.0f, 11, ENEMY_ATTACK_PROJECTILE, 9.50f, 3.40f, 11.5f, 0.75f, ENEMY_PROJECTILE_ENERGY_ORB, ENEMY_PROJECTILE_HOMING,    2.2f, 1.1f},
+    /* Ataque: golpe brutal de maos nuas, curto e devastador. */
+    {"Baron of Hell",  'B', 275, 0.9f, 17, ENEMY_ATTACK_MELEE,      1.50f, 5.20f, 10.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Arma: flecha reta e veloz, de dano baixo e recarga lenta. */
+    {"Soldado Kushan",'K',  50, 1.3f,  5, ENEMY_ATTACK_PROJECTILE, 7.00f, 1.90f,  9.5f, 0.90f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  6.0f, 0.0f},
+    /* Arma: clava pesada; o alcance estendido compensa a lentidao. */
+    {"Troll",          'T', 250, 0.8f, 15, ENEMY_ATTACK_MELEE,      1.90f, 4.60f,  8.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Ataque: sequencia de garras rapida, de baixo dano por golpe. */
+    {"Apostolo",       'A', 100, 2.2f,  7, ENEMY_ATTACK_MELEE,      1.00f, 2.20f,  8.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Ataque: garra de mini-chefe; um Zodd por onda no maximo, raro. */
+    {"Zodd",           'Q', 550, 1.4f, 20, ENEMY_ATTACK_MELEE,      1.80f, 6.10f, 11.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f}
+};
+
+static EnemyProjectile enemy_projectiles[MAX_ENEMY_PROJECTILES];
+
+const EnemyProjectile *enemies_projectile_pool(void) {
+    return enemy_projectiles;
+}
+
+static const EnemyStats *enemy_stats_for_type(EnemyType type) {
+    if ((int)type < 0 || type >= ENEMY_TYPE_COUNT) {
+        return &ENEMY_STATS[ENEMY_LEGACY_Z];
+    }
+    return &ENEMY_STATS[type];
+}
+
+static Enemy enemy_create(EnemyType type, float x, float y) {
+    const EnemyStats *stats = enemy_stats_for_type(type);
+    Enemy enemy = {0};
+    enemy.active = 1;
+    enemy.x = x;
+    enemy.y = y;
+    enemy.health = stats->health;
+    enemy.max_health = stats->health;
+    enemy.damage = stats->damage;
+    enemy.speed = stats->speed;
+    enemy.symbol = stats->symbol;
+    enemy.type = type;
+    enemy.attack_kind = stats->attack_kind;
+    enemy.attack_range = stats->attack_range;
+    enemy.attack_cooldown = stats->attack_cooldown;
+    enemy.aggro_range = stats->aggro_range;
+    return enemy;
+}
+
 void enemies_init_defaults(EnemyManager *mgr) {
     if (!mgr) {
         return;
     }
 
     memset(mgr, 0, sizeof(*mgr));
+    memset(enemy_projectiles, 0, sizeof(enemy_projectiles));
 
-    /* Inimigos base prontos para serem expandidos no modulo */
-    mgr->enemies[0] = (Enemy){1, 7.5f,  4.5f, 60,  60,  10, 1.4f, 'Z', 0.0f};
-    mgr->enemies[1] = (Enemy){1, 11.5f, 7.5f, 100, 100, 15, 1.8f, 'D', 0.0f};
-    mgr->enemies[2] = (Enemy){1, 8.5f, 12.5f, 80,  80,  12, 1.6f, 'I', 0.0f};
-    mgr->enemies[3] = (Enemy){1, 4.5f, 7.5f, 60, 60, 10, 1.2f, 'Z', 0};
-    mgr->enemies[4] = (Enemy){1, 12.5f, 12.5f, 80, 80, 12, 1.3f, 'I', 0};
-    mgr->enemies[5] = (Enemy){1, 10.5f, 4.5f, 60, 60, 10, 1.4f, 'Z', 0};
-    mgr->count = 6;
+    static const struct {
+        EnemyType type;
+        float x;
+        float y;
+        float speed_override;
+    } initial_wave[] = {
+        {ENEMY_LEGACY_Z, 7.5f, 4.5f, 1.4f},
+        {ENEMY_LEGACY_D, 11.5f, 7.5f, 1.8f},
+        {ENEMY_LEGACY_I, 8.5f, 12.5f, 1.6f},
+        {ENEMY_LEGACY_Z, 4.5f, 7.5f, 1.2f},
+        {ENEMY_LEGACY_I, 12.5f, 12.5f, 1.3f},
+        {ENEMY_LEGACY_Z, 10.5f, 4.5f, 1.4f},
+        {ENEMY_DOOM_IMP, 5.5f, 3.5f, 0.0f},
+        {ENEMY_DOOM_IMP, 9.5f, 3.5f, 0.0f},
+        {ENEMY_DOOM_PINKY, 2.5f, 5.5f, 0.0f},
+        {ENEMY_DOOM_CACODEMON, 10.5f, 7.5f, 0.0f},
+        {ENEMY_DOOM_BARON, 6.5f, 14.5f, 0.0f},
+        {ENEMY_BERSERK_KUSHAN, 1.5f, 13.5f, 0.0f},
+        {ENEMY_BERSERK_KUSHAN, 13.5f, 1.5f, 0.0f},
+        {ENEMY_BERSERK_TROLL, 14.5f, 7.5f, 0.0f},
+        {ENEMY_BERSERK_APOSTLE, 5.5f, 11.5f, 0.0f},
+        {ENEMY_BERSERK_ZODD, 9.5f, 14.5f, 0.0f}
+    };
+
+    int wave_count = (int)(sizeof(initial_wave) / sizeof(initial_wave[0]));
+    for (int i = 0; i < wave_count && mgr->count < MAX_ENEMIES; i++) {
+        if (initial_wave[i].type == ENEMY_BERSERK_ZODD && rand() % 5 != 0) {
+            continue;
+        }
+        Enemy enemy = enemy_create(initial_wave[i].type,
+                                   initial_wave[i].x,
+                                   initial_wave[i].y);
+        if (initial_wave[i].speed_override > 0.0f) {
+            enemy.speed = initial_wave[i].speed_override;
+        }
+        mgr->enemies[mgr->count++] = enemy;
+    }
 }
 
 int enemies_alive(const EnemyManager *mgr) {
@@ -101,6 +205,93 @@ static void damage_enemy(Enemy *e, Player *p, int damage) {
     }
 }
 
+static int scale_enemy_damage(const Player *player, int damage) {
+    /* Stats use 100 HP as baseline so each class takes the same damage percentage. */
+    int max_health = player->max_health > 0 ? player->max_health : 100;
+    return (int)roundf((float)damage * (float)max_health / 100.0f);
+}
+
+static int enemy_spawn_projectile(const Enemy *enemy, const Player *player,
+                                  const EnemyStats *stats) {
+    int slot = -1;
+    for (int i = 0; i < MAX_ENEMY_PROJECTILES; i++) {
+        if (!enemy_projectiles[i].active) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) return 0;
+
+    float dx = player->x - enemy->x;
+    float dy = player->y - enemy->y;
+    float distance = sqrtf(dx * dx + dy * dy);
+    if (distance < 0.001f) return 0;
+
+    EnemyProjectile *projectile = &enemy_projectiles[slot];
+    projectile->active = 1;
+    projectile->x = enemy->x + dx / distance * 0.35f;
+    projectile->y = enemy->y + dy / distance * 0.35f;
+    projectile->dx = dx / distance;
+    projectile->dy = dy / distance;
+    projectile->speed = stats->projectile_speed;
+    projectile->turn_rate = stats->projectile_turn_rate;
+    projectile->damage = enemy->damage;
+    projectile->kind = stats->projectile_kind;
+    projectile->path = stats->projectile_path;
+    return 1;
+}
+
+static void enemy_projectiles_update(const GameMap *map, Player *player, float dt) {
+    for (int i = 0; i < MAX_ENEMY_PROJECTILES; i++) {
+        EnemyProjectile *projectile = &enemy_projectiles[i];
+        if (!projectile->active) continue;
+
+        int steps = (int)ceilf(projectile->speed * dt / 0.08f);
+        if (steps < 1) steps = 1;
+        if (steps > 128) steps = 128;
+        float step_dt = dt / (float)steps;
+        float hit_radius = projectile->kind == ENEMY_PROJECTILE_ARROW ? 0.12f : 0.30f;
+
+        for (int step = 0; step < steps && projectile->active; step++) {
+            if (projectile->path == ENEMY_PROJECTILE_HOMING) {
+                float target_angle = atan2f(player->y - projectile->y,
+                                            player->x - projectile->x);
+                float current_angle = atan2f(projectile->dy, projectile->dx);
+                float angle_delta = wrap_angle(target_angle - current_angle);
+                float max_turn = projectile->turn_rate * step_dt;
+                if (angle_delta > max_turn) angle_delta = max_turn;
+                if (angle_delta < -max_turn) angle_delta = -max_turn;
+                float angle = current_angle + angle_delta;
+                projectile->dx = cosf(angle);
+                projectile->dy = sinf(angle);
+            } else if (projectile->path == ENEMY_PROJECTILE_WAVERING) {
+                float angle = projectile->turn_rate * sinf(projectile->age * 6.0f) * step_dt;
+                float dx = projectile->dx * cosf(angle) - projectile->dy * sinf(angle);
+                projectile->dy = projectile->dx * sinf(angle) + projectile->dy * cosf(angle);
+                projectile->dx = dx;
+            }
+
+            projectile->x += projectile->dx * projectile->speed * step_dt;
+            projectile->y += projectile->dy * projectile->speed * step_dt;
+            projectile->age += step_dt;
+
+            if (map_is_wall(map, (int)floorf(projectile->x), (int)floorf(projectile->y)) ||
+                projectile->age >= 12.0f) {
+                projectile->active = 0;
+                break;
+            }
+
+            float dx = player->x - projectile->x;
+            float dy = player->y - projectile->y;
+            float collision_radius = hit_radius + PLAYER_RADIUS;
+            if (dx * dx + dy * dy <= collision_radius * collision_radius) {
+                player_take_damage(player, scale_enemy_damage(player, projectile->damage));
+                projectile->active = 0;
+            }
+        }
+    }
+}
+
 void enemies_update_fireball(EnemyManager *mgr, const GameMap *map, Player *p, float dt) {
     AbilityState *s = &p->ability_state;
     if (!s->fireball_active || dt <= 0 || p->health <= 0) return;
@@ -134,11 +325,19 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
         return;
     }
 
+    enemy_projectiles_update(map, player, dt);
+
     for (int i = 0; i < mgr->count; i++) {
         Enemy *e = &mgr->enemies[i];
         if (!e->active) {
             continue;
         }
+
+        const EnemyStats *stats = enemy_stats_for_type(e->type);
+        float attack_range = e->attack_range > 0.0f ? e->attack_range : stats->attack_range;
+        float attack_cooldown = e->attack_cooldown > 0.0f
+            ? e->attack_cooldown : stats->attack_cooldown;
+        float aggro_range = e->aggro_range > 0.0f ? e->aggro_range : stats->aggro_range;
 
         if (e->attack_timer > 0.0f) {
             e->attack_timer -= dt;
@@ -148,9 +347,17 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
         float dx = player->x - e->x;
         float dy = player->y - e->y;
         float dist = sqrtf(dx * dx + dy * dy);
+        float preferred_distance = (e->attack_kind == ENEMY_ATTACK_HITSCAN ||
+                                    e->attack_kind == ENEMY_ATTACK_PROJECTILE)
+            ? attack_range * 0.8f : attack_range;
 
-        if (dist > 0.85f && dist < 9.0f) {
-            float step = e->speed * dt;
+        if (dist > preferred_distance && dist < aggro_range) {
+            float move_speed = e->speed;
+            if ((e->type == ENEMY_DOOM_PINKY || e->type == ENEMY_BERSERK_APOSTLE) &&
+                dist <= 3.2f) {
+                move_speed *= e->type == ENEMY_DOOM_PINKY ? 2.2f : 1.9f;
+            }
+            float step = fminf(move_speed * dt, dist - preferred_distance);
             float nx = e->x + (dx / dist) * step;
             float ny = e->y + (dy / dist) * step;
 
@@ -160,10 +367,23 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
             if (!map_is_wall(map, (int)floorf(e->x), (int)floorf(ny))) {
                 e->y = ny;
             }
-        } else if (dist <= 0.85f && e->attack_timer <= 0.0f &&
-                   has_line_of_sight(map, player->x, player->y, e->x, e->y)) {
-            player_take_damage(player, e->damage);
-            e->attack_timer = 1.0f;
+        }
+
+        if (dist <= attack_range && e->attack_timer <= 0.0f &&
+            has_line_of_sight(map, player->x, player->y, e->x, e->y)) {
+            if (e->attack_kind == ENEMY_ATTACK_PROJECTILE) {
+                (void)enemy_spawn_projectile(e, player, stats);
+            } else if (e->attack_kind == ENEMY_ATTACK_HITSCAN) {
+                float distance_factor = 1.0f - 0.6f * dist / attack_range;
+                float hit_chance = stats->precision * fmaxf(0.0f, distance_factor);
+                float roll = (float)rand() / ((float)RAND_MAX + 1.0f);
+                if (roll < hit_chance) {
+                    player_take_damage(player, scale_enemy_damage(player, e->damage));
+                }
+            } else {
+                player_take_damage(player, scale_enemy_damage(player, e->damage));
+            }
+            e->attack_timer = attack_cooldown;
         }
     }
 }
@@ -202,7 +422,10 @@ int enemies_check_hit(EnemyManager *mgr, const GameMap *map,
 
     if (best_idx >= 0) {
         Enemy *target = &mgr->enemies[best_idx];
-        damage_enemy(target, player, berserk ? target->health : player_attack_damage(player, weapon->damage) * multiplier);
+        /* Berserk hits hard, but a single swing must not erase a boss. */
+        damage_enemy(target, player, berserk
+            ? player_attack_damage(player, weapon->damage) * 4
+            : player_attack_damage(player, weapon->damage) * multiplier);
         return 1;
     }
 
