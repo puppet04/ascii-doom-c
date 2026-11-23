@@ -42,6 +42,23 @@ static int g_enemies_alive = 0;
 static int g_current_level = 1;
 static int g_minimap_cam_x = 0;
 static int g_minimap_cam_y = 0;
+static float g_spawn_x = 2.5f;
+static float g_spawn_y = 4.5f;
+static int g_spawn_pending = 0;
+static unsigned char g_trap_active[MAP_HEIGHT][MAP_WIDTH];
+static float g_trap_timer[MAP_HEIGHT][MAP_WIDTH];
+static unsigned char g_medkit_used[MAP_HEIGHT][MAP_WIDTH];
+
+#define TRAP_ACTIVE_DURATION 3.0f
+
+void map_reset_traps(void) {
+    memset(g_trap_active, 0, sizeof(g_trap_active));
+    memset(g_trap_timer, 0, sizeof(g_trap_timer));
+}
+
+void map_reset_medkits(void) {
+    memset(g_medkit_used, 0, sizeof(g_medkit_used));
+}
 
 void map_init_default(GameMap *map) {
     if (!map) {
@@ -52,6 +69,11 @@ void map_init_default(GameMap *map) {
     g_current_level = 1;
     g_minimap_cam_x = 0;
     g_minimap_cam_y = 0;
+    g_spawn_x = 2.5f;
+    g_spawn_y = 4.5f;
+    g_spawn_pending = 1;
+    map_reset_traps();
+    map_reset_medkits();
     map->width = MAP_WIDTH;
     map->height = MAP_HEIGHT;
 
@@ -79,6 +101,11 @@ int map_load_from_file(GameMap *map, const char *filename) {
     g_enemies_alive = 0;
     g_minimap_cam_x = 0;
     g_minimap_cam_y = 0;
+    g_spawn_x = 2.5f;
+    g_spawn_y = 4.5f;
+    g_spawn_pending = 0;
+    map_reset_traps();
+    map_reset_medkits();
     const char *lvl_ptr = strstr(filename, "level");
     if (lvl_ptr) {
         int lvl = 0;
@@ -106,7 +133,14 @@ int map_load_from_file(GameMap *map, const char *filename) {
 
         for (int col = 0; col < MAP_WIDTH; col++) {
             if ((size_t)col < len) {
-                map->tiles[row][col] = line[col];
+                if (line[col] == 'P') {
+                    g_spawn_x = (float)col + 0.5f;
+                    g_spawn_y = (float)row + 0.5f;
+                    g_spawn_pending = 1;
+                    map->tiles[row][col] = '.';
+                } else {
+                    map->tiles[row][col] = line[col];
+                }
             } else {
                 map->tiles[row][col] = '#';
             }
@@ -139,13 +173,13 @@ int map_load_from_file(GameMap *map, const char *filename) {
  *   1) Via .txt:    { "FASE 3 - ...", "Descricao", "assets/maps/level3.txt", NULL, 2.5f, 4.5f, 0.0f, 13.5f, 11.5f, PI_F },
  *   2) Via funcao C: { "FASE 3 - ...", "Descricao", NULL, map_load_level3, 2.5f, 4.5f, 0.0f, 13.5f, 11.5f, PI_F },
  */
-static const MapLevelInfo MAP_LEVELS[] = {
+static MapLevelInfo MAP_LEVELS[] = {
     {
         "FASE 1 - COMPLEXO BASE",
         "Arena inicial com saida E ao sul",
         "assets/maps/level1.txt",
         NULL,
-        2.5f, 4.5f, 0.0f,
+        2.5f, 4.5f, PI_F * 0.5f,
         13.5f, 11.5f, PI_F
     },
     {
@@ -153,7 +187,7 @@ static const MapLevelInfo MAP_LEVELS[] = {
         "Corredores com passagens ocultas e saida E",
         "assets/maps/level2.txt",
         NULL,
-        2.5f, 4.5f, 0.0f,
+        2.5f, 4.5f, PI_F * 0.5f,
         13.5f, 10.5f, PI_F
     }
 };
@@ -179,6 +213,7 @@ void map_load_level(int index, GameMap *map) {
         return;
     }
     int clamped = map_level_clamp(index);
+    MAP_LEVELS[clamped].spawn1_angle = PI_F * 0.5f;
     const MapLevelInfo *entry = &MAP_LEVELS[clamped];
     if (entry->custom_fn && entry->custom_fn(map)) {
         g_current_level = clamped + 1;
@@ -186,6 +221,10 @@ void map_load_level(int index, GameMap *map) {
     }
     if (entry->file_path && map_load_from_file(map, entry->file_path)) {
         g_current_level = clamped + 1;
+        if (g_spawn_pending) {
+            MAP_LEVELS[clamped].spawn1_x = g_spawn_x;
+            MAP_LEVELS[clamped].spawn1_y = g_spawn_y;
+        }
         return;
     }
     map_init_default(map);
@@ -197,12 +236,111 @@ static int g_minimap_secret_floor = 0;
 static int g_minimap_secret_x = -1;
 static int g_minimap_secret_y = -1;
 
-char map_get_wall_equivalent(char tile) {
+static int is_secret_floor(char tile) {
+    return (tile == ',' || tile == ';' || tile == ':' || tile == '_' ||
+            (tile >= '1' && tile <= '9'));
+}
+
+int map_is_enemy_spawn_char(char tile) {
     switch (tile) {
-        case '$': return '#';
-        case '&': return '@';
-        case '/': return '%';
-        case ',': return '#';
+        case 'Z':
+        case 'D':
+        case 'I':
+        case 'M':
+        case 'Y':
+        case 'C':
+        case 'B':
+        case 'K':
+        case 'T':
+        case 'A':
+        case 'Q':
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+int map_is_trap_tile(char tile) {
+    return (tile == '^' || tile == '5' || tile == '6' || tile == '7' || tile == '8');
+}
+
+int map_is_medkit_tile(char tile) {
+    return (tile == '+' || tile == '1' || tile == '2' || tile == '3' || tile == '4');
+}
+
+int map_is_hazard_tile(char tile) {
+    return (map_is_trap_tile(tile) || tile == 'F' || tile == '9');
+}
+
+int map_is_trap_triggered(int x, int y) {
+    if (x < 0 || x >= MAP_WIDTH || y < 0 || y >= MAP_HEIGHT) {
+        return 0;
+    }
+    return g_trap_active[y][x] != 0;
+}
+
+void map_trigger_trap(int x, int y) {
+    if (x < 0 || x >= MAP_WIDTH || y < 0 || y >= MAP_HEIGHT) {
+        return;
+    }
+    g_trap_active[y][x] = 1;
+    g_trap_timer[y][x] = TRAP_ACTIVE_DURATION;
+}
+
+void map_update_traps(float dt) {
+    if (dt <= 0.0f) {
+        return;
+    }
+    for (int y = 0; y < MAP_HEIGHT; y++) {
+        for (int x = 0; x < MAP_WIDTH; x++) {
+            if (g_trap_active[y][x]) {
+                g_trap_timer[y][x] -= dt;
+                if (g_trap_timer[y][x] <= 0.0f) {
+                    g_trap_active[y][x] = 0;
+                    g_trap_timer[y][x] = 0.0f;
+                }
+            }
+        }
+    }
+}
+
+int map_is_fire_active_at(const GameMap *map, int x, int y) {
+    char tile = map_get_raw_tile(map, x, y);
+    if (tile == 'F' || tile == '9') {
+        return 1;
+    }
+    if (map_is_trap_tile(tile)) {
+        return map_is_trap_triggered(x, y);
+    }
+    return 0;
+}
+
+int map_is_medkit_active_at(const GameMap *map, int x, int y) {
+    if (!map || x < 0 || x >= MAP_WIDTH || y < 0 || y >= MAP_HEIGHT) {
+        return 0;
+    }
+    char tile = map_get_raw_tile(map, x, y);
+    return map_is_medkit_tile(tile) && g_medkit_used[y][x] == 0;
+}
+
+int map_try_collect_medkit(const GameMap *map, int x, int y) {
+    if (!map_is_medkit_active_at(map, x, y)) {
+        return 0;
+    }
+    g_medkit_used[y][x] = 1;
+    return 1;
+}
+
+char map_get_wall_equivalent(char tile) {
+    if (tile == 'P' || map_is_enemy_spawn_char(tile) ||
+        tile == '^' || tile == 'F' || tile == '+') {
+        return '.';
+    }
+    switch (tile) {
+        case '$': case ',': case '1': case '5': case '9': return '#';
+        case '&': case ';': case '2': case '6':           return '@';
+        case '/': case ':': case '3': case '7':           return '%';
+        case '_': case '4': case '8':                     return '*';
         default:  return tile;
     }
 }
@@ -235,9 +373,23 @@ int map_last_tile_is_passable(void) {
     return g_last_tile_passable;
 }
 
-unsigned char map_lighten_channel(unsigned char c) {
-    int v = (int)c + ((255 - (int)c) * 18) / 100;
+static int passable_lighten_pct(char tile) {
+    switch (tile) {
+        case '#': return 9;
+        case '@': return 25;
+        case '%': return 25;
+        default:  return 18;
+    }
+}
+
+unsigned char map_lighten_channel_for_tile(char tile, unsigned char c) {
+    int pct = passable_lighten_pct(tile);
+    int v = (int)c + ((255 - (int)c) * pct) / 100;
     return (unsigned char)((v > 255) ? 255 : v);
+}
+
+unsigned char map_lighten_channel(unsigned char c) {
+    return map_lighten_channel_for_tile('\0', c);
 }
 
 char map_get_raw_tile(const GameMap *map, int x, int y) {
@@ -250,7 +402,7 @@ char map_get_raw_tile(const GameMap *map, int x, int y) {
 char map_get_tile(const GameMap *map, int x, int y) {
     char raw = map_get_raw_tile(map, x, y);
     g_last_tile_passable = (raw == '$' || raw == '&' || raw == '/');
-    if (raw == ',') {
+    if (is_secret_floor(raw)) {
         g_minimap_secret_floor = 1;
         g_minimap_secret_x = x;
         g_minimap_secret_y = y;
@@ -260,13 +412,26 @@ char map_get_tile(const GameMap *map, int x, int y) {
     return map_get_wall_equivalent(raw);
 }
 
+void map_apply_pending_spawn(float *player_x, float *player_y) {
+    if (!player_x || !player_y || !g_spawn_pending) {
+        return;
+    }
+    *player_x = g_spawn_x;
+    *player_y = g_spawn_y;
+    g_spawn_pending = 0;
+}
+
 int map_is_wall(const GameMap *map, int x, int y) {
     if (!map || x < 0 || x >= map->width || y < 0 || y >= map->height) {
         return 1;
     }
     char tile = map_get_raw_tile(map, x, y);
-    if (tile == ',') {
+    if (is_secret_floor(tile)) {
         return g_spawning_enemies ? 1 : 0;
+    }
+    if (tile == 'P' || map_is_enemy_spawn_char(tile) ||
+        map_is_hazard_tile(tile) || map_is_medkit_tile(tile)) {
+        return 0;
     }
     return (tile != '.' && tile != ' ' && !map_is_passable_wall(tile));
 }
@@ -274,7 +439,7 @@ int map_is_wall(const GameMap *map, int x, int y) {
 int map_is_visible_wall(const GameMap *map, int x, int y) {
     char tile = map_get_raw_tile(map, x, y);
     g_last_tile_passable = 0;
-    if (tile == ',') {
+    if (is_secret_floor(tile)) {
         int on_minimap = (g_minimap_secret_floor &&
                           x == g_minimap_secret_x &&
                           y == g_minimap_secret_y);
@@ -282,7 +447,10 @@ int map_is_visible_wall(const GameMap *map, int x, int y) {
         return on_minimap ? 1 : 0;
     }
     g_minimap_secret_floor = 0;
-    return (tile != '.' && tile != ' ');
+    return (tile != '.' && tile != ' ' && tile != 'P' &&
+            !map_is_enemy_spawn_char(tile) &&
+            !map_is_hazard_tile(tile) &&
+            !map_is_medkit_tile(tile));
 }
 
 int map_has_exit_tile(const GameMap *map) {
@@ -323,7 +491,8 @@ int map_try_advance_level(GameMap *map, float *player_x, float *player_y, float 
         map_load_level(g_current_level, map);
         *player_x = next_lvl->spawn1_x;
         *player_y = next_lvl->spawn1_y;
-        *player_angle = next_lvl->spawn1_angle;
+        *player_angle = PI_F * 0.5f;
+        map_apply_pending_spawn(player_x, player_y);
         return 1;
     }
 
@@ -332,7 +501,8 @@ int map_try_advance_level(GameMap *map, float *player_x, float *player_y, float 
     if (map_load_from_file(map, next_path)) {
         *player_x = 2.5f;
         *player_y = 4.5f;
-        *player_angle = 0.0f;
+        *player_angle = PI_F * 0.5f;
+        map_apply_pending_spawn(player_x, player_y);
         return 1;
     }
 
@@ -403,4 +573,28 @@ int map_to_minimap_coords(float *x, float *y) {
     *y -= (float)g_minimap_cam_y;
     return (*x >= 0.0f && *x < (float)MINIMAP_VIEW_SIZE &&
             *y >= 0.0f && *y < (float)MINIMAP_VIEW_SIZE) ? 1 : 0;
+}
+
+int map_is_fire_active_minimap(const GameMap *mm_map, int mx, int my) {
+    char tile = map_get_raw_tile(mm_map, mx, my);
+    if (tile == 'F') {
+        return 1;
+    }
+    if (tile == '^') {
+        return map_is_trap_triggered(g_minimap_cam_x + mx, g_minimap_cam_y + my);
+    }
+    return 0;
+}
+
+int map_is_medkit_active_minimap(const GameMap *mm_map, int mx, int my) {
+    char tile = map_get_raw_tile(mm_map, mx, my);
+    if (tile != '+') {
+        return 0;
+    }
+    int wx = g_minimap_cam_x + mx;
+    int wy = g_minimap_cam_y + my;
+    if (wx < 0 || wx >= MAP_WIDTH || wy < 0 || wy >= MAP_HEIGHT) {
+        return 0;
+    }
+    return g_medkit_used[wy][wx] == 0;
 }

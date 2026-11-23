@@ -10,7 +10,7 @@
 #define MAP_HEIGHT 32
 #define MAX_DEPTH  36.0f
 #define MINIMAP_VIEW_SIZE     16
-#define MINIMAP_SCROLL_MARGIN 3
+#define MINIMAP_SCROLL_MARGIN 2
 
 /*
  * MODULO 1: MAPA, ARQUIVOS E COLISAO (Responsavel: Lucas - branch lucas)
@@ -51,7 +51,7 @@ int map_level_clamp(int index);
 const MapLevelInfo *map_level_get(int index);
 void map_load_level(int index, GameMap *map);
 
-/* Retorna o caractere de textura equivalente na posicao (x, y) ('$'->'#', '&'->'@', '/'->'%'). Fora dos limites retorna '#'. */
+/* Retorna o caractere de textura equivalente na posicao (x, y) ('$'->'#', '&'->'@', '/'->'%', ','->'#', ';'->'@', ':'->'%', '_'->'*'). Fora dos limites retorna '#'. */
 char map_get_tile(const GameMap *map, int x, int y);
 
 /* Retorna o caractere bruto armazenado na posicao (x, y). Fora dos limites retorna '#'. */
@@ -66,7 +66,7 @@ int map_is_passable_wall(char tile);
 /* Retorna 1 se a celula (x, y) deve ser desenhada como parede (solida ou atravessavel), 0 se chao livre. */
 int map_is_visible_wall(const GameMap *map, int x, int y);
 
-/* Retorna o caractere de parede base equivalente ('$'->'#', '&'->'@', '/'->'%'). */
+/* Retorna o caractere de parede base equivalente ('$'->'#', '&'->'@', '/'->'%', ','->'#', ';'->'@', ':'->'%', '_'->'*'). */
 char map_get_wall_equivalent(char tile);
 
 /* Retorna 1 se o ultimo tile consultado por map_get_tile era uma parede atravessavel ('$', '&', '/'). */
@@ -74,6 +74,7 @@ int map_last_tile_is_passable(void);
 
 /* Clareia levemente um canal de cor RGB [0..255] para diferenciar paredes atravessaveis. */
 unsigned char map_lighten_channel(unsigned char c);
+unsigned char map_lighten_channel_for_tile(char tile, unsigned char c);
 
 /* Atualiza e retorna a quantidade de inimigos vivos (controla bloqueio/cor do tile 'E'). */
 int map_set_enemies_alive(int count);
@@ -88,6 +89,26 @@ int map_has_exit_tile(const GameMap *map);
  * Retorna 1 se carregou a proxima fase (level2.txt, etc.), -1 se nao houver proxima fase (voltar ao menu), 0 se ainda nao ativou. */
 int map_try_advance_level(GameMap *map, float *player_x, float *player_y, float *player_angle);
 
+/* Retorna 1 se o caractere representar um ponto de spawn de inimigo no mapa. */
+int map_is_enemy_spawn_char(char tile);
+
+/* Armadilhas ('^', '5'-'8'), labaredas ('F', '9') e kits medicos ('+', '1'-'4') no chao. */
+int map_is_hazard_tile(char tile);
+int map_is_trap_tile(char tile);
+int map_is_trap_triggered(int x, int y);
+void map_trigger_trap(int x, int y);
+void map_update_traps(float dt);
+int map_is_fire_active_at(const GameMap *map, int x, int y);
+void map_reset_traps(void);
+
+int map_is_medkit_tile(char tile);
+int map_is_medkit_active_at(const GameMap *map, int x, int y);
+int map_try_collect_medkit(const GameMap *map, int x, int y);
+void map_reset_medkits(void);
+
+int map_is_fire_active_minimap(const GameMap *mm_map, int mx, int my);
+int map_is_medkit_active_minimap(const GameMap *mm_map, int mx, int my);
+
 /* Ativa/desativa o modo de spawn de inimigos (bloqueia spawn em tiles ','). */
 void map_begin_enemy_spawn(void);
 void map_end_enemy_spawn(void);
@@ -98,6 +119,9 @@ void map_build_minimap_view(const GameMap *src, GameMap *dst, float *player_x, f
 /* Converte coordenadas do mundo 32x32 para a janela 16x16 atual do minimapa. Retorna 1 se visivel na janela, 0 se fora. */
 int map_to_minimap_coords(float *x, float *y);
 
+/* Aplica a posicao de spawn ('P') carregada do mapa atual nas coordenadas do jogador. */
+void map_apply_pending_spawn(float *player_x, float *player_y);
+
 #ifdef RENDERER_H
 static float perp_dist __attribute__((unused));
 static int is_block_edge __attribute__((unused));
@@ -107,9 +131,9 @@ static int side __attribute__((unused));
 #define MAP_GTBC_tile (((tile) == 'E' && !map_are_enemies_alive()) \
     ? (perp_dist = -50.0f, is_block_edge = 0, side = 0, make_color(255, 255, 255)) \
     : (map_last_tile_is_passable() \
-        ? make_color(map_lighten_channel(get_tile_base_color(tile).r), \
-                     map_lighten_channel(get_tile_base_color(tile).g), \
-                     map_lighten_channel(get_tile_base_color(tile).b)) \
+        ? make_color(map_lighten_channel_for_tile((tile), get_tile_base_color(tile).r), \
+                     map_lighten_channel_for_tile((tile), get_tile_base_color(tile).g), \
+                     map_lighten_channel_for_tile((tile), get_tile_base_color(tile).b)) \
         : get_tile_base_color(tile))
 #define get_tile_base_color(x) MAP_GTBC_##x)
 #endif
@@ -121,7 +145,7 @@ static int side __attribute__((unused));
 #define MAP_ENTITIES_HOOKED
 #define enemies_alive(mgr) map_set_enemies_alive(enemies_alive(mgr))
 #define enemies_spawn_wave(mgr, map, player) \
-    (map_set_enemies_alive(1), map_begin_enemy_spawn(), enemies_spawn_wave((mgr), (map), (player)), map_end_enemy_spawn())
+    (map_begin_enemy_spawn(), enemies_spawn_wave((mgr), (map), (player)), map_end_enemy_spawn(), (void)enemies_alive(mgr))
 #define enemies_update(mgr, map_ptr, player_ptr, dt) \
     do { \
         enemies_update((mgr), (map_ptr), (player_ptr), (dt)); \
@@ -134,6 +158,14 @@ static int side __attribute__((unused));
             wave_timer = 3.0f; \
         } else if (_nav < 0) { \
             running = 0; \
+        } \
+    } while (0)
+#define player_apply_class(p_ptr, cls_ptr) \
+    do { \
+        player_apply_class((p_ptr), (cls_ptr)); \
+        if ((p_ptr)->id == 1) { \
+            map_apply_pending_spawn(&(p_ptr)->x, &(p_ptr)->y); \
+            (p_ptr)->angle = PI_F * 0.5f; \
         } \
     } while (0)
 #endif

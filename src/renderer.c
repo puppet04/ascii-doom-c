@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "entities.h"
 #include "raylib.h"
 #include <math.h>
 #include <stdio.h>
@@ -38,6 +39,376 @@ static int cam_view_ready = 0;
 static float prev_bob_phase = 0.0f;
 static float walk_amp = 0.0f;
 
+static void renderer_draw_enemy_projectiles(const Player *player);
+
+#define ENEMY_ART_WIDTH 9
+#define ENEMY_ART_HEIGHT 12
+#define ENEMY_ART_MAX_HEIGHT 13
+
+typedef struct {
+    char label;
+    float width_ratio;
+    float height_scale;
+    const char *rows[ENEMY_ART_MAX_HEIGHT];
+    AsciiColor palette[5];
+} EnemyDesign;
+
+/* Art tokens map to body, secondary, shadow, glow and detail palette entries. */
+static const EnemyDesign ENEMY_DESIGNS[] = {
+    {'Z', 0.60f, 0.92f, {
+        "....^....", "...###...", "..#+++#..", "..#*@*#..",
+        "...###...", "..#####..", ".###+###.", ".###+###.",
+        "...#=#...", "..##=##..", "..#...#..", ".##...##."
+    }, {{120,150,120}, {155,180,145}, {45,65,52}, {220,235,170}, {200,205,185}}},
+    {'D', 0.72f, 1.05f, {
+        "...^^^...", "..#####..", "..#+++#..", "..#*@*#..",
+        ".#######.", "#########", "###+#####", "###+#####",
+        "..##=##..", ".###=###.", ".##...##.", "##.....##"
+    }, {{110,130,160}, {155,175,205}, {35,50,75}, {210,230,255}, {180,195,220}}},
+    {'I', 0.62f, 0.98f, {
+        "....^....", "...###...", "..##+##..", "..#*@*#..",
+        "..#####..", ".#######.", "..##+##..", "...##=##.",
+        "...#.#...", "..##.##..", "..#...#..", ".##...##."
+    }, {{160,150,100}, {195,185,125}, {65,58,35}, {245,225,120}, {215,205,165}}},
+    {'M', 0.62f, 1.10f, {
+        "..DBBBD..", "..BEBEB..", "..BCCCB..", ".SBBBBBS.",
+        ".BBBDBBB.", "SB.BDB.BS", "B..BBB..B", "C..DBD..C",
+        "..BBDBB..", "..BB.BB..", ".SBB.BBS.", "..BB.BB..",
+        ".CCC.CCC."
+    }, {{140,85,45}, {100,60,30}, {65,35,25}, {235,30,30}, {235,230,215}}},
+    {'Y', 1.12f, 0.76f, {
+        ".........", ".........", "..####...", ".#######.",
+        ".##+++##.", ".#*@#*@#.", "#########", "##===####",
+        "#########", ".##...##.", ".........", "........."
+    }, {{220,120,140}, {240,155,165}, {90,35,48}, {255,215,205}, {245,185,175}}},
+    {'C', 1.02f, 0.94f, {
+        ".........", "...###...", "..#####..", ".#######.",
+        "##@@@@@##", "##@***@##", "##@@@@@##", ".#######.",
+        "..##!##..", "...!!!...", ".........", "........."
+    }, {{210,40,40}, {170,28,30}, {65,10,20}, {220,235,90}, {245,210,160}}},
+    {'B', 1.08f, 1.20f, {
+        "^.......^", "##^...^##", ".#######.", "..#+++#..",
+        "..#*@*#..", ".#######.", "#########", "###+#####",
+        "..##=##..", "..##=##..", ".##...##.", "##.....##"
+    }, {{140,30,30}, {180,65,58}, {48,8,12}, {255,125,70}, {225,150,115}}},
+    {'K', 0.48f, 0.68f, {
+        "....+....", "...###...", "...#@#...", "...###...",
+        "....#....", "..#####..", "..##+##..", "....#....",
+        "...##=##.", "..#...#..", "..#...#..", "........."
+    }, {{150,155,165}, {215,225,235}, {52,60,70}, {250,255,255}, {190,210,220}}},
+    {'T', 1.14f, 1.02f, {
+        "..#####..", ".#######.", "#########", "#.####.##",
+        "##@###@##", ".########", "#########", "###++++##",
+        "=##=###=.", "=##=###=.", "..##..#..", ".##...##."
+    }, {{80,110,50}, {110,140,68}, {34,48,25}, {180,195,80}, {130,150,85}}},
+    {'A', 0.68f, 1.00f, {
+        "....^^...", "...####..", "...#++#..", "..##*@##.",
+        "..######.", "..#######", "..##+##..", "..##=##..",
+        "..#..##..", ".##...#..", "##.......", "..#......"
+    }, {{100,40,130}, {155,70,185}, {38,12,52}, {235,170,255}, {200,100,235}}},
+    {'Q', 1.12f, 1.28f, {
+        "^..###..^", "##^###^##", ".###+###.", "..#####..",
+        ".##@*@##.", "#########", "###+#####", "##=###=##",
+        "##=###=##", ".##===##.", "##.....##", "##.....##"
+    }, {{40,10,15}, {90,20,28}, {14,5,8}, {210,170,60}, {255,220,110}}}
+};
+
+static const EnemyDesign ENEMY_DESIGN_FALLBACK = {
+    '?', 0.62f, 1.0f, {
+        "....^....", "...###...", "..#+++#..", "..#*@*#..",
+        "...###...", "..#####..", ".###+###.", ".###+###.",
+        "...#=#...", "..##=##..", "..#...#..", ".##...##."
+    }, {{170,150,170}, {205,185,205}, {65,55,70}, {255,210,230}, {225,195,220}}
+};
+
+static const EnemyDesign *enemy_design_for_label(char label) {
+    int design_count = (int)(sizeof(ENEMY_DESIGNS) / sizeof(ENEMY_DESIGNS[0]));
+    for (int i = 0; i < design_count; i++) {
+        if (ENEMY_DESIGNS[i].label == label) return &ENEMY_DESIGNS[i];
+    }
+    return &ENEMY_DESIGN_FALLBACK;
+}
+
+static int enemy_art_color_index(char glyph) {
+    switch (glyph) {
+        case '#': return 0;
+        case '+': return 1;
+        case '=': return 2;
+        case '@':
+        case '*': return 3;
+        case '^':
+        case '!':
+        case '|': return 4;
+        default: return -1;
+    }
+}
+
+static int imp_art_color_index(char token) {
+    switch (token) {
+        case 'B': return 0;
+        case 'D': return 1;
+        case 'E': return 3;
+        case 'S':
+        case 'C': return 4;
+        default: return -1;
+    }
+}
+
+static char imp_art_glyph(char token) {
+    switch (token) {
+        case 'B': return '#';
+        case 'D': return '%';
+        case 'E': return 'O';
+        case 'S': return '^';
+        case 'C': return 'v';
+        default: return token;
+    }
+}
+
+#define REDESIGN_ART_MAX_WIDTH 17
+#define REDESIGN_ART_MAX_HEIGHT 20
+#define REDESIGN_IMP_HEIGHT_SCALE 1.10f
+
+typedef struct {
+    char glyph;
+    AsciiColor color;
+    unsigned char brighten;
+} EnemyArtStyle;
+
+typedef struct {
+    char label;
+    int width;
+    int height;
+    float width_ratio;
+    float world_height;
+    char effect_token;
+    AsciiColor effect_color;
+    const EnemyArtStyle *styles;
+    const char *rows[REDESIGN_ART_MAX_HEIGHT];
+} EnemyVisualDesign;
+
+#define ENEMY_STYLE(token, glyph, red, green, blue, body) \
+    [token] = {glyph, {red, green, blue}, body}
+
+static const EnemyArtStyle LEGACY_Z_STYLE[128] = {
+    ENEMY_STYLE('S', '#', 120, 150, 120, 1),
+    ENEMY_STYLE('D', '%', 85, 110, 85, 1),
+    ENEMY_STYLE('E', 'o', 200, 40, 40, 0),
+    ENEMY_STYLE('R', '=', 70, 80, 60, 0)
+};
+
+static const EnemyArtStyle LEGACY_D_STYLE[128] = {
+    ENEMY_STYLE('S', '#', 110, 130, 160, 1),
+    ENEMY_STYLE('D', '%', 80, 95, 120, 1),
+    ENEMY_STYLE('E', 'o', 200, 40, 40, 0),
+    ENEMY_STYLE('R', '=', 50, 60, 90, 0)
+};
+
+static const EnemyArtStyle LEGACY_I_STYLE[128] = {
+    ENEMY_STYLE('S', '#', 160, 150, 100, 1),
+    ENEMY_STYLE('D', '%', 120, 110, 70, 1),
+    ENEMY_STYLE('E', 'o', 200, 40, 40, 0),
+    ENEMY_STYLE('R', '=', 95, 85, 55, 0)
+};
+
+static const EnemyArtStyle PINKY_STYLE[128] = {
+    ENEMY_STYLE('P', '#', 225, 125, 145, 1),
+    ENEMY_STYLE('R', '%', 170, 85, 105, 1),
+    ENEMY_STYLE('G', 'o', 230, 190, 40, 0),
+    ENEMY_STYLE('M', '=', 120, 20, 30, 0),
+    ENEMY_STYLE('T', 'v', 240, 235, 225, 0),
+    ENEMY_STYLE('H', '^', 235, 230, 205, 0),
+    ENEMY_STYLE('C', 'v', 240, 235, 225, 0)
+};
+
+static const EnemyArtStyle CACODEMON_STYLE[128] = {
+    ENEMY_STYLE('R', '#', 210, 40, 40, 1),
+    ENEMY_STYLE('D', '%', 150, 25, 30, 1),
+    ENEMY_STYLE('E', 'O', 235, 225, 90, 0),
+    ENEMY_STYLE('P', '@', 25, 90, 35, 0),
+    ENEMY_STYLE('H', '^', 235, 230, 205, 0),
+    ENEMY_STYLE('M', '=', 60, 10, 15, 0),
+    ENEMY_STYLE('T', 'v', 240, 235, 225, 0)
+};
+
+static const EnemyArtStyle BARON_STYLE[128] = {
+    ENEMY_STYLE('P', '#', 215, 120, 130, 1),
+    ENEMY_STYLE('D', '%', 160, 80, 95, 1),
+    ENEMY_STYLE('F', '@', 225, 220, 200, 0),
+    ENEMY_STYLE('E', 'O', 235, 40, 30, 0),
+    ENEMY_STYLE('H', '^', 190, 185, 165, 0),
+    ENEMY_STYLE('L', '#', 120, 75, 40, 0),
+    ENEMY_STYLE('K', '%', 85, 50, 25, 0),
+    ENEMY_STYLE('N', 'v', 240, 140, 40, 0),
+    ENEMY_STYLE('X', '=', 35, 28, 25, 0)
+};
+
+static const EnemyArtStyle KUSHAN_STYLE[128] = {
+    ENEMY_STYLE('M', '#', 150, 155, 165, 1),
+    ENEMY_STYLE('D', '%', 100, 105, 115, 1),
+    ENEMY_STYLE('H', '^', 210, 215, 225, 0),
+    ENEMY_STYLE('F', 'o', 150, 100, 70, 0),
+    ENEMY_STYLE('W', ')', 140, 95, 50, 0),
+    ENEMY_STYLE('R', '=', 170, 40, 40, 0)
+};
+
+static const EnemyArtStyle TROLL_STYLE[128] = {
+    ENEMY_STYLE('G', '#', 80, 110, 50, 1),
+    ENEMY_STYLE('D', '%', 55, 80, 35, 1),
+    ENEMY_STYLE('E', 'o', 230, 200, 60, 0),
+    ENEMY_STYLE('N', '*', 210, 120, 120, 0),
+    ENEMY_STYLE('T', 'v', 235, 230, 210, 0),
+    ENEMY_STYLE('W', '|', 110, 75, 40, 0)
+};
+
+static const EnemyArtStyle APOSTLE_STYLE[128] = {
+    ENEMY_STYLE('V', '#', 100, 40, 130, 1),
+    ENEMY_STYLE('D', '%', 60, 20, 85, 1),
+    ENEMY_STYLE('E', 'O', 200, 230, 70, 0),
+    ENEMY_STYLE('T', 'v', 235, 230, 210, 0),
+    ENEMY_STYLE('C', 'v', 225, 215, 190, 0)
+};
+
+static const EnemyArtStyle ZODD_STYLE[128] = {
+    ENEMY_STYLE('B', '#', 35, 25, 30, 1),
+    ENEMY_STYLE('D', '%', 80, 15, 25, 1),
+    ENEMY_STYLE('E', 'O', 230, 170, 50, 0),
+    ENEMY_STYLE('H', '^', 225, 215, 190, 0),
+    ENEMY_STYLE('W', '*', 90, 20, 35, 0),
+    ENEMY_STYLE('T', 'v', 240, 235, 225, 0),
+    ENEMY_STYLE('C', 'v', 225, 215, 190, 0),
+    ENEMY_STYLE('X', '=', 50, 45, 45, 0)
+};
+
+/* Grades validadas: cada linha corresponde a largura declarada. */
+static const EnemyVisualDesign ENEMY_VISUAL_DESIGNS[] = {
+    {'Z', 9, 12, 0.60f, 0.95f, '\0', {0,0,0}, LEGACY_Z_STYLE, {
+        "..DSSSD..", "..SESES..", "..SSDSS..", "...SSS...",
+        ".RRRRRRR.", "SRRRDRRRS", "S.RRRRR.S", "S.RRDRR.S",
+        "..RRRRR..", "..RR.RR..", "..SS.SS..", "..DD.DD.."
+    }},
+    {'D', 9, 12, 0.72f, 1.05f, '\0', {0,0,0}, LEGACY_D_STYLE, {
+        "..DSSSD..", "..SESES..", "..SSDSS..", "...SSS...",
+        ".RRRRRRR.", "SRRRDRRRS", "S.RRRRR.S", "S.RRDRR.S",
+        "..RRRRR..", "..RR.RR..", "..SS.SS..", "..DD.DD.."
+    }},
+    {'I', 9, 12, 0.62f, 1.00f, '\0', {0,0,0}, LEGACY_I_STYLE, {
+        "..DSSSD..", "..SESES..", "..SSDSS..", "...SSS...",
+        ".RRRRRRR.", "SRRRDRRRS", "S.RRRRR.S", "S.RRDRR.S",
+        "..RRRRR..", "..RR.RR..", "..SS.SS..", "..DD.DD.."
+    }},
+    {'Y', 13, 10, 1.25f, 0.85f, '\0', {0,0,0}, PINKY_STYLE, {
+        "...H.....H...", "..RPPPPPPPR..", "..PGPPPPPGP..",
+        "..PMTMTMTMP..", ".PPRPPPPPRPP.", "PPPPRPPPRPPPP",
+        "RPP.RPPPR.PPR", "CP..RPPPR..PC", "..PPP...PPP..",
+        ".CCCC...CCCC."
+    }},
+    {'C', 13, 11, 1.15f, 0.95f, 'M', {255,160,40}, CACODEMON_STYLE, {
+        "...H.....H...", "...DRRRRRD...", "..DRRRRRRRD..",
+        ".DRRREEERRRD.", ".RRREEPEERRR.", ".DRRREEERRRD.",
+        "RRRRRRRRRRRRR", "RDMTMTMTMTMDR", "RRDMMMMMMMDRR",
+        ".DRDDDDDDDRD.", "..DDDDDDDDD.."
+    }},
+    {'B', 13, 17, 1.20f, 1.30f, '\0', {0,0,0}, BARON_STYLE, {
+        "H...........H", "HH..FFFFF..HH", ".H..FEFEF..H.",
+        "...FFFFFFF...", "..PPPPPPPPP..", ".PPDPPPPPDPP.",
+        "PPPDPPPPPDPPP", "PPDPPPPPPPDPP", "PP.DPPPPPD.PP",
+        "NN.PPDPDPP.NN", "NN..PPPPP..NN", "....DPPPD....",
+        "...LLL.LLL...", "...LKL.LKL...", "....LL.LL....",
+        "...LL...LL...", "..XXX...XXX.."
+    }},
+    {'K', 9, 11, 0.66f, 0.85f, 'W', {255,230,120}, KUSHAN_STYLE, {
+        "....H....", "..DHHHD..", "..DFFFD..", "..DMMMD..",
+        ".MMMMMMM.", "WMMMDMMM.", "W.MRRRM..", "W.MMDMM..",
+        "W..MMM...", "...M.M...", "..DD.DD.."
+    }},
+    {'T', 15, 16, 1.20f, 1.40f, '\0', {0,0,0}, TROLL_STYLE, {
+        "....DGGGGGD.WW.", "...DGEGGGEGD.WW", "...GGGNNNGGG.WW",
+        "...DGTGGGTGD..W", "..GGGGGGGGGGG.W", ".GGDGGGGGGGDGGW",
+        "GGGGDGGGGGDGGGW", "GGDG.GGGGG.GGGW", "GG.G.DGGGD.G.GW",
+        "DD....GGGGG..DD", "....DGGGGGD....", "....GGDGDGG....",
+        "....GG...GG....", "...GGG...GGG...", "...GGG...GGG...",
+        "..DDDD...DDDD.."
+    }},
+    {'A', 11, 14, 0.95f, 1.10f, '\0', {0,0,0}, APOSTLE_STYLE, {
+        "..DVVD.....", ".DEVEVD....", ".VVVTTVV...", "..DVVVVVD..",
+        ".VVVDVVVVV.", "VVV.VVVV.VV", "VV..DVVV..V",
+        "C...VVVD..V", "....DVVV..V", "....VVDV..V",
+        "....VV.VV.V", "...VV..VV.C", "...VV..VV..",
+        "..CCC.CCC.."
+    }},
+    {'Q', 17, 20, 1.45f, 1.70f, 'E', {255,60,40}, ZODD_STYLE, {
+        "H...............H", "HH....BBBBB....HH", ".H...DBEBEBD...H.",
+        "..W..DBTTTBD..W..", ".WW..DBBBBBD..WW.", "WWW.DBBBBBBBD.WWW",
+        "WWWWDBBDBDBBDWWWW", "WWWWBBBBBBBBBWWWW",
+        ".WWWBBDBBBDBBWWW.", ".WWBBBBBBBBBBBWW.",
+        "..WBBBBDBDBBBBW..", "...BBBBBBBBBBB...",
+        "..CBBB.BBB.BBBC..", "..CBB..BDB..BBC..",
+        ".....BBBBBBB.....", ".....BBDBDBB.....",
+        "....BBB...BBB....", "....BBB...BBB....",
+        "....DDD...DDD....", "...XXXX...XXXX..."
+    }}
+};
+
+#undef ENEMY_STYLE
+
+static const EnemyVisualDesign *enemy_visual_design_for_label(char label) {
+    int design_count = (int)(sizeof(ENEMY_VISUAL_DESIGNS) / sizeof(ENEMY_VISUAL_DESIGNS[0]));
+    for (int i = 0; i < design_count; i++) {
+        if (ENEMY_VISUAL_DESIGNS[i].label == label) return &ENEMY_VISUAL_DESIGNS[i];
+    }
+    return NULL;
+}
+
+#define ENEMY_SPRITE_PIPELINE_ENABLED 1
+#define SPRITE_UPSCALE 4
+#define SPRITE_SOURCE_MAX_WIDTH 17
+#define SPRITE_SOURCE_MAX_HEIGHT 20
+#define SPRITE_UPSCALED_MAX_WIDTH (SPRITE_SOURCE_MAX_WIDTH * SPRITE_UPSCALE + 2)
+#define SPRITE_UPSCALED_MAX_HEIGHT (SPRITE_SOURCE_MAX_HEIGHT * SPRITE_UPSCALE + 2)
+#define SPRITE_MIP_HALF_MAX_WIDTH ((SPRITE_UPSCALED_MAX_WIDTH + 1) / 2)
+#define SPRITE_MIP_HALF_MAX_HEIGHT ((SPRITE_UPSCALED_MAX_HEIGHT + 1) / 2)
+#define SPRITE_MIP_QUARTER_MAX_WIDTH ((SPRITE_UPSCALED_MAX_WIDTH + 3) / 4)
+#define SPRITE_MIP_QUARTER_MAX_HEIGHT ((SPRITE_UPSCALED_MAX_HEIGHT + 3) / 4)
+
+#if SPRITE_UPSCALE != 2 && SPRITE_UPSCALE != 4
+#error SPRITE_UPSCALE must be 2 or 4
+#endif
+
+enum {
+    ENEMY_VISUAL_DESIGN_COUNT = sizeof(ENEMY_VISUAL_DESIGNS) / sizeof(ENEMY_VISUAL_DESIGNS[0]),
+    ENEMY_IMP_CACHE_INDEX = ENEMY_VISUAL_DESIGN_COUNT,
+    ENEMY_FALLBACK_CACHE_INDEX = ENEMY_VISUAL_DESIGN_COUNT + 1,
+    ENEMY_SPRITE_CACHE_COUNT = ENEMY_VISUAL_DESIGN_COUNT + 2
+};
+
+typedef struct {
+    char glyph;
+    char token;
+    AsciiColor color;
+} EnemyRenderCell;
+
+typedef struct {
+    int source_width;
+    int source_height;
+    int full_width;
+    int full_height;
+    int half_width;
+    int half_height;
+    int quarter_width;
+    int quarter_height;
+    EnemyRenderCell full[SPRITE_UPSCALED_MAX_HEIGHT][SPRITE_UPSCALED_MAX_WIDTH];
+    EnemyRenderCell half[SPRITE_MIP_HALF_MAX_HEIGHT][SPRITE_MIP_HALF_MAX_WIDTH];
+    EnemyRenderCell quarter[SPRITE_MIP_QUARTER_MAX_HEIGHT][SPRITE_MIP_QUARTER_MAX_WIDTH];
+} EnemySpriteCache;
+
+_Static_assert(sizeof(EnemyRenderCell) == 5, "Unexpected enemy render cell size");
+
+static EnemySpriteCache enemy_sprite_caches[ENEMY_SPRITE_CACHE_COUNT];
+static EnemyRenderCell enemy_sprite_source[SPRITE_SOURCE_MAX_HEIGHT][SPRITE_SOURCE_MAX_WIDTH];
+static EnemyRenderCell enemy_sprite_scale2[SPRITE_SOURCE_MAX_HEIGHT * 2][SPRITE_SOURCE_MAX_WIDTH * 2];
+static int enemy_sprite_pipeline_ready = 0;
+
 /* Rampa 100% densa de alta cobertura (sem pontos vazios furando superficies) */
 static const char *DENSE_RAMP = "=-+*xX#%8&BWM@";
 static const int DENSE_RAMP_LEN = 14;
@@ -63,6 +434,311 @@ static AsciiColor scale_rgb(float r, float g, float b, float factor) {
     if (factor < 0.0f) factor = 0.0f;
     if (factor > 1.35f) factor = 1.35f;
     return make_color(clamp_u8(r * factor), clamp_u8(g * factor), clamp_u8(b * factor));
+}
+
+static EnemyRenderCell enemy_source_cell(char label, const EnemyVisualDesign *visual,
+                                         const EnemyDesign *source, int x, int y) {
+    EnemyRenderCell cell = {0};
+    char token = visual ? visual->rows[y][x] : source->rows[y][x];
+    if (token == '.') return cell;
+
+    if (visual) {
+        EnemyArtStyle style = visual->styles[(unsigned char)token];
+        if (style.glyph) {
+            cell.glyph = style.glyph;
+            cell.token = token;
+            cell.color = style.color;
+        }
+    } else if (label == 'M') {
+        int color_index = imp_art_color_index(token);
+        if (color_index >= 0) {
+            cell.glyph = imp_art_glyph(token);
+            cell.token = token;
+            cell.color = source->palette[color_index];
+        }
+    } else {
+        int color_index = enemy_art_color_index(token);
+        if (color_index >= 0) {
+            cell.glyph = token;
+            cell.token = token;
+            cell.color = source->palette[color_index];
+        }
+    }
+    return cell;
+}
+
+static EnemyRenderCell enemy_pixel_at(const EnemyRenderCell *pixels, int width,
+                                      int height, int stride, int x, int y) {
+    if (x < 0 || x >= width || y < 0 || y >= height) {
+        EnemyRenderCell empty = {0};
+        return empty;
+    }
+    return pixels[y * stride + x];
+}
+
+static int enemy_pixels_equal(EnemyRenderCell a, EnemyRenderCell b) {
+    if (!a.glyph || !b.glyph) return !a.glyph && !b.glyph;
+    return a.glyph == b.glyph && a.token == b.token &&
+           a.color.r == b.color.r && a.color.g == b.color.g &&
+           a.color.b == b.color.b;
+}
+
+static void enemy_scale2x(const EnemyRenderCell *source, int width, int height,
+                          int source_stride, EnemyRenderCell *dest, int dest_stride) {
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            EnemyRenderCell e = enemy_pixel_at(source, width, height, source_stride, x, y);
+            EnemyRenderCell b = enemy_pixel_at(source, width, height, source_stride, x, y - 1);
+            EnemyRenderCell d = enemy_pixel_at(source, width, height, source_stride, x - 1, y);
+            EnemyRenderCell f = enemy_pixel_at(source, width, height, source_stride, x + 1, y);
+            EnemyRenderCell h = enemy_pixel_at(source, width, height, source_stride, x, y + 1);
+            EnemyRenderCell e0 = e, e1 = e, e2 = e, e3 = e;
+
+            if (!enemy_pixels_equal(b, h) && !enemy_pixels_equal(d, f)) {
+                if (enemy_pixels_equal(d, b)) e0 = d;
+                if (enemy_pixels_equal(b, f)) e1 = f;
+                if (enemy_pixels_equal(d, h)) e2 = d;
+                if (enemy_pixels_equal(h, f)) e3 = h;
+            }
+
+            int dx = x * 2;
+            int dy = y * 2;
+            dest[dy * dest_stride + dx] = e0;
+            dest[dy * dest_stride + dx + 1] = e1;
+            dest[(dy + 1) * dest_stride + dx] = e2;
+            dest[(dy + 1) * dest_stride + dx + 1] = e3;
+        }
+    }
+}
+
+static EnemyRenderCell enemy_box_filter(const EnemyRenderCell *source, int source_width,
+                                         int source_height, int source_stride,
+                                         int x0, int y0, int x1, int y1) {
+    unsigned int red = 0, green = 0, blue = 0;
+    int total = (x1 - x0) * (y1 - y0);
+    int covered = 0;
+    float center_x = ((float)x0 + (float)x1) * 0.5f;
+    float center_y = ((float)y0 + (float)y1) * 0.5f;
+    float closest = INFINITY;
+    EnemyRenderCell selected = {0};
+
+    for (int y = y0; y < y1; y++) {
+        for (int x = x0; x < x1; x++) {
+            EnemyRenderCell cell = enemy_pixel_at(source, source_width, source_height,
+                                                   source_stride, x, y);
+            if (!cell.glyph) continue;
+
+            red += cell.color.r;
+            green += cell.color.g;
+            blue += cell.color.b;
+            covered++;
+
+            float dx = ((float)x + 0.5f) - center_x;
+            float dy = ((float)y + 0.5f) - center_y;
+            float distance = dx * dx + dy * dy;
+            if (distance < closest) {
+                closest = distance;
+                selected = cell;
+            }
+        }
+    }
+
+    if (total <= 0 || covered * 4 < total) {
+        EnemyRenderCell empty = {0};
+        return empty;
+    }
+    selected.color = make_color((unsigned char)((red + (unsigned int)(covered / 2)) / (unsigned int)covered),
+                                (unsigned char)((green + (unsigned int)(covered / 2)) / (unsigned int)covered),
+                                (unsigned char)((blue + (unsigned int)(covered / 2)) / (unsigned int)covered));
+    return selected;
+}
+
+static void enemy_generate_mip(const EnemyRenderCell *source, int source_width,
+                               int source_height, int source_stride, int factor,
+                               EnemyRenderCell *dest, int dest_stride,
+                               int *dest_width, int *dest_height) {
+    *dest_width = (source_width + factor - 1) / factor;
+    *dest_height = (source_height + factor - 1) / factor;
+    for (int y = 0; y < *dest_height; y++) {
+        for (int x = 0; x < *dest_width; x++) {
+            int x0 = x * factor;
+            int y0 = y * factor;
+            int x1 = x0 + factor < source_width ? x0 + factor : source_width;
+            int y1 = y0 + factor < source_height ? y0 + factor : source_height;
+            dest[y * dest_stride + x] = enemy_box_filter(source, source_width,
+                source_height, source_stride, x0, y0, x1, y1);
+        }
+    }
+}
+
+static void enemy_finish_sprite_cache(EnemySpriteCache *cache) {
+    for (int y = 1; y < cache->full_height - 1; y++) {
+        for (int x = 1; x < cache->full_width - 1; x++) {
+            EnemyRenderCell *cell = &cache->full[y][x];
+            if (!cell->token) continue;
+
+            int lit = !cache->full[y][x - 1].glyph || !cache->full[y - 1][x].glyph;
+            int shadow = !cache->full[y][x + 1].glyph || !cache->full[y + 1][x].glyph;
+            float factor = lit ? 1.15f : (shadow ? 0.80f : 1.0f);
+            cell->color = scale_rgb(cell->color.r, cell->color.g, cell->color.b, factor);
+        }
+    }
+
+    for (int y = 0; y < cache->full_height; y++) {
+        for (int x = 0; x < cache->full_width; x++) {
+            EnemyRenderCell *cell = &cache->full[y][x];
+            if (cell->glyph) continue;
+
+            EnemyRenderCell *neighbor = NULL;
+            for (int dy = -1; dy <= 1 && !neighbor; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if (!dx && !dy) continue;
+                    int nx = x + dx;
+                    int ny = y + dy;
+                    if (nx >= 0 && nx < cache->full_width &&
+                        ny >= 0 && ny < cache->full_height &&
+                        cache->full[ny][nx].token) {
+                        neighbor = &cache->full[ny][nx];
+                        break;
+                    }
+                }
+            }
+            if (neighbor) {
+                cell->glyph = neighbor->glyph;
+                cell->color = scale_rgb(neighbor->color.r, neighbor->color.g,
+                                        neighbor->color.b, 0.65f);
+            }
+        }
+    }
+
+    enemy_generate_mip(&cache->full[0][0], cache->full_width, cache->full_height,
+        SPRITE_UPSCALED_MAX_WIDTH, 2, &cache->half[0][0],
+        SPRITE_MIP_HALF_MAX_WIDTH, &cache->half_width, &cache->half_height);
+    enemy_generate_mip(&cache->full[0][0], cache->full_width, cache->full_height,
+        SPRITE_UPSCALED_MAX_WIDTH, 4, &cache->quarter[0][0],
+        SPRITE_MIP_QUARTER_MAX_WIDTH, &cache->quarter_width, &cache->quarter_height);
+}
+
+static void enemy_build_sprite_cache(EnemySpriteCache *cache, char label,
+                                     int width, int height,
+                                     const EnemyVisualDesign *visual,
+                                     const EnemyDesign *source) {
+    memset(enemy_sprite_source, 0, sizeof(enemy_sprite_source));
+    memset(enemy_sprite_scale2, 0, sizeof(enemy_sprite_scale2));
+    memset(cache, 0, sizeof(*cache));
+
+    cache->source_width = width;
+    cache->source_height = height;
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            enemy_sprite_source[y][x] = enemy_source_cell(label, visual, source, x, y);
+        }
+    }
+
+    int scale2_width = width * 2;
+    int scale2_height = height * 2;
+    enemy_scale2x(&enemy_sprite_source[0][0], width, height,
+                  SPRITE_SOURCE_MAX_WIDTH, &enemy_sprite_scale2[0][0],
+                  SPRITE_SOURCE_MAX_WIDTH * 2);
+
+    cache->full_width = width * SPRITE_UPSCALE + 2;
+    cache->full_height = height * SPRITE_UPSCALE + 2;
+#if SPRITE_UPSCALE == 4
+    enemy_scale2x(&enemy_sprite_scale2[0][0], scale2_width, scale2_height,
+                  SPRITE_SOURCE_MAX_WIDTH * 2, &cache->full[1][1],
+                  SPRITE_UPSCALED_MAX_WIDTH);
+#else
+    for (int y = 0; y < scale2_height; y++) {
+        for (int x = 0; x < scale2_width; x++) {
+            cache->full[y + 1][x + 1] = enemy_sprite_scale2[y][x];
+        }
+    }
+#endif
+    enemy_finish_sprite_cache(cache);
+}
+
+static void enemy_sprite_pipeline_init(void) {
+    if (enemy_sprite_pipeline_ready || !ENEMY_SPRITE_PIPELINE_ENABLED) return;
+
+    memset(enemy_sprite_caches, 0, sizeof(enemy_sprite_caches));
+    for (int i = 0; i < ENEMY_VISUAL_DESIGN_COUNT; i++) {
+        const EnemyVisualDesign *design = &ENEMY_VISUAL_DESIGNS[i];
+        enemy_build_sprite_cache(&enemy_sprite_caches[i], design->label,
+            design->width, design->height, design, NULL);
+    }
+
+    const EnemyDesign *imp = enemy_design_for_label('M');
+    enemy_build_sprite_cache(&enemy_sprite_caches[ENEMY_IMP_CACHE_INDEX], 'M',
+        ENEMY_ART_WIDTH, ENEMY_ART_MAX_HEIGHT, NULL, imp);
+    enemy_build_sprite_cache(&enemy_sprite_caches[ENEMY_FALLBACK_CACHE_INDEX], '?',
+        ENEMY_ART_WIDTH, ENEMY_ART_HEIGHT, NULL, &ENEMY_DESIGN_FALLBACK);
+    enemy_sprite_pipeline_ready = 1;
+}
+
+static const EnemySpriteCache *enemy_sprite_cache_for_label(char label) {
+    const EnemyVisualDesign *design = enemy_visual_design_for_label(label);
+    if (design) return &enemy_sprite_caches[design - ENEMY_VISUAL_DESIGNS];
+    if (label == 'M') return &enemy_sprite_caches[ENEMY_IMP_CACHE_INDEX];
+    return &enemy_sprite_caches[ENEMY_FALLBACK_CACHE_INDEX];
+}
+
+static const EnemyRenderCell *enemy_select_sprite_mip(const EnemySpriteCache *cache,
+                                                       int target_width, int target_height,
+                                                       int *width, int *height, int *stride) {
+    const EnemyRenderCell *pixels = &cache->full[0][0];
+    *width = cache->full_width;
+    *height = cache->full_height;
+    *stride = SPRITE_UPSCALED_MAX_WIDTH;
+
+    float reduce_x = (float)*width / (float)target_width;
+    float reduce_y = (float)*height / (float)target_height;
+    float reduction = fmaxf(reduce_x, reduce_y);
+    if (reduction >= 4.0f) {
+        pixels = &cache->quarter[0][0];
+        *width = cache->quarter_width;
+        *height = cache->quarter_height;
+        *stride = SPRITE_MIP_QUARTER_MAX_WIDTH;
+    } else if (reduction >= 2.0f) {
+        pixels = &cache->half[0][0];
+        *width = cache->half_width;
+        *height = cache->half_height;
+        *stride = SPRITE_MIP_HALF_MAX_WIDTH;
+    }
+    return pixels;
+}
+
+static EnemyRenderCell enemy_sample_sprite_mip(const EnemyRenderCell *pixels,
+                                                int texture_width, int texture_height,
+                                                int texture_stride, float u, float v,
+                                                int target_width, int target_height) {
+    if (texture_width <= target_width && texture_height <= target_height) {
+        int x = (int)(u * (float)texture_width);
+        int y = (int)(v * (float)texture_height);
+        if (x >= texture_width) x = texture_width - 1;
+        if (y >= texture_height) y = texture_height - 1;
+        return enemy_pixel_at(pixels, texture_width, texture_height, texture_stride, x, y);
+    }
+
+    float x0f = u * (float)texture_width;
+    float y0f = v * (float)texture_height;
+    float x1f = (u + 1.0f / (float)target_width) * (float)texture_width;
+    float y1f = (v + 1.0f / (float)target_height) * (float)texture_height;
+    int x0 = (int)floorf(x0f);
+    int y0 = (int)floorf(y0f);
+    int x1 = (int)ceilf(x1f);
+    int y1 = (int)ceilf(y1f);
+
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x0 >= texture_width) x0 = texture_width - 1;
+    if (y0 >= texture_height) y0 = texture_height - 1;
+    if (x1 <= x0) x1 = x0 + 1;
+    if (y1 <= y0) y1 = y0 + 1;
+    if (x1 > texture_width) x1 = texture_width;
+    if (y1 > texture_height) y1 = texture_height;
+
+    return enemy_box_filter(pixels, texture_width, texture_height, texture_stride,
+                            x0, y0, x1, y1);
 }
 
 static float bayer4x4(int x, int y) {
@@ -189,6 +865,7 @@ void renderer_init(void) {
     cam_view_ready = 0;
     prev_bob_phase = 0.0f;
     walk_amp = 0.0f;
+    enemy_sprite_pipeline_init();
 }
 
 void renderer_close(void) {
@@ -201,9 +878,12 @@ void renderer_close(void) {
     font_loaded = 0;
 }
 
+static const GameMap *cam_view_map = NULL;
+
 void renderer_clear(void) {
     AsciiColor black = make_color(0, 0, 0);
     cam_view_ready = 0;
+    cam_view_map = NULL;
     for (int y = 0; y < r_height; y++) {
         for (int x = 0; x < r_width; x++) {
             screen_grid[y][x].ch = ' ';
@@ -220,6 +900,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
     if (!map || !player) {
         return;
     }
+    cam_view_map = map;
 
     /* Rastreia cadencia de passos para animar head-bob, arma e 3a pessoa com suavidade */
     float d_bob = fabsf(player->bob_phase - prev_bob_phase);
@@ -485,6 +1166,68 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
                         continue;
                     }
                 }
+                int floor_mx = (int)floorf(wx);
+                int floor_my = (int)floorf(wy);
+                char floor_raw = map_get_raw_tile(map, floor_mx, floor_my);
+                int trap_unlit = map_is_trap_tile(floor_raw) && !map_is_trap_triggered(floor_mx, floor_my);
+                int fire_lit = map_is_fire_active_at(map, floor_mx, floor_my);
+                if (trap_unlit || fire_lit) {
+                    float fu_m = wx - floorf(wx);
+                    float fv_m = wy - floorf(wy);
+                    float dx_m = fu_m - 0.5f;
+                    float dy_m = fv_m - 0.5f;
+                    float rad = sqrtf(dx_m * dx_m + dy_m * dy_m);
+                    float adx = fabsf(dx_m);
+                    float ady = fabsf(dy_m);
+                    int outer_ring = (rad >= 0.29f && rad <= 0.37f);
+                    int inner_ring = (rad >= 0.14f && rad <= 0.21f);
+                    int core_jet = (rad < 0.09f);
+                    int vane = (rad >= 0.09f && rad <= 0.37f) &&
+                               (adx < 0.035f || ady < 0.035f || fabsf(adx - ady) < 0.04f);
+                    if (outer_ring || inner_ring || core_jet || vane) {
+                        float tfog = fmaxf(0.28f, 1.0f - (row_dist / 13.5f));
+                        char tch = core_jet ? (fire_lit ? '@' : 'o')
+                                 : (inner_ring ? (fire_lit ? '*' : 'O')
+                                 : (vane ? '+' : '#'));
+                        AsciiColor tcol;
+                        if (fire_lit) {
+                            tcol = core_jet ? scale_rgb(255.0f, 245.0f, 160.0f, tfog)
+                                 : (inner_ring ? scale_rgb(255.0f, 125.0f, 25.0f, tfog)
+                                 : (vane ? scale_rgb(245.0f, 80.0f, 20.0f, tfog)
+                                         : scale_rgb(175.0f, 55.0f, 25.0f, tfog)));
+                        } else {
+                            tcol = core_jet ? scale_rgb(225.0f, 105.0f, 35.0f, tfog)
+                                 : (inner_ring ? scale_rgb(170.0f, 85.0f, 40.0f, tfog)
+                                 : (vane ? scale_rgb(135.0f, 145.0f, 155.0f, tfog)
+                                         : scale_rgb(95.0f, 105.0f, 115.0f, tfog)));
+                        }
+                        set_cell(x, y, tch, tcol, bg_black);
+                        continue;
+                    }
+                } else if (map_is_medkit_tile(floor_raw)) {
+                    float fu_m = wx - floorf(wx);
+                    float fv_m = wy - floorf(wy);
+                    float dx_m = fabsf(fu_m - 0.5f);
+                    float dy_m = fabsf(fv_m - 0.5f);
+                    if (dx_m < 0.28f && dy_m < 0.28f) {
+                        float mf = fmaxf(0.32f, 1.0f - (row_dist / 13.5f));
+                        int active_kit = map_is_medkit_active_at(map, floor_mx, floor_my);
+                        int is_cross = (dx_m < 0.07f && dy_m < 0.20f) || (dy_m < 0.07f && dx_m < 0.20f);
+                        if (active_kit) {
+                            set_cell(x, y, is_cross ? '+' : '#',
+                                     is_cross ? scale_rgb(235.0f, 55.0f, 55.0f, mf)
+                                              : scale_rgb(240.0f, 245.0f, 250.0f, mf),
+                                     bg_black);
+                        } else {
+                            int on_edge = (dx_m > 0.21f || dy_m > 0.21f);
+                            set_cell(x, y, is_cross ? '+' : (on_edge ? '#' : '='),
+                                     is_cross ? scale_rgb(105.0f, 55.0f, 55.0f, mf)
+                                              : scale_rgb(95.0f, 105.0f, 118.0f, mf),
+                                     bg_black);
+                        }
+                        continue;
+                    }
+                }
                 float fu = wx - floorf(wx);
                 float fv = wy - floorf(wy);
                 int checker = (((int)floorf(wx) + (int)floorf(wy)) & 1);
@@ -515,9 +1258,129 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
     }
 }
 
+static void renderer_draw_hazards(const GameMap *map, const Player *player) {
+    if (!map || !player) {
+        return;
+    }
+    float vx = cam_view_ready ? cam_view_x : player->x;
+    float vy = cam_view_ready ? cam_view_y : player->y;
+    float vangle = cam_view_ready ? cam_view_angle : player->angle;
+    float scale_y = (float)r_height / 180.0f;
+    float pitch_cells = cam_pitch * scale_y;
+    float view_bob = cam_third_person ? 0.0f : (sinf(player->bob_phase * 2.0f) * 1.6f * walk_amp * scale_y);
+    float horizon_y = (float)r_height * 0.5f + pitch_cells + view_bob;
+    float time_now = IsWindowReady() ? (float)GetTime() : 0.0f;
+    AsciiColor bg_black = make_color(0, 0, 0);
+
+    for (int my = 0; my < map->height; my++) {
+        for (int mx = 0; mx < map->width; mx++) {
+            int is_fire = map_is_fire_active_at(map, mx, my);
+            int is_medkit = !is_fire && map_is_medkit_active_at(map, mx, my);
+            if (!is_fire && !is_medkit) {
+                continue;
+            }
+            float fx = (float)mx + 0.5f;
+            float fy = (float)my + 0.5f;
+            float dx = fx - vx;
+            float dy = fy - vy;
+            float dist = sqrtf(dx * dx + dy * dy);
+            if (dist < 0.18f || dist >= MAX_DEPTH) {
+                continue;
+            }
+            float angle = wrap_angle_signed(atan2f(dy, dx) - vangle);
+            if (fabsf(angle) > player->fov * 0.65f) {
+                continue;
+            }
+
+            int center_x = (int)((0.5f + angle / player->fov) * (float)r_width);
+            int bot_y = (int)floorf(horizon_y + (EYE_FLOOR_H * (float)r_height) / dist + 0.5f);
+            if (is_medkit) {
+                int box_h = (int)floorf((0.28f * (float)r_height) / dist + 0.5f);
+                if (box_h < 4) box_h = 4;
+                if (box_h > r_height) box_h = r_height;
+                int box_w = (int)floorf((float)box_h * 1.35f + 0.5f);
+                if (box_w < 5) box_w = 5;
+                if (box_w > r_width) box_w = r_width;
+                int top_y = bot_y - box_h + 1;
+                int left_x = center_x - box_w / 2;
+                int right_x = center_x + box_w / 2;
+                float mfog = fmaxf(0.32f, 1.0f - (dist / 14.0f));
+                AsciiColor c_box = scale_rgb(240.0f, 246.0f, 252.0f, mfog);
+                AsciiColor c_cross = scale_rgb(235.0f, 52.0f, 52.0f, mfog);
+                AsciiColor c_edge = scale_rgb(130.0f, 150.0f, 170.0f, mfog);
+                for (int sx = left_x; sx <= right_x; sx++) {
+                    if (sx < 0 || sx >= r_width || dist >= z_buffer[sx]) continue;
+                    float nx = (float)(sx - left_x) / (float)(box_w > 1 ? box_w : 1) * 2.0f - 1.0f;
+                    for (int sy = top_y; sy <= bot_y; sy++) {
+                        if (sy < 0 || sy >= r_height) continue;
+                        float ny = (float)(sy - top_y) / (float)(box_h > 1 ? box_h : 1) * 2.0f - 1.0f;
+                        int is_border = (fabsf(nx) > 0.80f || fabsf(ny) > 0.78f);
+                        int is_cross = (fabsf(nx) < 0.20f && fabsf(ny) < 0.58f) ||
+                                       (fabsf(ny) < 0.22f && fabsf(nx) < 0.52f);
+                        char mch = is_cross ? '+' : (is_border ? '#' : 'M');
+                        AsciiColor mcol = is_cross ? c_cross : (is_border ? c_edge : c_box);
+                        set_cell(sx, sy, mch, mcol, bg_black);
+                    }
+                }
+                continue;
+            }
+            /* Jato de labareda bem alto e ameacador (ate proximo ao teto). */
+            int flame_h = (int)floorf((1.20f * (float)r_height) / dist + 0.5f);
+            if (flame_h < 7) flame_h = 7;
+            if (flame_h > r_height) flame_h = r_height;
+            int flame_w = (int)floorf((float)flame_h * 0.58f + 0.5f);
+            if (flame_w < 5) flame_w = 5;
+            if (flame_w > r_width) flame_w = r_width;
+
+            int top_y = bot_y - flame_h + 1;
+            int left_x = center_x - flame_w / 2;
+            int right_x = center_x + flame_w / 2;
+            float seed = (float)(mx * 17 + my * 31);
+
+            for (int sx = left_x; sx <= right_x; sx++) {
+                if (sx < 0 || sx >= r_width || dist >= z_buffer[sx]) {
+                    continue;
+                }
+                float u = (float)(sx - left_x) / (float)(flame_w > 1 ? flame_w : 1);
+                float nx = u * 2.0f - 1.0f;
+                float tongue = 0.64f + 0.24f * sinf(u * 13.0f + time_now * 11.5f + seed)
+                                     + 0.12f * cosf(u * 23.0f - time_now * 16.0f + seed * 0.5f);
+                float max_h = (1.0f - powf(fabsf(nx), 1.45f) * 0.85f) * tongue;
+
+                for (int sy = top_y; sy <= bot_y; sy++) {
+                    if (sy < 0 || sy >= r_height) {
+                        continue;
+                    }
+                    float h_norm = (float)(bot_y - sy) / (float)(flame_h > 1 ? flame_h : 1);
+                    if (h_norm > max_h) {
+                        continue;
+                    }
+                    float flicker = 0.5f + 0.5f * sinf(time_now * 17.0f + nx * 7.5f - h_norm * 10.0f + seed);
+                    AsciiColor fcol;
+                    char fch;
+                    if (h_norm < 0.26f && fabsf(nx) < 0.42f) {
+                        fcol = make_color(255, 250, 185);
+                        fch = '@';
+                    } else if (h_norm < 0.62f) {
+                        fcol = make_color(255, (unsigned char)(95 + (int)(flicker * 85.0f)), 15);
+                        fch = flicker > 0.48f ? '#' : '*';
+                    } else {
+                        fcol = make_color((unsigned char)(200 + (int)(flicker * 45.0f)), 32, 10);
+                        fch = flicker > 0.55f ? '^' : '!';
+                    }
+                    set_cell(sx, sy, fch, fcol, bg_black);
+                }
+            }
+        }
+    }
+}
+
 void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, int count) {
     if (!player) {
         return;
+    }
+    if (ENEMY_SPRITE_PIPELINE_ENABLED && !enemy_sprite_pipeline_ready) {
+        enemy_sprite_pipeline_init();
     }
 
     float vx = cam_view_ready ? cam_view_x : player->x;
@@ -568,6 +1431,8 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
     }
 
     if (total_count <= 0) {
+        renderer_draw_hazards(cam_view_map, player);
+        renderer_draw_enemy_projectiles(player);
         return;
     }
 
@@ -593,6 +1458,13 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
         float dy = draw_list[i].y - vy;
         float dist = dists[i];
         int is_self = (draw_list[i].label == 'P');
+        const EnemyVisualDesign *visual_design = (!is_self && draw_list[i].label != 'O')
+            ? enemy_visual_design_for_label(draw_list[i].label) : NULL;
+        const EnemyDesign *enemy_design = (!is_self && draw_list[i].label != 'O')
+            ? enemy_design_for_label(draw_list[i].label) : NULL;
+        const EnemySpriteCache *sprite_cache =
+            (ENEMY_SPRITE_PIPELINE_ENABLED && !is_self && draw_list[i].label != 'O')
+                ? enemy_sprite_cache_for_label(draw_list[i].label) : NULL;
 
         float sprite_angle = wrap_angle_signed(atan2f(dy, dx) - vangle);
         if (fabsf(sprite_angle) > player->fov * 0.65f) {
@@ -612,16 +1484,33 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
 
         int center_x = (int)((0.5f + sprite_angle / player->fov) * (float)r_width);
         int bot_y = (int)floorf(horizon_y + (EYE_FLOOR_H * (float)r_height) / dist + 0.5f);
-        int sprite_h = (int)floorf((0.78f * (float)r_height) / dist + 0.5f);
-        if (sprite_h < 8) sprite_h = 8;
+        float design_height_scale = visual_design
+            ? (REDESIGN_IMP_HEIGHT_SCALE * visual_design->world_height)
+            : (enemy_design ? enemy_design->height_scale : 1.0f);
+        int sprite_h = (int)floorf((0.78f * (float)r_height) / dist *
+                                   design_height_scale + 0.5f);
+        int min_sprite_h = (visual_design || enemy_design) ? 6 : 8;
+        if (sprite_h < min_sprite_h) sprite_h = min_sprite_h;
         if (sprite_h > r_height) sprite_h = r_height;
 
-        int sprite_w = (sprite_h * 5) / 8;
-        if (sprite_w < 6) sprite_w = 6;
+        int sprite_w = visual_design
+            ? (int)floorf((float)sprite_h * visual_design->width_ratio + 0.5f)
+            : (enemy_design
+            ? (int)floorf((float)sprite_h * enemy_design->width_ratio + 0.5f)
+            : (sprite_h * 5) / 8);
+        int min_sprite_w = (visual_design || enemy_design) ? 4 : 6;
+        if (sprite_w < min_sprite_w) sprite_w = min_sprite_w;
+        if (sprite_w > r_width) sprite_w = r_width;
 
         int top_y = bot_y - sprite_h + 1;
         int left_x = center_x - sprite_w / 2;
         int right_x = center_x + sprite_w / 2;
+        const EnemyRenderCell *sprite_pixels = NULL;
+        int texture_width = 0, texture_height = 0, texture_stride = 0;
+        if (sprite_cache) {
+            sprite_pixels = enemy_select_sprite_mip(sprite_cache, sprite_w, sprite_h,
+                &texture_width, &texture_height, &texture_stride);
+        }
 
         float fog = 1.0f - (dist / 14.5f);
         if (fog < 0.24f) fog = 0.24f;
@@ -649,6 +1538,126 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
                         Color color = character_color(mat);
                         set_cell(sx, sy, mat == 3 ? '@' : '#',
                                  scale_rgb(color.r, color.g, color.b, fog), bg_black);
+                    }
+                    continue;
+                }
+                if (sprite_pixels) {
+                    EnemyRenderCell pixel = enemy_sample_sprite_mip(sprite_pixels,
+                        texture_width, texture_height, texture_stride, u, v,
+                        sprite_w, sprite_h);
+                    if (!pixel.glyph) continue;
+
+                    int source_x = (int)(u * (float)sprite_cache->source_width);
+                    int source_y = (int)(v * (float)sprite_cache->source_height);
+                    if (source_x >= sprite_cache->source_width) {
+                        source_x = sprite_cache->source_width - 1;
+                    }
+                    if (source_y >= sprite_cache->source_height) {
+                        source_y = sprite_cache->source_height - 1;
+                    }
+
+                    int shooting = draw_list[i].shooting;
+                    int is_imp = draw_list[i].label == 'M';
+                    if (is_imp && shooting && source_y == 7 && source_x == 8) {
+                        AsciiColor fireball = make_color(255, 160, 40);
+                        float sprite_fog = fog < 0.65f ? 0.65f : fog;
+                        set_cell(sx, sy, '@',
+                                 scale_rgb(fireball.r, fireball.g, fireball.b, sprite_fog), bg_black);
+                        continue;
+                    }
+
+                    char glyph = pixel.glyph;
+                    AsciiColor color = pixel.color;
+                    int effect = shooting && visual_design &&
+                                 pixel.token == visual_design->effect_token;
+                    int muzzle_flash = shooting && !is_imp &&
+                        source_y == sprite_cache->source_height / 2 &&
+                        source_x >= sprite_cache->source_width - 2;
+                    if (effect) {
+                        color = visual_design->effect_color;
+                    } else if (muzzle_flash) {
+                        glyph = '*';
+                        color = make_color(255, 245, 80);
+                    } else if (shooting && is_imp &&
+                               (pixel.token == 'B' || pixel.token == 'D')) {
+                        color = scale_rgb(color.r, color.g, color.b, 1.25f);
+                    } else if (shooting && visual_design &&
+                               visual_design->styles[(unsigned char)pixel.token].brighten) {
+                        color = scale_rgb(color.r, color.g, color.b, 1.25f);
+                    }
+
+                    float sprite_fog = fog < 0.65f ? 0.65f : fog;
+                    set_cell(sx, sy, glyph,
+                             scale_rgb(color.r, color.g, color.b, sprite_fog), bg_black);
+                    continue;
+                }
+                if (visual_design) {
+                    int art_x = (int)(u * (float)visual_design->width);
+                    int art_y = (int)(v * (float)visual_design->height);
+                    float enemy_fog = fog < 0.65f ? 0.65f : fog;
+                    if (art_x >= visual_design->width) art_x = visual_design->width - 1;
+                    if (art_y >= visual_design->height) art_y = visual_design->height - 1;
+                    char token = visual_design->rows[art_y][art_x];
+                    if (token == '.') continue;
+
+                    EnemyArtStyle style = visual_design->styles[(unsigned char)token];
+                    if (!style.glyph) continue;
+
+                    int shooting = draw_list[i].shooting;
+                    int effect = shooting && token == visual_design->effect_token;
+                    int muzzle_flash = shooting &&
+                        art_y == visual_design->height / 2 &&
+                        art_x >= visual_design->width - 2;
+                    if (effect) {
+                        style.color = visual_design->effect_color;
+                    } else if (muzzle_flash) {
+                        style.glyph = '*';
+                        style.color = make_color(255, 245, 80);
+                    } else if (shooting && style.brighten) {
+                        style.color = scale_rgb(style.color.r, style.color.g,
+                                                style.color.b, 1.25f);
+                    }
+
+                    set_cell(sx, sy, style.glyph,
+                             scale_rgb(style.color.r, style.color.g, style.color.b,
+                                       enemy_fog), bg_black);
+                    continue;
+                }
+                if (enemy_design) {
+                    int art_x = (int)(u * ENEMY_ART_WIDTH);
+                    int is_imp = draw_list[i].label == 'M';
+                    int art_height = is_imp ? ENEMY_ART_MAX_HEIGHT : ENEMY_ART_HEIGHT;
+                    int art_y = (int)(v * (float)art_height);
+                    float enemy_fog = fog < 0.65f ? 0.65f : fog;
+                    if (art_x >= ENEMY_ART_WIDTH) art_x = ENEMY_ART_WIDTH - 1;
+                    if (art_y >= art_height) art_y = art_height - 1;
+                    char token = enemy_design->rows[art_y][art_x];
+                    char glyph = is_imp ? imp_art_glyph(token) : token;
+                    int color_index = is_imp
+                        ? imp_art_color_index(token) : enemy_art_color_index(token);
+                    int imp_fireball = is_imp && draw_list[i].shooting &&
+                        art_y == 7 && art_x == 8;
+                    if (imp_fireball) {
+                        AsciiColor fireball = make_color(255, 160, 40);
+                        set_cell(sx, sy, '@',
+                                 scale_rgb(fireball.r, fireball.g, fireball.b, enemy_fog), bg_black);
+                        continue;
+                    }
+                    int muzzle_flash = !is_imp && draw_list[i].shooting &&
+                        art_y == ENEMY_ART_HEIGHT / 2 &&
+                        art_x >= ENEMY_ART_WIDTH - 2;
+                    if (muzzle_flash) {
+                        AsciiColor flash = make_color(255, 245, 80);
+                        set_cell(sx, sy, '*',
+                                 scale_rgb(flash.r, flash.g, flash.b, enemy_fog), bg_black);
+                    } else if (color_index >= 0) {
+                        AsciiColor color = enemy_design->palette[color_index];
+                        if (is_imp && draw_list[i].shooting &&
+                            (token == 'B' || token == 'D')) {
+                            color = scale_rgb(color.r, color.g, color.b, 1.25f);
+                        }
+                        set_cell(sx, sy, glyph,
+                                 scale_rgb(color.r, color.g, color.b, enemy_fog), bg_black);
                     }
                     continue;
                 }
@@ -752,13 +1761,14 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
                         cr = 255.0f; cg = 230.0f; cb = 85.0f;
                     } else if (is_self) {
                         cr = 95.0f; cg = 225.0f; cb = 255.0f;
+                    } else if (draw_list[i].label == 'O') {
+                        cr = 95.0f; cg = 195.0f; cb = 245.0f;
                     } else {
                         cr = 255.0f; cg = 145.0f; cb = 55.0f;
                     }
                 } else if (hit_part == 3) {
                     cr = 105.0f; cg = 120.0f; cb = 145.0f;
                 } else {
-                    /* Diferencia jogador local ('P'), remoto ('O') e inimigo ('X') */
                     if (is_self) {
                         cr = 165.0f; cg = 185.0f; cb = 212.0f;
                     } else if (draw_list[i].label == 'O') {
@@ -773,6 +1783,8 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
             }
         }
     }
+    renderer_draw_hazards(cam_view_map, player);
+    renderer_draw_enemy_projectiles(player);
 }
 
 /* Projecao de efeitos na mesma grade e camera do raycasting. */
@@ -790,6 +1802,64 @@ static int project_effect(const Player *p, float x, float y, float height,
     *sy=(int)(r_height*0.5f + cam_pitch*((float)r_height/180) + bob + (EYE_FLOOR_H-height)*r_height/dist);
     *depth=dist;
     return *sx>=0 && *sx<r_width && dist<z_buffer[*sx];
+}
+
+static void renderer_draw_enemy_projectiles(const Player *player) {
+    const EnemyProjectile *projectiles = enemies_projectile_pool();
+    AsciiColor black = make_color(0, 0, 0);
+
+    for (int i = 0; i < MAX_ENEMY_PROJECTILES; i++) {
+        const EnemyProjectile *projectile = &projectiles[i];
+        if (!projectile->active) continue;
+
+        float height = projectile->kind == ENEMY_PROJECTILE_ARROW ? 0.32f : 0.46f;
+        int sx, sy;
+        float depth;
+        if (!project_effect(player, projectile->x, projectile->y, height,
+                            &sx, &sy, &depth)) {
+            continue;
+        }
+
+        if (projectile->kind == ENEMY_PROJECTILE_ARROW) {
+            float angle = atan2f(projectile->dy, projectile->dx);
+            float view_angle = cam_view_ready ? cam_view_angle : player->angle;
+            float horizontal = sinf(wrap_angle_signed(angle - view_angle));
+            char arrow = horizontal > 0.18f ? '>' : (horizontal < -0.18f ? '<' : '^');
+            int tail_x = arrow == '>' ? -1 : (arrow == '<' ? 1 : 0);
+            int tail_y = arrow == '^' ? 1 : 0;
+            set_cell(sx, sy, arrow, make_color(255, 245, 115), black);
+            for (int trail = 1; trail <= 2; trail++) {
+                int px = sx + tail_x * trail;
+                int py = sy + tail_y * trail;
+                if (px >= 0 && px < r_width && depth < z_buffer[px]) {
+                    set_cell(px, py, trail == 1 ? '-' : '.',
+                             trail == 1 ? make_color(255, 185, 55) : make_color(220, 115, 30),
+                             black);
+                }
+            }
+        } else {
+            /* Keep energy and fire orbs readable at medium range. */
+            int radius = (int)(r_height * (projectile->kind == ENEMY_PROJECTILE_FIREBALL
+                ? 0.10f : 0.09f) / depth);
+            if (radius < 3) radius = 3;
+            if (radius > 16) radius = 16;
+
+            AsciiColor core = projectile->kind == ENEMY_PROJECTILE_FIREBALL
+                ? make_color(255, 180, 45) : make_color(155, 255, 255);
+            AsciiColor edge = projectile->kind == ENEMY_PROJECTILE_FIREBALL
+                ? make_color(255, 55, 10) : make_color(20, 150, 255);
+            for (int y = -radius; y <= radius; y++) {
+                for (int x = -radius; x <= radius; x++) {
+                    float d = (float)(x * x + y * y) / (float)(radius * radius);
+                    int px = sx + x;
+                    if (d > 1.0f || px < 0 || px >= r_width || depth >= z_buffer[px]) continue;
+                    char glyph = d > 0.55f ? '*' :
+                        (projectile->kind == ENEMY_PROJECTILE_FIREBALL ? '@' : 'O');
+                    set_cell(px, sy + y, glyph, d > 0.55f ? edge : core, black);
+                }
+            }
+        }
+    }
 }
 
 void renderer_draw_ability_effects(const Player *p) {
@@ -1015,8 +2085,18 @@ void renderer_draw_minimap(const GameMap *map, const Player *player,
         for (int x = 0; x < map->width; x++) {
             char tile = map_get_tile(map, x, y);
             int is_w = map_is_wall(map, x, y);
-            char gch = is_w ? tile : '=';
-            AsciiColor col = is_w ? get_tile_base_color(tile) : mm_floor;
+            char gch = '=';
+            AsciiColor col = mm_floor;
+            if (is_w) {
+                gch = tile;
+                col = get_tile_base_color(tile);
+            } else if (map_is_fire_active_minimap(map, x, y)) {
+                gch = '^';
+                col = make_color(255, 160, 20);
+            } else if (map_is_medkit_active_minimap(map, x, y)) {
+                gch = '+';
+                col = make_color(185, 255, 205);
+            }
 
             for (int sy = 0; sy < scale; sy++) {
                 for (int sx = 0; sx < scale; sx++) {

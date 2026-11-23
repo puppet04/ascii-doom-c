@@ -1,6 +1,7 @@
 #include "entities.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static float wrap_angle(float a) {
@@ -48,21 +49,103 @@ void weapons_init_defaults(Weapon out_weapons[MAX_WEAPONS]) {
     }
 }
 
+typedef struct {
+    const char *name;
+    char symbol;
+    int health;
+    float speed;
+    int damage;
+    EnemyAttackKind attack_kind;
+    float attack_range;
+    float attack_cooldown;
+    float aggro_range;
+    float precision;
+    EnemyProjectileKind projectile_kind;
+    EnemyProjectilePath projectile_path;
+    float projectile_speed;
+    float projectile_turn_rate;
+} EnemyStats;
+
+/* Projeteis: flecha 6, bola 3.1 e orbe 2.2; cerca de 40% mais lentos. */
+/* Precision is retained for compatibility with manually configured hitscan enemies. */
+static const EnemyStats ENEMY_STATS[ENEMY_TYPE_COUNT] = {
+    {"Z legado",       'Z',  45, 1.00f,  6, ENEMY_ATTACK_MELEE,      0.85f, 1.80f,  7.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Hitscan de medio alcance para diferenciar dos atacantes corpo a corpo. */
+    {"D legado",       'D',  95, 1.50f,  9, ENEMY_ATTACK_HITSCAN,    6.50f, 2.10f, 10.0f, 0.78f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"I legado",       'I',  65, 2.10f,  7, ENEMY_ATTACK_MELEE,      0.95f, 1.40f,  9.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Arma: bola de fogo oscilante de medio alcance e dano moderado. */
+    {"Imp",            'M',  70, 1.20f,  8, ENEMY_ATTACK_PROJECTILE, 8.00f, 1.75f, 10.0f, 0.95f, ENEMY_PROJECTILE_FIREBALL,   ENEMY_PROJECTILE_WAVERING,  3.1f, 0.9f},
+    /* Ataque: investida veloz de curta distancia. */
+    {"Pinky",          'Y',  85, 2.40f, 10, ENEMY_ATTACK_MELEE,      1.20f, 1.50f, 10.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Arma: orbe de energia teleguiado, tanque lento de longo alcance. */
+    {"Cacodemon",      'C', 220, 0.90f, 14, ENEMY_ATTACK_PROJECTILE,10.50f, 3.60f, 12.5f, 0.75f, ENEMY_PROJECTILE_ENERGY_ORB, ENEMY_PROJECTILE_HOMING,    2.2f, 1.1f},
+    /* Ataque: golpe brutal de maos nuas, muito lento e devastador. */
+    {"Baron of Hell",  'B', 340, 0.75f, 24, ENEMY_ATTACK_MELEE,      1.60f, 4.50f,  9.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Arma: sniper fragil com flecha reta veloz e dano alto. */
+    {"Soldado Kushan", 'K',  40, 1.10f, 11, ENEMY_ATTACK_PROJECTILE, 9.50f, 2.40f, 11.5f, 0.90f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  6.0f, 0.0f},
+    /* Arma: clava pesada; alcance estendido compensa a lentidao extrema. */
+    {"Troll",          'T', 290, 0.70f, 18, ENEMY_ATTACK_MELEE,      2.05f, 4.00f,  8.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Ataque: sequencia frenetica de garras, dano baixo por golpe e recarga minima. */
+    {"Apostolo",       'A', 120, 2.60f,  5, ENEMY_ATTACK_MELEE,      1.05f, 0.85f,  9.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Ataque: garra de mini-chefe implacavel. */
+    {"Zodd",           'Q', 600, 1.50f, 28, ENEMY_ATTACK_MELEE,      1.90f, 4.80f, 12.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f}
+};
+
+static EnemyProjectile enemy_projectiles[MAX_ENEMY_PROJECTILES];
+static float g_fire_damage_acc = 0.0f;
+static float g_fire_burn_timer = 0.0f;
+
+const EnemyProjectile *enemies_projectile_pool(void) {
+    return enemy_projectiles;
+}
+
+static const EnemyStats *enemy_stats_for_type(EnemyType type) {
+    if ((int)type < 0 || type >= ENEMY_TYPE_COUNT) {
+        return &ENEMY_STATS[ENEMY_LEGACY_Z];
+    }
+    return &ENEMY_STATS[type];
+}
+
+static Enemy enemy_create(EnemyType type, float x, float y) {
+    const EnemyStats *stats = enemy_stats_for_type(type);
+    Enemy enemy = {0};
+    enemy.active = 1;
+    enemy.x = x;
+    enemy.y = y;
+    enemy.health = stats->health;
+    enemy.max_health = stats->health;
+    enemy.damage = stats->damage;
+    enemy.speed = stats->speed;
+    enemy.symbol = stats->symbol;
+    enemy.type = type;
+    enemy.attack_kind = stats->attack_kind;
+    enemy.attack_range = stats->attack_range;
+    enemy.attack_cooldown = stats->attack_cooldown;
+    enemy.aggro_range = stats->aggro_range;
+    return enemy;
+}
+
 void enemies_init_defaults(EnemyManager *mgr) {
     if (!mgr) {
         return;
     }
 
     memset(mgr, 0, sizeof(*mgr));
+    memset(enemy_projectiles, 0, sizeof(enemy_projectiles));
+    g_fire_damage_acc = 0.0f;
+    g_fire_burn_timer = 0.0f;
+}
 
-    /* Inimigos base prontos para serem expandidos no modulo */
-    mgr->enemies[0] = (Enemy){1, 7.5f,  4.5f, 60,  60,  10, 1.4f, 'Z', 0.0f};
-    mgr->enemies[1] = (Enemy){1, 11.5f, 7.5f, 100, 100, 15, 1.8f, 'D', 0.0f};
-    mgr->enemies[2] = (Enemy){1, 8.5f, 12.5f, 80,  80,  12, 1.6f, 'I', 0.0f};
-    mgr->enemies[3] = (Enemy){1, 4.5f, 7.5f, 60, 60, 10, 1.2f, 'Z', 0};
-    mgr->enemies[4] = (Enemy){1, 12.5f, 12.5f, 80, 80, 12, 1.3f, 'I', 0};
-    mgr->enemies[5] = (Enemy){1, 10.5f, 4.5f, 60, 60, 10, 1.4f, 'Z', 0};
-    mgr->count = 6;
+static int enemy_type_from_symbol(char symbol, EnemyType *out_type) {
+    for (int i = 0; i < ENEMY_TYPE_COUNT; i++) {
+        if (ENEMY_STATS[i].symbol == symbol) {
+            if (out_type) {
+                *out_type = (EnemyType)i;
+            }
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int enemies_alive(const EnemyManager *mgr) {
@@ -72,21 +155,24 @@ int enemies_alive(const EnemyManager *mgr) {
 }
 
 void enemies_spawn_wave(EnemyManager *mgr, const GameMap *map, const Player *p) {
+    if (!mgr) {
+        return;
+    }
+
     enemies_init_defaults(mgr);
-    for (int i = 0; i < mgr->count; i++) {
-        Enemy *e = &mgr->enemies[i];
-        float dx = e->x-p->x, dy = e->y-p->y;
-        if (!map_is_wall(map, (int)e->x, (int)e->y) && dx*dx+dy*dy >= 12.25f) continue;
-        e->active = 0;
-        for (int y = 1; y < map->height-1 && !e->active; y++) {
-            for (int x = 1; x < map->width-1 && !e->active; x++) {
-                dx = x+0.5f-p->x; dy = y+0.5f-p->y;
-                if (map_is_wall(map,x,y) || dx*dx+dy*dy < 12.25f) continue;
-                int occupied = 0;
-                for (int j = 0; j < mgr->count; j++)
-                    if (j != i && mgr->enemies[j].active && (int)mgr->enemies[j].x == x && (int)mgr->enemies[j].y == y) occupied=1;
-                if (!occupied) { e->x=x+0.5f; e->y=y+0.5f; e->active=1; }
+    if (!map) {
+        return;
+    }
+    (void)p;
+
+    for (int y = 0; y < map->height && mgr->count < MAX_ENEMIES; y++) {
+        for (int x = 0; x < map->width && mgr->count < MAX_ENEMIES; x++) {
+            char tile = map_get_raw_tile(map, x, y);
+            EnemyType type;
+            if (!enemy_type_from_symbol(tile, &type)) {
+                continue;
             }
+            mgr->enemies[mgr->count++] = enemy_create(type, (float)x + 0.5f, (float)y + 0.5f);
         }
     }
 }
@@ -98,6 +184,87 @@ static void damage_enemy(Enemy *e, Player *p, int damage) {
         e->health = 0;
         e->active = 0;
         player_register_kill(p, e->x, e->y);
+    }
+}
+
+static int enemy_spawn_projectile(const Enemy *enemy, const Player *player,
+                                  const EnemyStats *stats) {
+    int slot = -1;
+    for (int i = 0; i < MAX_ENEMY_PROJECTILES; i++) {
+        if (!enemy_projectiles[i].active) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) return 0;
+
+    float dx = player->x - enemy->x;
+    float dy = player->y - enemy->y;
+    float distance = sqrtf(dx * dx + dy * dy);
+    if (distance < 0.001f) return 0;
+
+    EnemyProjectile *projectile = &enemy_projectiles[slot];
+    projectile->active = 1;
+    projectile->x = enemy->x + dx / distance * 0.35f;
+    projectile->y = enemy->y + dy / distance * 0.35f;
+    projectile->dx = dx / distance;
+    projectile->dy = dy / distance;
+    projectile->speed = stats->projectile_speed;
+    projectile->turn_rate = stats->projectile_turn_rate;
+    projectile->damage = enemy->damage;
+    projectile->kind = stats->projectile_kind;
+    projectile->path = stats->projectile_path;
+    return 1;
+}
+
+static void enemy_projectiles_update(const GameMap *map, Player *player, float dt) {
+    for (int i = 0; i < MAX_ENEMY_PROJECTILES; i++) {
+        EnemyProjectile *projectile = &enemy_projectiles[i];
+        if (!projectile->active) continue;
+
+        int steps = (int)ceilf(projectile->speed * dt / 0.08f);
+        if (steps < 1) steps = 1;
+        if (steps > 128) steps = 128;
+        float step_dt = dt / (float)steps;
+        float hit_radius = projectile->kind == ENEMY_PROJECTILE_ARROW ? 0.12f : 0.30f;
+
+        for (int step = 0; step < steps && projectile->active; step++) {
+            if (projectile->path == ENEMY_PROJECTILE_HOMING) {
+                float target_angle = atan2f(player->y - projectile->y,
+                                            player->x - projectile->x);
+                float current_angle = atan2f(projectile->dy, projectile->dx);
+                float angle_delta = wrap_angle(target_angle - current_angle);
+                float max_turn = projectile->turn_rate * step_dt;
+                if (angle_delta > max_turn) angle_delta = max_turn;
+                if (angle_delta < -max_turn) angle_delta = -max_turn;
+                float angle = current_angle + angle_delta;
+                projectile->dx = cosf(angle);
+                projectile->dy = sinf(angle);
+            } else if (projectile->path == ENEMY_PROJECTILE_WAVERING) {
+                float angle = projectile->turn_rate * sinf(projectile->age * 6.0f) * step_dt;
+                float dx = projectile->dx * cosf(angle) - projectile->dy * sinf(angle);
+                projectile->dy = projectile->dx * sinf(angle) + projectile->dy * cosf(angle);
+                projectile->dx = dx;
+            }
+
+            projectile->x += projectile->dx * projectile->speed * step_dt;
+            projectile->y += projectile->dy * projectile->speed * step_dt;
+            projectile->age += step_dt;
+
+            if (map_is_wall(map, (int)floorf(projectile->x), (int)floorf(projectile->y)) ||
+                projectile->age >= 12.0f) {
+                projectile->active = 0;
+                break;
+            }
+
+            float dx = player->x - projectile->x;
+            float dy = player->y - projectile->y;
+            float collision_radius = hit_radius + PLAYER_RADIUS;
+            if (dx * dx + dy * dy <= collision_radius * collision_radius) {
+                player_take_damage(player, projectile->damage);
+                projectile->active = 0;
+            }
+        }
     }
 }
 
@@ -129,16 +296,74 @@ void enemies_update_fireball(EnemyManager *mgr, const GameMap *map, Player *p, f
     if (s->fireball_time <= 0) s->fireball_active=0;
 }
 
+static void update_map_fire_hazards(const GameMap *map, Player *player, float dt) {
+    map_update_traps(dt);
+
+    const float r = 0.18f;
+    const float offsets[5][2] = {
+        {0.0f, 0.0f}, {r, 0.0f}, {-r, 0.0f}, {0.0f, r}, {0.0f, -r}
+    };
+    int in_fire = 0;
+
+    for (int k = 0; k < 5; k++) {
+        int cx = (int)floorf(player->x + offsets[k][0]);
+        int cy = (int)floorf(player->y + offsets[k][1]);
+        char raw = map_get_raw_tile(map, cx, cy);
+        if (map_is_trap_tile(raw)) {
+            map_trigger_trap(cx, cy);
+        }
+        if (map_is_fire_active_at(map, cx, cy)) {
+            in_fire = 1;
+        }
+        if (map_try_collect_medkit(map, cx, cy)) {
+            int max_hp = player->max_health > 0 ? player->max_health : 100;
+            player->health += 20;
+            if (player->health > max_hp) {
+                player->health = max_hp;
+            }
+        }
+    }
+
+    if (in_fire) {
+        g_fire_burn_timer = 1.0f;
+    } else if (g_fire_burn_timer > 0.0f) {
+        g_fire_burn_timer -= dt;
+        if (g_fire_burn_timer < 0.0f) {
+            g_fire_burn_timer = 0.0f;
+        }
+    }
+
+    if (in_fire || g_fire_burn_timer > 0.0f) {
+        g_fire_damage_acc += 10.0f * dt;
+        int dmg = (int)g_fire_damage_acc;
+        if (dmg > 0) {
+            g_fire_damage_acc -= (float)dmg;
+            player_take_damage(player, dmg);
+        }
+    } else {
+        g_fire_damage_acc = 0.0f;
+    }
+}
+
 void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float dt) {
     if (!mgr || !map || !player || dt <= 0.0f || player->health <= 0) {
         return;
     }
+
+    enemy_projectiles_update(map, player, dt);
+    update_map_fire_hazards(map, player, dt);
 
     for (int i = 0; i < mgr->count; i++) {
         Enemy *e = &mgr->enemies[i];
         if (!e->active) {
             continue;
         }
+
+        const EnemyStats *stats = enemy_stats_for_type(e->type);
+        float attack_range = e->attack_range > 0.0f ? e->attack_range : stats->attack_range;
+        float attack_cooldown = e->attack_cooldown > 0.0f
+            ? e->attack_cooldown : stats->attack_cooldown;
+        float aggro_range = e->aggro_range > 0.0f ? e->aggro_range : stats->aggro_range;
 
         if (e->attack_timer > 0.0f) {
             e->attack_timer -= dt;
@@ -148,9 +373,17 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
         float dx = player->x - e->x;
         float dy = player->y - e->y;
         float dist = sqrtf(dx * dx + dy * dy);
+        float preferred_distance = (e->attack_kind == ENEMY_ATTACK_HITSCAN ||
+                                    e->attack_kind == ENEMY_ATTACK_PROJECTILE)
+            ? attack_range * 0.8f : attack_range;
 
-        if (dist > 0.85f && dist < 9.0f) {
-            float step = e->speed * dt;
+        if (dist > preferred_distance && dist < aggro_range) {
+            float move_speed = e->speed;
+            if ((e->type == ENEMY_DOOM_PINKY || e->type == ENEMY_BERSERK_APOSTLE) &&
+                dist <= 3.2f) {
+                move_speed *= e->type == ENEMY_DOOM_PINKY ? 2.2f : 1.9f;
+            }
+            float step = fminf(move_speed * dt, dist - preferred_distance);
             float nx = e->x + (dx / dist) * step;
             float ny = e->y + (dy / dist) * step;
 
@@ -160,10 +393,23 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
             if (!map_is_wall(map, (int)floorf(e->x), (int)floorf(ny))) {
                 e->y = ny;
             }
-        } else if (dist <= 0.85f && e->attack_timer <= 0.0f &&
-                   has_line_of_sight(map, player->x, player->y, e->x, e->y)) {
-            player_take_damage(player, e->damage);
-            e->attack_timer = 1.0f;
+        }
+
+        if (dist <= attack_range && e->attack_timer <= 0.0f &&
+            has_line_of_sight(map, player->x, player->y, e->x, e->y)) {
+            if (e->attack_kind == ENEMY_ATTACK_PROJECTILE) {
+                (void)enemy_spawn_projectile(e, player, stats);
+            } else if (e->attack_kind == ENEMY_ATTACK_HITSCAN) {
+                float distance_factor = 1.0f - 0.6f * dist / attack_range;
+                float hit_chance = stats->precision * fmaxf(0.0f, distance_factor);
+                float roll = (float)rand() / ((float)RAND_MAX + 1.0f);
+                if (roll < hit_chance) {
+                    player_take_damage(player, e->damage);
+                }
+            } else {
+                player_take_damage(player, e->damage);
+            }
+            e->attack_timer = attack_cooldown;
         }
     }
 }
@@ -202,7 +448,10 @@ int enemies_check_hit(EnemyManager *mgr, const GameMap *map,
 
     if (best_idx >= 0) {
         Enemy *target = &mgr->enemies[best_idx];
-        damage_enemy(target, player, berserk ? target->health : player_attack_damage(player, weapon->damage) * multiplier);
+        /* Berserk hits hard, but a single swing must not erase a boss. */
+        damage_enemy(target, player, berserk
+            ? player_attack_damage(player, weapon->damage) * 4
+            : player_attack_damage(player, weapon->damage) * multiplier);
         return 1;
     }
 
