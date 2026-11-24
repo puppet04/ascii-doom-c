@@ -3557,7 +3557,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         map_begin_enemy_spawn();
         enemies_spawn_wave(&enemies, &map, &player);
         map_end_enemy_spawn();
-        map_set_enemies_alive(enemies_alive(&enemies));
+        map_set_enemies_alive(enemies_required_alive(&enemies));
     }
     float wave_timer = 3.0f;
 
@@ -3668,7 +3668,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
             if (!is_pvp) {
                 enemies_update_fireball(&enemies, &map, &player, dt);
                 enemies_update(&enemies, &map, &player, dt);
-                int alive = map_set_enemies_alive(enemies_alive(&enemies));
+                int alive = map_set_enemies_alive(enemies_required_alive(&enemies));
                 if (!is_multiplayer) {
                     if (map_has_exit_tile(&map) && alive == 0) {
                         wave_timer = 3.0f;
@@ -3678,7 +3678,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
                         map_begin_enemy_spawn();
                         enemies_spawn_wave(&enemies, &map, &player);
                         map_end_enemy_spawn();
-                        map_set_enemies_alive(enemies_alive(&enemies));
+                        map_set_enemies_alive(enemies_required_alive(&enemies));
                         wave_timer = 3.0f;
                     } else if (nav < 0) {
                         snprintf(err_buf, err_size,
@@ -3691,7 +3691,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
                             map_begin_enemy_spawn();
                             enemies_spawn_wave(&enemies, &map, &player);
                             map_end_enemy_spawn();
-                            map_set_enemies_alive(enemies_alive(&enemies));
+                            map_set_enemies_alive(enemies_required_alive(&enemies));
                             wave_timer = 3.0f;
                         }
                     }
@@ -3701,7 +3701,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
                         map_begin_enemy_spawn();
                         enemies_spawn_wave(&enemies, &map, &player);
                         map_end_enemy_spawn();
-                        map_set_enemies_alive(enemies_alive(&enemies));
+                        map_set_enemies_alive(enemies_required_alive(&enemies));
                         wave_timer = 3.0f;
                     }
                 }

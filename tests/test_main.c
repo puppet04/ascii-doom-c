@@ -650,13 +650,41 @@ static void test_medkit_and_traps(void) {
     p.x = 1.5f;
     p.y = 1.5f;
     int hp_after_exit = p.health;
-    enemies_update(&mgr, &map, &p, 0.5f);
-    ASSERT_TRUE(p.health == hp_after_exit - 5, "Mecanica de burn aplica dano por 1.0s apos sair da chama");
+    enemies_update(&mgr, &map, &p, 0.3f);
+    ASSERT_TRUE(p.health == hp_after_exit - 3, "Mecanica de burn aplica dano por 0.5s apos sair da chama");
     enemies_update(&mgr, &map, &p, 3.0f);
     ASSERT_TRUE(map_is_fire_active_at(&map, 2, 3) == 0, "Armadilha '^' volta a desativar/nao mostrar apos expirar");
     int hp_after_burn = p.health;
     enemies_update(&mgr, &map, &p, 1.0f);
-    ASSERT_TRUE(p.health == hp_after_burn, "Burn encerra apos 1.0s fora da chama");
+    ASSERT_TRUE(p.health == hp_after_burn, "Burn encerra apos 0.5s fora da chama");
+
+    /* 4 caracteres reservados para proximos inimigos (U, V, W, X) -> Zodd opcional para saida */
+    map_init_default(&map);
+    map.tiles[2][2] = 'U';
+    map.tiles[2][3] = 'V';
+    map.tiles[2][4] = 'W';
+    map.tiles[2][5] = 'X';
+    map.tiles[2][6] = 'E';
+    ASSERT_TRUE(map_is_wall(&map, 2, 2) == 0 && map_is_wall(&map, 3, 2) == 0 &&
+                map_is_wall(&map, 4, 2) == 0 && map_is_wall(&map, 5, 2) == 0,
+                "Caracteres U, V, W, X sao atravessaveis como spawn de inimigo");
+    enemies_spawn_wave(&mgr, &map, &p);
+    int all_zodd_optional = (mgr.count == 4);
+    for (int i = 0; i < mgr.count; i++) {
+        if (mgr.enemies[i].type != ENEMY_BERSERK_ZODD || !mgr.enemies[i].optional_for_exit) {
+            all_zodd_optional = 0;
+        }
+    }
+    ASSERT_TRUE(all_zodd_optional, "U, V, W, X spawnam como Zodd opcionais para a saida");
+    ASSERT_TRUE(enemies_alive(&mgr) == 4 && enemies_required_alive(&mgr) == 0,
+                "Inimigos U, V, W, X vivos nao contam como obrigatorios");
+    ASSERT_TRUE(map_are_enemies_alive() == 0 && map_is_wall(&map, 6, 2) == 0,
+                "Saida 'E' abre mesmo com inimigos U, V, W, X vivos");
+
+    map.tiles[3][2] = 'Z';
+    enemies_spawn_wave(&mgr, &map, &p);
+    ASSERT_TRUE(enemies_required_alive(&mgr) == 1 && map_are_enemies_alive() == 1 && map_is_wall(&map, 6, 2) == 1,
+                "Inimigo obrigatorio 'Z' continua bloqueando a saida 'E'");
 }
 
 int main(void) {

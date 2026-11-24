@@ -80,6 +80,7 @@ typedef struct {
     float attack_range;
     float attack_cooldown;
     float aggro_range;
+    int optional_for_exit;
 } Enemy;
 
 typedef struct {
@@ -108,8 +109,10 @@ void weapons_init_defaults(Weapon out_weapons[MAX_WEAPONS]);
 void enemies_init_defaults(EnemyManager *mgr);
 void enemies_spawn_wave(EnemyManager *mgr, const GameMap *map, const Player *player);
 int enemies_alive(const EnemyManager *mgr);
+int enemies_required_alive(const EnemyManager *mgr);
 void enemies_update_fireball(EnemyManager *mgr, const GameMap *map, Player *player, float dt);
 const EnemyProjectile *enemies_projectile_pool(void);
+int enemies_player_is_burning(void);
 
 /* Atualiza movimentacao e ataque dos inimigos usando Delta Time (dt). */
 void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float dt);

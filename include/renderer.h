@@ -4,6 +4,7 @@
 #include "config.h"
 #include "map.h"
 #include "player.h"
+#include "entities.h"
 #include "render_api.h"
 
 /*
