@@ -48,8 +48,8 @@ static void test_map_file_loading(void) {
     int ok_valid = map_load_from_file(&map, "assets/maps/level1.txt");
     ASSERT_TRUE(ok_valid == 1, "Carrega assets/maps/level1.txt com sucesso");
     ASSERT_TRUE(map_get_tile(&map, 0, 0) == '#', "Borda (0,0) do level1.txt e '#'");
-    ASSERT_TRUE(map_is_wall(&map, 3, 3) == 1, "Obstaculo em (3,3) e parede");
-    ASSERT_TRUE(map_is_wall(&map, 2, 1) == 0, "Corredor em (2,1) e livre");
+    ASSERT_TRUE(map_is_wall(&map, 4, 4) == 1, "Obstaculo em (4,4) e parede");
+    ASSERT_TRUE(map_is_wall(&map, 2, 2) == 0, "Corredor em (2,2) e livre");
 }
 
 static void test_map_bounds(void) {
@@ -146,7 +146,7 @@ static void test_teto_selection(void) {
     ASSERT_TRUE(strcmp(p.class_name, "Kasane Teto") == 0, "Selecao aplica Kasane Teto");
     ASSERT_TRUE(p.health == 100 && p.max_health == 100 && p.ammo == 30,
                 "Teto inicia com vida e municao corretas");
-    ASSERT_TRUE(fabsf(p.move_speed - 4.8f) < 0.001f && p.active_weapon == 0,
+    ASSERT_TRUE(fabsf(p.move_speed - 4.2f) < 0.001f && p.active_weapon == 0,
                 "Teto recebe velocidade e arma inicial");
     ASSERT_TRUE(p.id == 2 && p.x == 2.5f && p.y == 4.5f,
                 "Selecao preserva ID multiplayer e ponto de spawn");
@@ -163,8 +163,8 @@ static void test_shadow_selection(void) {
     player_apply_class(&p, &cls);
     ASSERT_TRUE(strcmp(p.class_name, "Arauto das Sombras") == 0,
                 "Arauto das Sombras disponivel na selecao");
-    ASSERT_TRUE(p.health == 120 && p.max_health == 120 && p.ammo == 30 &&
-                fabsf(p.move_speed - 4.0f) < 0.001f, "Atributos do Arauto aplicados");
+    ASSERT_TRUE(p.health == 100 && p.max_health == 100 && p.ammo == 30 &&
+                fabsf(p.move_speed - 4.2f) < 0.001f, "Atributos do Arauto aplicados");
     ASSERT_TRUE(player_character_material(PRESET_SHADOW_HERALD, 0.06f, 0.17f, 0) == 17 &&
                 player_character_material(PRESET_SHADOW_HERALD, 0.06f, 0.17f, 1) != 17,
                 "Olhos vermelhos aparecem apenas na vista frontal");
@@ -179,9 +179,9 @@ static void test_guts_selection(void) {
     player_init(&p, 2.5f, 4.5f, 0.0f);
     CharacterClass cls = player_get_preset_class(PRESET_GUTS);
     player_apply_class(&p, &cls);
-    ASSERT_TRUE(strcmp(p.class_name, "Guts") == 0 && p.health == 150 && p.max_health == 150,
-                "Guts selecionavel com 150 de vida");
-    ASSERT_TRUE(p.ammo == 30 && fabsf(p.move_speed - 3.8f) < 0.001f,
+    ASSERT_TRUE(strcmp(p.class_name, "Guts") == 0 && p.health == 100 && p.max_health == 100,
+                "Guts selecionavel com 100 de vida");
+    ASSERT_TRUE(p.ammo == 30 && fabsf(p.move_speed - 4.2f) < 0.001f,
                 "Guts recebe municao e velocidade corretas");
     ASSERT_TRUE(player_character_material(PRESET_GUTS, -0.60f, 0.10f, 0) != 0 &&
                 player_character_material(PRESET_GUTS, -0.60f, 0.10f, 1) != 0,
@@ -326,7 +326,115 @@ static void prepare_combat(Player *p, EnemyManager *mgr, GameMap *map, int prese
     player_apply_class(p,&cls);
     memset(mgr,0,sizeof(*mgr));
     mgr->count=1;
-    mgr->enemies[0]=(Enemy){1,3.5f,4.5f,60,60,10,0,'Z',0};
+    mgr->enemies[0]=(Enemy){
+        .active=1, .x=3.5f, .y=4.5f, .health=60, .max_health=60,
+        .damage=10, .speed=0, .symbol='Z'
+    };
+}
+
+static void test_enemy_projectiles(void) {
+    Player p; EnemyManager mgr; GameMap map;
+    prepare_combat(&p,&mgr,&map,PRESET_FUZILEIRO);
+
+    enemies_init_defaults(&mgr);
+    mgr.count=1;
+    mgr.enemies[0]=(Enemy){
+        .active=1, .x=5.5f, .y=4.5f, .health=60, .max_health=60,
+        .damage=7, .type=ENEMY_DOOM_IMP, .attack_kind=ENEMY_ATTACK_PROJECTILE,
+        .attack_range=8.0f, .attack_cooldown=1.6f, .aggro_range=9.5f
+    };
+    enemies_update(&mgr,&map,&p,0.01f);
+    const EnemyProjectile *projectiles=enemies_projectile_pool();
+    ASSERT_TRUE(projectiles[0].active &&
+                projectiles[0].kind==ENEMY_PROJECTILE_FIREBALL &&
+                projectiles[0].path==ENEMY_PROJECTILE_WAVERING &&
+                fabsf(projectiles[0].speed-3.1f)<0.001f,
+                "Imp dispara bola de fogo mais lenta com trajetoria oscilante");
+    enemies_update(&mgr,&map,&p,0.8f);
+    ASSERT_TRUE(p.health==p.max_health-7 && !projectiles[0].active,
+                "Projetil do Imp move por Delta Time e causa dano ao colidir");
+
+    enemies_init_defaults(&mgr);
+    mgr.count=1;
+    mgr.enemies[0]=(Enemy){
+        .active=1, .x=5.5f, .y=4.5f, .health=50, .max_health=50,
+        .damage=8, .type=ENEMY_BERSERK_KUSHAN, .attack_kind=ENEMY_ATTACK_PROJECTILE,
+        .attack_range=7.0f, .attack_cooldown=2.5f, .aggro_range=9.0f
+    };
+    enemies_update(&mgr,&map,&p,0.01f);
+    ASSERT_TRUE(projectiles[0].active &&
+                projectiles[0].kind==ENEMY_PROJECTILE_ARROW &&
+                projectiles[0].path==ENEMY_PROJECTILE_STRAIGHT &&
+                fabsf(projectiles[0].speed-6.0f)<0.001f,
+                "Kushan dispara flecha veloz em linha reta");
+    map.tiles[4][3]='#';
+    enemies_update(&mgr,&map,&p,0.2f);
+    ASSERT_TRUE(!projectiles[0].active && p.health==p.max_health-7,
+                "Flecha colide com parede sem atingir o jogador");
+    map.tiles[4][3]='.';
+
+    enemies_init_defaults(&mgr);
+    mgr.count=1;
+    mgr.enemies[0]=(Enemy){
+        .active=1, .x=8.5f, .y=4.5f, .health=250, .max_health=250,
+        .damage=18, .type=ENEMY_DOOM_CACODEMON, .attack_kind=ENEMY_ATTACK_PROJECTILE,
+        .attack_range=9.5f, .attack_cooldown=2.6f, .aggro_range=11.5f
+    };
+    enemies_update(&mgr,&map,&p,0.01f);
+    ASSERT_TRUE(projectiles[0].active &&
+                projectiles[0].kind==ENEMY_PROJECTILE_ENERGY_ORB &&
+                projectiles[0].path==ENEMY_PROJECTILE_HOMING &&
+                fabsf(projectiles[0].speed-2.2f)<0.001f,
+                "Cacodemon dispara orbe de energia teleguiado");
+    p.y=7.5f;
+    enemies_update(&mgr,&map,&p,0.5f);
+    ASSERT_TRUE(projectiles[0].dy>0.0f,
+                "Orbe do Cacodemon curva em direcao ao jogador");
+
+    prepare_combat(&p,&mgr,&map,PRESET_GUTS);
+    enemies_init_defaults(&mgr);
+    mgr.count=1;
+    mgr.enemies[0]=(Enemy){
+        .active=1, .x=3.2f, .y=4.5f, .health=60, .max_health=60,
+        .damage=7, .speed=0, .symbol='Z'
+    };
+    enemies_update(&mgr,&map,&p,0.01f);
+    ASSERT_TRUE(p.health==p.max_health-7,
+                "Dano inimigo usa valor fixo sem escalar com a vida maxima da classe");
+}
+
+static void test_shadow_burn(void) {
+    Player p; EnemyManager mgr; GameMap map;
+    prepare_combat(&p, &mgr, &map, PRESET_SHADOW_HERALD);
+    player_activate_ability(&p);
+    enemies_update_fireball(&mgr, &map, &p, 0.5f);
+    ASSERT_TRUE(mgr.enemies[0].burn_time == 5 && mgr.enemies[0].health == 55,
+                "Impacto aplica cinco segundos de fogo");
+    enemies_update(&mgr, &map, &p, 0.5f);
+    ASSERT_TRUE(mgr.enemies[0].health == 55, "Fogo acumula tempo antes do primeiro dano");
+    enemies_update(&mgr, &map, &p, 0.5f);
+    ASSERT_TRUE(mgr.enemies[0].health == 53, "Fogo causa dois de dano por segundo");
+    for (int i=0; i<240; i++) enemies_update(&mgr, &map, &p, 1.0f/60.0f);
+    enemies_update(&mgr, &map, &p, 0.01f);
+    ASSERT_TRUE(mgr.enemies[0].health == 45 && mgr.enemies[0].burn_time == 0,
+                "Fogo expira com dez de dano total em passos pequenos");
+    enemies_update(&mgr, &map, &p, 3);
+    ASSERT_TRUE(mgr.enemies[0].health == 45, "Fogo expirado nao causa dano");
+    player_tick_ability(&p, 30); player_activate_ability(&p);
+    enemies_update_fireball(&mgr, &map, &p, 0.5f);
+    enemies_update(&mgr, &map, &p, 8);
+    ASSERT_TRUE(mgr.enemies[0].health == 30 && mgr.enemies[0].burn_time == 0,
+                "Passo longo limita dano a cinco segundos");
+    player_tick_ability(&p, 30); player_activate_ability(&p);
+    enemies_update_fireball(&mgr, &map, &p, 0.5f);
+    mgr.enemies[0].health = 2;
+    enemies_update(&mgr, &map, &p, 1);
+    enemies_update(&mgr, &map, &p, 5);
+    ASSERT_TRUE(!mgr.enemies[0].active && p.ability_state.kills == 1 &&
+                mgr.enemies[0].burn_time == 0, "Morte pelo fogo conta uma unica kill e apaga chamas");
+    enemies_init_defaults(&mgr);
+    ASSERT_TRUE(mgr.enemies[0].burn_time == 0 && mgr.enemies[0].burn_tick == 0,
+                "Nova onda inicia sem fogo residual");
 }
 
 static void test_character_abilities(void) {
@@ -337,24 +445,27 @@ static void test_character_abilities(void) {
     ASSERT_TRUE(p.ability_state.kills==0 && p.ability_state.zone_time==0, "Acerto sem kill nao ativa Teto");
     enemies_check_hit(&mgr,&map,&p,&weapons[0]);
     enemies_check_hit(&mgr,&map,&p,&weapons[0]);
-    ASSERT_TRUE(p.ability_state.kills==1 && p.score==10 && p.ability_state.cooldown==30 &&
-                p.ability_state.zone_time==10, "Kill real cria area da Teto e inicia cooldown de 30s");
+    ASSERT_TRUE(p.ability_state.kills==1 && p.score==10 && p.ability_state.zone_time==0,
+                "Kill da Teto nao cria area automaticamente");
     enemies_check_hit(&mgr,&map,&p,&weapons[0]);
     ASSERT_TRUE(p.ability_state.kills==1, "Inimigo morto nao conta kill repetida");
+    ASSERT_TRUE(player_activate_ability(&p) && !player_activate_ability(&p) &&
+                p.ability_state.cooldown==30 && p.ability_state.zone_time==10,
+                "Tecla E cria area da Teto e inicia cooldown de 30s");
     ASSERT_TRUE(fabsf(player_effective_speed(&p)-p.move_speed*1.35f)<0.001f,
                 "Teto recebe velocidade extra dentro da area");
     p.x=10.5f;
     ASSERT_TRUE(player_effective_speed(&p)==p.move_speed, "Teto perde bonus ao sair da area");
-    player_register_kill(&p,10.5f,4.5f);
-    ASSERT_TRUE(p.ability_state.zone_x==3.5f, "Kill durante cooldown nao recria area");
+    ASSERT_TRUE(!player_activate_ability(&p) && p.ability_state.zone_x==2.5f,
+                "Tecla E durante cooldown nao recria area");
     player_tick_ability(&p,10);
-    p.x=3.5f;
+    p.x=2.5f;
     ASSERT_TRUE(p.ability_state.zone_time==0 && player_effective_speed(&p)==p.move_speed,
                 "Area expira apos 10s sem deixar bonus permanente");
     player_tick_ability(&p,20);
-    player_register_kill(&p,6.5f,4.5f);
-    ASSERT_TRUE(p.ability_state.zone_x==6.5f && p.ability_state.cooldown==30,
-                "Nova kill reativa Teto apos cooldown");
+    p.x=6.5f;
+    ASSERT_TRUE(player_activate_ability(&p) && p.ability_state.zone_x==6.5f && p.ability_state.cooldown==30,
+                "Tecla E reativa Teto apos cooldown");
 
     prepare_combat(&p,&mgr,&map,PRESET_SHADOW_HERALD);
     ASSERT_TRUE(player_activate_ability(&p) && !player_activate_ability(&p),
@@ -391,10 +502,11 @@ static void test_character_abilities(void) {
     mgr.enemies[0].x=5.5f;
     ASSERT_TRUE(!enemies_check_hit(&mgr,&map,&p,&weapons[0]) && mgr.enemies[0].health==60,
                 "Berserk nao acerta inimigo distante");
-    mgr.enemies[0].x=3.5f; mgr.enemies[0].health=5000;
+    mgr.enemies[0].x=3.5f; mgr.enemies[0].health=250;
     enemies_check_hit(&mgr,&map,&p,&weapons[0]);
-    ASSERT_TRUE(!mgr.enemies[0].active && p.ability_state.kills==6,
-                "Espada mata inimigo proximo com um golpe");
+    ASSERT_TRUE(mgr.enemies[0].active && mgr.enemies[0].health==150 &&
+                p.ability_state.kills==5,
+                "Golpe Berserk causa quatro vezes o dano sem matar tanque de uma vez");
     int hp=p.health; player_take_damage(&p,10);
     ASSERT_TRUE(p.health==hp-20, "Berserk recebe dano dobrado");
     player_tick_ability(&p,10);
@@ -417,16 +529,43 @@ static void test_character_abilities(void) {
     prepare_combat(&p,&mgr,&map,PRESET_FUZILEIRO);
     ASSERT_TRUE(p.ability==ABILITY_NONE && !player_activate_ability(&p), "Fuzileiro continua sem habilidade");
     enemies_spawn_wave(&mgr,&map,&p);
-    int valid=enemies_alive(&mgr)>=6;
+    ASSERT_TRUE(enemies_alive(&mgr)==0, "Mapa sem caracteres de inimigo nao spawna inimigos");
+    map.tiles[4][7]='Z'; map.tiles[7][11]='D'; map.tiles[12][8]='I';
+    map.tiles[3][9]='M'; map.tiles[11][5]='A'; map.tiles[14][9]='B';
+    enemies_spawn_wave(&mgr,&map,&p);
+    int valid=enemies_alive(&mgr)==6;
     for(int i=0;i<mgr.count;i++) {
         float dx=mgr.enemies[i].x-p.x,dy=mgr.enemies[i].y-p.y;
         if(map_is_wall(&map,(int)mgr.enemies[i].x,(int)mgr.enemies[i].y)||dx*dx+dy*dy<12.25f) valid=0;
     }
     ASSERT_TRUE(valid,"Onda tem inimigos suficientes para cinco kills e spawn seguro");
-    mgr.count=1; mgr.enemies[0]=(Enemy){1,3.1f,4.5f,60,60,10,0,'Z',0};
+    map_init_default(&map);
+    map.tiles[4][5] = '^';
+    map.tiles[4][6] = 'F';
+    ASSERT_TRUE(map_is_wall(&map, 5, 4) == 0 && map_is_wall(&map, 6, 4) == 0,
+                "Armadilha '^' e labareda 'F' sao atravessaveis");
+    ASSERT_TRUE(!map_is_fire_active_at(&map, 5, 4) && map_is_fire_active_at(&map, 6, 4),
+                "Armadilha '^' comeca apagada e 'F' comeca ativa");
+    Player trap_p;
+    player_init(&trap_p, 5.5f, 4.5f, 0.0f);
+    mgr.count = 0;
+    enemies_update(&mgr, &map, &trap_p, 1.0f);
+    ASSERT_TRUE(map_is_fire_active_at(&map, 5, 4) && trap_p.health == 90,
+                "Passar sobre '^' ativa labareda e causa 10 de dano por segundo");
+    player_init(&trap_p, 6.5f, 4.5f, 0.0f);
+    enemies_update(&mgr, &map, &trap_p, 1.0f);
+    ASSERT_TRUE(trap_p.health == 90,
+                "Contato com labareda sempre ativa 'F' causa 10 de dano por segundo");
+
+    enemies_init_defaults(&mgr);
+    mgr.count=1; mgr.enemies[0]=(Enemy){
+        .active=1, .x=3.1f, .y=4.5f, .health=60, .max_health=60,
+        .damage=10, .speed=0, .symbol='Z'
+    };
     p.ability_state.berserk_time=1; hp=p.health;
     enemies_update(&mgr,&map,&p,0.1f);
-    ASSERT_TRUE(p.health==hp-20, "Ataque real da IA respeita vulnerabilidade do Berserk");
+    ASSERT_TRUE(p.health==hp-20,
+                "Ataque real da IA respeita vulnerabilidade do Berserk");
 }
 
 static void test_guerrilla(void) {
@@ -469,7 +608,7 @@ static void test_teto_damage_bonus(void) {
     Player p; EnemyManager mgr; GameMap map;
     Weapon weapons[MAX_WEAPONS]; weapons_init_defaults(weapons);
     prepare_combat(&p,&mgr,&map,PRESET_KASANE_TETO);
-    player_register_kill(&p,p.x,p.y);
+    player_activate_ability(&p);
     ASSERT_TRUE(player_attack_damage(&p,100)==125, "Area da Teto concede 25% de dano extra");
     mgr.enemies[0].health=100;
     enemies_check_hit(&mgr,&map,&p,&weapons[0]);
@@ -483,6 +622,105 @@ static void test_teto_damage_bonus(void) {
     p.ability_state.zone_time=10;
     p.ability=ABILITY_NONE;
     ASSERT_TRUE(player_attack_damage(&p,100)==100, "Outros personagens nao recebem bonus da Teto");
+}
+
+static void test_medkit_and_traps(void) {
+    printf("\nTeste: Kit medico e armadilhas com minimapa\n");
+    GameMap map;
+    map_init_default(&map);
+    map.tiles[2][2] = '+';
+    map.tiles[2][3] = '1';
+    map.tiles[2][4] = '2';
+    map.tiles[2][5] = '3';
+    map.tiles[2][6] = '4';
+    map.tiles[3][2] = '^';
+    map.tiles[3][3] = '5';
+    map.tiles[3][4] = '6';
+    map.tiles[3][5] = '7';
+    map.tiles[3][6] = '8';
+    map.tiles[3][7] = '9';
+
+    ASSERT_TRUE(map_is_wall(&map, 2, 2) == 0, "Kit medico '+' e atravessavel");
+    ASSERT_TRUE(map_is_wall(&map, 3, 2) == 0, "Kit medico '1' e atravessavel");
+    ASSERT_TRUE(map_is_wall(&map, 2, 3) == 0, "Armadilha '^' e atravessavel");
+    ASSERT_TRUE(map_is_wall(&map, 3, 3) == 0, "Armadilha '5' e atravessavel");
+
+    /* Versoes de minimapa como parede retornam equivalente e visibilidade no minimapa */
+    ASSERT_TRUE(map_get_tile(&map, 3, 2) == '#' && map_is_visible_wall(&map, 3, 2) == 1, "Kit '1' aparece como '#' no minimapa");
+    ASSERT_TRUE(map_get_tile(&map, 4, 2) == '@' && map_is_visible_wall(&map, 4, 2) == 1, "Kit '2' aparece como '@' no minimapa");
+    ASSERT_TRUE(map_get_tile(&map, 5, 2) == '%' && map_is_visible_wall(&map, 5, 2) == 1, "Kit '3' aparece como '%' no minimapa");
+    ASSERT_TRUE(map_get_tile(&map, 6, 2) == '*' && map_is_visible_wall(&map, 6, 2) == 1, "Kit '4' aparece como '*' no minimapa");
+    ASSERT_TRUE(map_get_tile(&map, 3, 3) == '#' && map_is_visible_wall(&map, 3, 3) == 1, "Armadilha '5' aparece como '#' no minimapa");
+    ASSERT_TRUE(map_get_tile(&map, 4, 3) == '@' && map_is_visible_wall(&map, 4, 3) == 1, "Armadilha '6' aparece como '@' no minimapa");
+    ASSERT_TRUE(map_get_tile(&map, 5, 3) == '%' && map_is_visible_wall(&map, 5, 3) == 1, "Armadilha '7' aparece como '%' no minimapa");
+    ASSERT_TRUE(map_get_tile(&map, 6, 3) == '*' && map_is_visible_wall(&map, 6, 3) == 1, "Armadilha '8' aparece como '*' no minimapa");
+    ASSERT_TRUE(map_get_tile(&map, 7, 3) == '#' && map_is_visible_wall(&map, 7, 3) == 1, "Fogo '9' aparece como '#' no minimapa");
+    ASSERT_TRUE(map_is_visible_wall(&map, 3, 2) == 0, "Sem chamada de minimapa, kit '1' nao e parede visivel em 3D");
+
+    Player p;
+    EnemyManager mgr;
+    enemies_init_defaults(&mgr);
+    player_init(&p, 2.5f, 2.5f, 0.0f);
+    p.max_health = 100;
+    p.health = 50;
+
+    enemies_update(&mgr, &map, &p, 0.1f);
+    ASSERT_TRUE(p.health == 70, "Passar sobre '+' pela primeira vez cura 20 de vida");
+    ASSERT_TRUE(map_is_medkit_active_at(&map, 2, 2) == 0, "Kit medico '+' fica inativo apos ser usado");
+
+    p.health = 60;
+    enemies_update(&mgr, &map, &p, 0.1f);
+    ASSERT_TRUE(p.health == 60, "Passar novamente sobre '+' nao cura de novo");
+
+    p.x = 3.5f;
+    enemies_update(&mgr, &map, &p, 0.1f);
+    ASSERT_TRUE(p.health == 80, "Passar sobre kit '1' cura 20 de vida");
+
+    /* Armadilha inicia oculta, ativa ao pisar e desativa apos o tempo */
+    ASSERT_TRUE(map_is_fire_active_at(&map, 2, 3) == 0, "Armadilha '^' comeca desativada/oculta");
+    p.x = 2.5f;
+    p.y = 3.5f;
+    enemies_update(&mgr, &map, &p, 0.1f);
+    ASSERT_TRUE(map_is_fire_active_at(&map, 2, 3) == 1, "Armadilha '^' ativa ao passar por cima");
+
+    p.x = 1.5f;
+    p.y = 1.5f;
+    int hp_after_exit = p.health;
+    enemies_update(&mgr, &map, &p, 0.3f);
+    ASSERT_TRUE(p.health == hp_after_exit - 3, "Mecanica de burn aplica dano por 0.5s apos sair da chama");
+    enemies_update(&mgr, &map, &p, 3.0f);
+    ASSERT_TRUE(map_is_fire_active_at(&map, 2, 3) == 0, "Armadilha '^' volta a desativar/nao mostrar apos expirar");
+    int hp_after_burn = p.health;
+    enemies_update(&mgr, &map, &p, 1.0f);
+    ASSERT_TRUE(p.health == hp_after_burn, "Burn encerra apos 0.5s fora da chama");
+
+    /* 4 caracteres reservados para proximos inimigos (U, V, W, X) -> Zodd opcional para saida */
+    map_init_default(&map);
+    map.tiles[2][2] = 'U';
+    map.tiles[2][3] = 'V';
+    map.tiles[2][4] = 'W';
+    map.tiles[2][5] = 'X';
+    map.tiles[2][6] = 'E';
+    ASSERT_TRUE(map_is_wall(&map, 2, 2) == 0 && map_is_wall(&map, 3, 2) == 0 &&
+                map_is_wall(&map, 4, 2) == 0 && map_is_wall(&map, 5, 2) == 0,
+                "Caracteres U, V, W, X sao atravessaveis como spawn de inimigo");
+    enemies_spawn_wave(&mgr, &map, &p);
+    int all_zodd_optional = (mgr.count == 4);
+    for (int i = 0; i < mgr.count; i++) {
+        if (mgr.enemies[i].type != ENEMY_BERSERK_ZODD || !mgr.enemies[i].optional_for_exit) {
+            all_zodd_optional = 0;
+        }
+    }
+    ASSERT_TRUE(all_zodd_optional, "U, V, W, X spawnam como Zodd opcionais para a saida");
+    ASSERT_TRUE(enemies_alive(&mgr) == 4 && enemies_required_alive(&mgr) == 0,
+                "Inimigos U, V, W, X vivos nao contam como obrigatorios");
+    ASSERT_TRUE(map_are_enemies_alive() == 0 && map_is_wall(&map, 6, 2) == 0,
+                "Saida 'E' abre mesmo com inimigos U, V, W, X vivos");
+
+    map.tiles[3][2] = 'Z';
+    enemies_spawn_wave(&mgr, &map, &p);
+    ASSERT_TRUE(enemies_required_alive(&mgr) == 1 && map_are_enemies_alive() == 1 && map_is_wall(&map, 6, 2) == 1,
+                "Inimigo obrigatorio 'Z' continua bloqueando a saida 'E'");
 }
 
 int main(void) {
@@ -501,9 +739,12 @@ int main(void) {
     test_character_visual_api();
     test_character_creator();
     test_modular_appearance();
+    test_enemy_projectiles();
     test_character_abilities();
+    test_shadow_burn();
     test_guerrilla();
     test_teto_damage_bonus();
+    test_medkit_and_traps();
     test_network_udp_loopback();
 
     printf("\n------------------------------------------------------------\n");

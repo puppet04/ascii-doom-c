@@ -23,6 +23,7 @@
 
 /* Parametros fisicos baseados em segundos (independentes de FPS via Delta Time) */
 #define MOVE_SPEED        4.2f    /* blocos por segundo */
+#define PLAYER_MAX_HEALTH  100    /* vida base de todos os personagens */
 #define SPRINT_MULT       1.55f   /* multiplicador ao segurar Shift */
 #define ROT_SPEED         2.6f    /* radianos por segundo no teclado */
 #define MOUSE_SENSITIVITY 0.0022f /* radianos por pixel do mouse */
@@ -32,6 +33,6 @@
 /* Configuracoes de rede e taxa de quadros */
 #define DEFAULT_PORT 5000
 #define TARGET_FPS   165
-#define MAX_SPRITES  8
+#define MAX_SPRITES  64
 
 #endif /* CONFIG_H */
