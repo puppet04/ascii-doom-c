@@ -506,7 +506,16 @@ static void gpu_shutdown_resources(void) {
 
 void renderer_init(void) {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
-    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "ASCII DOOM C - 165 FPS (Raylib)");
+    InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "SECTOR 404 - 165 FPS");
+    const char *icon_path = FileExists("assets/icon.png") ? "assets/icon.png"
+                          : (FileExists("../assets/icon.png") ? "../assets/icon.png" : NULL);
+    if (icon_path) {
+        Image win_icon = LoadImage(icon_path);
+        if (win_icon.data != NULL) {
+            SetWindowIcon(win_icon);
+            UnloadImage(win_icon);
+        }
+    }
     SetWindowMinSize(640, 480);
     SetExitKey(KEY_NULL);
     SetTargetFPS(TARGET_FPS);
