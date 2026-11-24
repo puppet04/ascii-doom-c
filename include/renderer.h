@@ -85,11 +85,8 @@ void renderer_draw_walls(const GameMap *map, const Player *player);
 /* Desenha entidades simples (outros jogadores em LAN / silhueta 3a pessoa) respeitando o z_buffer. */
 void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, int count);
 
-/* Desenha a arma em 1a pessoa (espada Berserk ou rifle duplo com recoil/claroes). */
+/* Desenha a arma padrao em 1a pessoa (rifle duplo com recoil e claroes). */
 void renderer_draw_weapon(const Player *player);
-
-/* Particulas da area da Kasane Teto e projetil Fogo Negro do Arauto, com oclusao por paredes. */
-void renderer_draw_ability_effects(const Player *player);
 
 /* Desenha o minimapa 2D colorido no canto superior esquerdo da grade ASCII. */
 void renderer_draw_minimap(const GameMap *map, const Player *player,

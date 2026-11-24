@@ -371,12 +371,16 @@ static int run_single_test_frame(void) {
     memset(&demo_sprite.appearance, 0, sizeof(demo_sprite.appearance));
     demo_sprite.team_accent = 2;
 
+    const RendererApi *r_api = renderer_get_api();
     renderer_clear();
     renderer_draw_walls(&map, &player);
     renderer_draw_sprites(&player, &demo_sprite, 1);
-    map_render_hazards(&map, &player, renderer_get_api());
+    map_render_hazards(&map, &player, r_api);
+    player_render_abilities(&player, r_api);
     draw_sliding_minimap(&map, &player, &demo_sprite, 1);
-    renderer_draw_weapon(&player);
+    if (!player_render_weapon(&player, r_api)) {
+        renderer_draw_weapon(&player);
+    }
     renderer_draw_hud(&player);
     renderer_present_stdout(&player, 0, 0);
 
@@ -3889,14 +3893,17 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         }
         renderer_draw_sprites(&player, mp_sprites, mp_count);
         map_render_hazards(&map, &player, r_api);
-        renderer_draw_ability_effects(&player);
+        player_render_abilities(&player, r_api);
         draw_sliding_minimap(&map, &player, mm_markers, mm_count);
-        renderer_draw_weapon(&player);
+        if (third_person || !player_render_weapon(&player, r_api)) {
+            renderer_draw_weapon(&player);
+        }
         renderer_draw_hud(&player);
 
         BeginDrawing();
         renderer_draw_scene_and_hud(&player, is_multiplayer, net.connected,
                                     mouse_locked, cfg->show_fps ? cfg->fps_cap : -1);
+        player_draw_ability_hud(&player, sw, sh);
         if (enemies_player_is_burning()) {
             draw_player_burning_overlay(sw, sh);
         }

@@ -104,6 +104,11 @@ typedef struct {
                            char edge_ch, AsciiColor edge_col,
                            float edge_threshold);
 
+    /* Desenha um anel circular no chao 3D em (cx, cy) com oclusao por paredes e sprites. */
+    void (*draw_world_floor_ring)(float cx, float cy, float radius,
+                                  char inner_ch, AsciiColor inner_col,
+                                  char outer_ch, AsciiColor outer_col);
+
     /* Projeta um ponto 3D (x, y, height) para celula de tela (out_sx, out_sy) e profundidade.
      * Retorna 1 se estiver dentro do FOV e a frente da parede do z-buffer; 0 caso contrario. */
     int (*project_point)(const void *player_ptr,

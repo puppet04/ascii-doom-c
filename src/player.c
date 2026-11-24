@@ -2,6 +2,7 @@
 #include "raylib.h"
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 CharacterColor player_get_material_color(int mat) {
@@ -793,5 +794,208 @@ void player_handle_input(Player *p, const GameMap *map, float dt,
     /* ESC solicita encerramento da partida */
     if (IsKeyPressed(KEY_ESCAPE)) {
         *running = 0;
+    }
+}
+
+/* Chamas afiladas do Fogo Negro do Arauto das Sombras via RendererApi. */
+static void player_draw_shadow_flame(const Player *p, const RendererApi *r,
+                                     float wx, float wy, float height,
+                                     float size, float phase, int dark_core) {
+    int sx, sy;
+    float depth;
+    if (!r->project_point(p, wx, wy, height, &sx, &sy, &depth)) {
+        return;
+    }
+    int rw = 0, rh = 0;
+    r->get_grid_size(&rw, &rh);
+    int radius = (int)((float)rh * size / depth);
+    if (radius < 2) radius = 2;
+    if (radius > 32) radius = 32;
+    AsciiColor black = {0, 0, 0};
+    for (int y = -radius * 2; y <= radius; y++) {
+        float v = (float)y / (float)radius;
+        float width = v < 0.0f ? 1.0f + v * 0.46f : sqrtf(fmaxf(0.0f, 1.0f - v * v));
+        float sway = sinf(phase * 7.0f + v * 5.0f) * 0.16f * (1.0f - v);
+        for (int x = -radius * 2; x <= radius * 2; x++) {
+            int px = sx + x;
+            int py = sy + y;
+            if (px < 0 || px >= rw || py < 0 || py >= rh) {
+                continue;
+            }
+            float u = (float)x / (float)radius - sway;
+            float edge = fabsf(u) / fmaxf(width, 0.01f);
+            float ripple = 0.09f * sinf(v * 13.0f + phase * 11.0f + u * 4.0f);
+            if (edge > 1.0f + ripple) {
+                continue;
+            }
+            float vein = sinf(u * 9.0f + v * 8.0f - phase * 12.0f);
+            AsciiColor color;
+            char ch;
+            if (dark_core && u * u + v * v < 0.30f) {
+                color = (AsciiColor){65, 28, 95};
+                ch = ':';
+            } else if (edge < 0.48f && v > -0.6f) {
+                color = (AsciiColor){250, 205, 255};
+                ch = '@';
+            } else if (edge < 0.78f) {
+                color = (AsciiColor){195, 95, 255};
+                ch = vein > 0.0f ? '#' : '*';
+            } else {
+                color = (AsciiColor){110, 48, 185};
+                ch = v < -0.6f ? '^' : '+';
+            }
+            r->set_cell_if_closer(px, py, depth, ch, color, black);
+        }
+    }
+}
+
+void player_render_abilities(const Player *p, const RendererApi *r) {
+    if (!p || !r) {
+        return;
+    }
+    const AbilityState *s = &p->ability_state;
+    AsciiColor black = {0, 0, 0};
+    float time = r->get_time();
+
+    if (s->zone_time > 0.0f) {
+        r->draw_world_floor_ring(s->zone_x, s->zone_y, TETO_ZONE_RADIUS,
+                                 '#', (AsciiColor){255, 80, 170},
+                                 '+', (AsciiColor){190, 55, 120});
+        int rw = 0, rh = 0;
+        r->get_grid_size(&rw, &rh);
+        for (int i = 0; i < 16; i++) {
+            float a = (float)i * 2.4f;
+            float radius = 0.5f + (float)(i % 4) * 0.42f;
+            float height = 0.15f + fmodf(time * 0.45f + (float)i * 0.17f, 0.8f);
+            int sx, sy;
+            float depth;
+            if (!r->project_point(p, s->zone_x + cosf(a) * radius,
+                                  s->zone_y + sinf(a) * radius, height, &sx, &sy, &depth)) {
+                continue;
+            }
+            static const char *heart[] = {"@ @", "@@@", " @ "};
+            for (int row = 0; row < 3; row++) {
+                for (int col = 0; col < 3; col++) {
+                    int px = sx + col - 1;
+                    int py = sy + row;
+                    if (heart[row][col] != ' ' && px >= 0 && px < rw && py >= 0 && py < rh) {
+                        r->set_cell_if_closer(px, py, depth, heart[row][col],
+                                              (AsciiColor){255, 115, 180}, black);
+                    }
+                }
+            }
+        }
+    }
+
+    if (s->fireball_active) {
+        float age = fmaxf(0.0f, 3.0f - s->fireball_time);
+        for (int i = 7; i >= 1; i--) {
+            float lag = (float)i * 0.075f;
+            if (lag > age * 7.0f) continue;
+            float flutter = sinf(time * 14.0f - (float)i * 1.8f) * 0.035f;
+            player_draw_shadow_flame(p, r,
+                                     s->fireball_x - s->fireball_dx * lag - s->fireball_dy * flutter,
+                                     s->fireball_y - s->fireball_dy * lag + s->fireball_dx * flutter,
+                                     0.48f + (float)i * 0.012f,
+                                     0.075f - (float)i * 0.008f,
+                                     time + (float)i * 0.4f, 0);
+        }
+        player_draw_shadow_flame(p, r, s->fireball_x, s->fireball_y, 0.48f,
+                                 0.115f + 0.009f * sinf(time * 17.0f), time, 1);
+    }
+}
+
+int player_render_weapon(const Player *p, const RendererApi *r) {
+    if (!p || !r || p->ability_state.berserk_time <= 0.0f) {
+        return 0;
+    }
+    int rw = 0, rh = 0;
+    r->get_grid_size(&rw, &rh);
+    AsciiColor black = {0, 0, 0};
+    float swing = p->shoot_timer > 0.0f ? sinf(p->shoot_timer / 0.60f * PI_F) : 0.0f;
+    for (int y = rh / 3; y < rh; y++) {
+        float t = (float)(y - rh / 3) / (float)(rh * 2 / 3);
+        int center = (int)((float)rw * (0.68f - t * 0.18f - swing * 0.28f));
+        int width = (int)((float)rw * (0.016f + t * 0.045f));
+        if (t > 0.80f) width = (int)((float)rw * 0.09f);
+        if (t > 0.85f) width = (int)((float)rw * 0.015f);
+        for (int x = -width; x <= width; x++) {
+            int ax = abs(x);
+            float nx = (width > 0) ? ((float)ax / (float)width) : 0.0f;
+            int is_handle = (t > 0.85f);
+            int is_edge = (!is_handle && ax > width - 2);
+            float lum = is_handle ? (0.35f + 0.28f * (1.0f - nx))
+                      : is_edge   ? 0.92f
+                                  : (0.40f + 0.50f * (1.0f - nx));
+            char gch = r->sample_ramp(lum, center + x, y);
+            AsciiColor color = is_handle ? r->scale_rgb(82.0f, 55.0f, 50.0f, 0.72f + 0.28f * (1.0f - nx))
+                             : is_edge   ? (AsciiColor){225, 232, 245}
+                                         : r->scale_rgb(125.0f, 138.0f, 160.0f, 0.70f + 0.35f * (1.0f - nx));
+            r->set_cell(center + x, y, gch, color, black);
+        }
+    }
+    return 1;
+}
+
+void player_get_weapon_hud_info(const Player *p, PlayerWeaponHudInfo *out) {
+    if (!out) {
+        return;
+    }
+    memset(out, 0, sizeof(*out));
+    if (p && p->ability_state.berserk_time > 0.0f) {
+        out->custom = 1;
+        snprintf(out->label, sizeof(out->label), "ESPADA");
+        snprintf(out->value, sizeof(out->value), "1.5m");
+        out->bar_ratio = 1.0f - fminf(1.0f, p->shoot_timer / 0.60f);
+    }
+}
+
+void player_draw_ability_hud(const Player *p, int screen_w, int screen_h) {
+    if (!p) {
+        return;
+    }
+    const AbilityState *a = &p->ability_state;
+    const char *status = "SEM HABILIDADE";
+    Color accent = {190, 205, 220, 255};
+    if (p->ability == ABILITY_TETO) {
+        accent = (Color){255, 115, 180, 255};
+        status = player_attack_damage(p, 100) > 100
+            ? TextFormat("DANO +25%% | VEL +35%% | %.1fs", a->zone_time)
+            : (a->zone_time > 0
+                ? TextFormat("CORACOES %.1fs | RECARGA %.0fs", a->zone_time, ceilf(a->cooldown))
+                : (a->cooldown > 0
+                    ? TextFormat("CORACOES: RECARGA %.0fs", ceilf(a->cooldown))
+                    : "[E] CORACOES: PRONTO"));
+    } else if (p->ability == ABILITY_SHADOW) {
+        accent = (Color){185, 125, 245, 255};
+        status = a->cooldown > 0
+            ? TextFormat("FOGO NEGRO: %.0fs", ceilf(a->cooldown))
+            : "[E] FOGO NEGRO: PRONTO";
+    } else if (p->ability == ABILITY_GUERRILLA) {
+        accent = (Color){175, 225, 115, 255};
+        status = a->guerrilla_time >= GUERRILLA_CHARGE_TIME
+            ? "GUERRILHEIRO: PROXIMO TIRO x2"
+            : TextFormat("GUERRILHEIRO: %.1fs SEM DANO", GUERRILLA_CHARGE_TIME - a->guerrilla_time);
+    } else if (p->ability == ABILITY_BERSERK) {
+        accent = (Color){255, 95, 80, 255};
+        status = a->berserk_time > 0
+            ? TextFormat("BERSERK %.1fs | ESPADA | DANO RECEBIDO x2", a->berserk_time)
+            : (a->berserk_used
+                ? "BERSERK: JA UTILIZADO"
+                : (a->kills >= BERSERK_KILLS
+                    ? "[E] BERSERK: PRONTO"
+                    : TextFormat("BERSERK: %d/5 KILLS", a->kills)));
+    }
+    int f = screen_w < 1000 ? 12 : 16;
+    int width = MeasureText(status, f) + 24;
+    DrawRectangle(screen_w - width - 12, 12, width, f + 14, (Color){12, 14, 22, 225});
+    DrawText(status, screen_w - width, 19, f, accent);
+    const char *kills = TextFormat("KILLS: %d", a->kills);
+    int kw = MeasureText(kills, f) + 20;
+    DrawRectangle(screen_w - kw - 12, f + 29, kw, f + 10, (Color){12, 14, 22, 220});
+    DrawText(kills, screen_w - kw - 2, f + 34, f, WHITE);
+    if (a->berserk_time > 0) {
+        DrawRectangleLinesEx((Rectangle){2, 2, (float)screen_w - 4, (float)screen_h - 4},
+                             4, (Color){190, 20, 30, 220});
     }
 }

@@ -3,6 +3,7 @@
 
 #include "config.h"
 #include "map.h"
+#include "render_api.h"
 
 /*
  * MODULO 2: PERSONAGENS, CRIADOR DE PERSONAGEM E FISICA
@@ -114,6 +115,20 @@ int player_attack_damage(const Player *p, int base_damage);
 void player_take_damage(Player *p, int damage);
 int player_begin_attack(Player *p);
 int player_render_material(const Player *p, float x, float y, int back_view);
+
+/* Dados opcionais para sobrescrever o cartao de municao/arma no HUD (ex.: Espada Berserk). */
+typedef struct {
+    int custom;        /* 0 = padrao MUNICAO do renderer; 1 = usa os campos abaixo */
+    char label[16];
+    char value[16];
+    float bar_ratio;
+} PlayerWeaponHudInfo;
+
+void player_get_weapon_hud_info(const Player *p, PlayerWeaponHudInfo *out);
+void player_render_abilities(const Player *p, const RendererApi *r);
+/* Retorna 1 se desenhou arma customizada em 1a pessoa (ex.: Espada Berserk), 0 para usar a padrao. */
+int player_render_weapon(const Player *p, const RendererApi *r);
+void player_draw_ability_hud(const Player *p, int screen_w, int screen_h);
 
 /* Retorna um personagem; indices invalidos retornam Fuzileiro. */
 CharacterClass player_get_preset_class(int index);
