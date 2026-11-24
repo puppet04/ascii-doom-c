@@ -1382,6 +1382,55 @@ static int enemy_sprite_sampler(float u, float v, int sx, int sy,
     return 1;
 }
 
+/* Chamas afiladas de Fogo Negro nos inimigos queimando, usando apenas RendererApi. */
+static void entities_draw_shadow_flame(const Player *p, const RendererApi *r,
+                                       float wx, float wy, float height,
+                                       float size, float phase) {
+    int sx, sy;
+    float depth;
+    if (!r->project_point(p, wx, wy, height, &sx, &sy, &depth)) {
+        return;
+    }
+    int rw = 0, rh = 0;
+    r->get_grid_size(&rw, &rh);
+    int radius = (int)((float)rh * size / depth);
+    if (radius < 2) radius = 2;
+    if (radius > 32) radius = 32;
+    AsciiColor black = {0, 0, 0};
+    for (int y = -radius * 2; y <= radius; y++) {
+        float v = (float)y / (float)radius;
+        float width = v < 0.0f ? 1.0f + v * 0.46f : sqrtf(fmaxf(0.0f, 1.0f - v * v));
+        float sway = sinf(phase * 7.0f + v * 5.0f) * 0.16f * (1.0f - v);
+        for (int x = -radius * 2; x <= radius * 2; x++) {
+            int px = sx + x;
+            int py = sy + y;
+            if (px < 0 || px >= rw || py < 0 || py >= rh) {
+                continue;
+            }
+            float u = (float)x / (float)radius - sway;
+            float edge = fabsf(u) / fmaxf(width, 0.01f);
+            float ripple = 0.09f * sinf(v * 13.0f + phase * 11.0f + u * 4.0f);
+            if (edge > 1.0f + ripple) {
+                continue;
+            }
+            float vein = sinf(u * 9.0f + v * 8.0f - phase * 12.0f);
+            AsciiColor color;
+            char ch;
+            if (edge < 0.48f && v > -0.6f) {
+                color = (AsciiColor){250, 205, 255};
+                ch = '@';
+            } else if (edge < 0.78f) {
+                color = (AsciiColor){195, 95, 255};
+                ch = vein > 0.0f ? '#' : '*';
+            } else {
+                color = (AsciiColor){110, 48, 185};
+                ch = v < -0.6f ? '^' : '+';
+            }
+            r->set_cell_if_closer(px, py, depth, ch, color, black);
+        }
+    }
+}
+
 void entities_render(const EnemyManager *mgr, const Player *player, const RendererApi *r) {
     if (!mgr || !player || !r) {
         return;
@@ -1491,6 +1540,25 @@ void entities_render(const EnemyManager *mgr, const Player *player, const Render
                               '*',
                               is_fb ? (AsciiColor){255, 55, 10} : (AsciiColor){20, 150, 255},
                               0.55f);
+        }
+    }
+
+    /* Chamas de queimadura (burn DOT do Arauto) renderizadas via RendererApi */
+    float burn_now = r->get_time();
+    for (int i = 0; i < mgr->count; i++) {
+        const Enemy *e = &mgr->enemies[i];
+        if (!e->active || e->burn_time <= 0.0f) continue;
+        float fade = fminf(1.0f, e->burn_time * 2.0f);
+        for (int j = 0; j < 7; j++) {
+            float phase = burn_now + (float)i * 1.7f + (float)j * 0.73f;
+            float angle = (float)j * 2.4f + burn_now * 0.7f;
+            float height = 0.12f + fmodf(burn_now * 0.65f + (float)j * 0.137f, 0.85f);
+            entities_draw_shadow_flame(player, r,
+                                       e->x + cosf(angle) * 0.22f,
+                                       e->y + sinf(angle) * 0.22f,
+                                       height,
+                                       (0.045f + 0.025f * (1.0f - height)) * fade,
+                                       phase);
         }
     }
 }
