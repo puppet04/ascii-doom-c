@@ -1171,19 +1171,29 @@ static const char *glyph_rows_5x7(char ch, int row) {
     static const char *A[7] = {".###.","##.##","##.##","#####","##.##","##.##","##.##"};
     static const char *S[7] = {".####","##...","##...",".###.","...##","...##","####."};
     static const char *C[7] = {".####","##...","##...","##...","##...","##...",".####"};
+    static const char *E[7] = {"#####","##...","##...","####.","##...","##...","#####"};
     static const char *I[7] = {"#####","..#..","..#..","..#..","..#..","..#..","#####"};
     static const char *D[7] = {"####.","##.##","##.##","##.##","##.##","##.##","####."};
     static const char *O[7] = {".###.","##.##","##.##","##.##","##.##","##.##",".###."};
     static const char *M[7] = {"##.##","#####","#####","##.##","##.##","##.##","##.##"};
+    static const char *R[7] = {"####.","##.##","##.##","####.","##.#.","##.##","##.##"};
+    static const char *T[7] = {"#####","..#..","..#..","..#..","..#..","..#..","..#.."};
+    static const char *N0[7]= {".###.","##.##","##.##","##.##","##.##","##.##",".###."};
+    static const char *N4[7]= {"##.##","##.##","##.##","#####","...##","...##","...##"};
     if (row < 0 || row >= 7) return ".....";
     switch (ch) {
         case 'A': return A[row];
         case 'S': return S[row];
         case 'C': return C[row];
+        case 'E': return E[row];
         case 'I': return I[row];
         case 'D': return D[row];
         case 'O': return O[row];
         case 'M': return M[row];
+        case 'R': return R[row];
+        case 'T': return T[row];
+        case '0': return N0[row];
+        case '4': return N4[row];
         default:  return ".....";
     }
 }
@@ -1213,7 +1223,7 @@ static void draw_dense_ascii_word(Font font, const char *word, int x, int y,
         static int wc_gh[2] = {-1, -1};
         static int wc_style[2] = {-1, -1};
         static float wc_t[2] = {-10.0f, -10.0f};
-        int slot = (word[0] == 'D') ? 1 : 0;
+        int slot = (word[0] == '4' || word[0] == 'D') ? 1 : 0;
         int cur_style = renderer_get_visual_style();
         AsciiCell *wbuf = word_cache[slot];
 
@@ -1381,21 +1391,21 @@ static int draw_dense_logo(Font font, int left_x, int top_y, float sc, float t,
                  (eff_q == ASCII_QUALITY_MEDIA) ? 5 : 7;
 
     float sm_cell = (1.42f * (3.0f / (float)sub_sm)) * sc;
-    draw_dense_ascii_word(font, "ASCII", left_x, top_y, sm_cell, sub_sm,
+    draw_dense_ascii_word(font, "SECTOR", left_x, top_y, sm_cell, sub_sm,
                           (Color){232, 240, 252, 255}, (Color){140, 162, 195, 255}, t);
 
-    int tag_x = left_x + (int)((29.0f * (float)sub_sm) * sm_cell) + (int)(12.0f * sc);
+    int tag_x = left_x + (int)((35.0f * (float)sub_sm) * sm_cell) + (int)(12.0f * sc);
     int tag_sz = (int)(14.0f * sc);
     if (tag_sz < 10) tag_sz = 10;
-    DrawText("ENGINE", tag_x, top_y + (int)(2.0f * sc), tag_sz, (Color){255, 185, 80, 245});
-    DrawText("RAYLIB A2", tag_x, top_y + (int)(17.0f * sc), tag_sz - 1, (Color){175, 190, 212, 235});
+    DrawText("404 NF", tag_x, top_y + (int)(2.0f * sc), tag_sz, (Color){255, 185, 80, 245});
+    DrawText("ASCII ENGINE", tag_x, top_y + (int)(17.0f * sc), tag_sz - 1, (Color){175, 190, 212, 235});
 
-    float big_cell = (1.78f * (7.0f / (float)sub_bg)) * sc;
-    int doom_y = top_y + (int)((7.0f * (float)sub_sm) * sm_cell) + (int)(10.0f * sc);
-    draw_dense_ascii_word(font, "DOOM", left_x, doom_y, big_cell, sub_bg,
+    float big_cell = (1.92f * (7.0f / (float)sub_bg)) * sc;
+    int title_y = top_y + (int)((7.0f * (float)sub_sm) * sm_cell) + (int)(10.0f * sc);
+    draw_dense_ascii_word(font, "404", left_x, title_y, big_cell, sub_bg,
                           (Color){255, 220, 95, 255}, (Color){232, 54, 36, 255}, t);
 
-    int sub_y = doom_y + (int)((7.0f * (float)sub_bg) * big_cell) + (int)(10.0f * sc);
+    int sub_y = title_y + (int)((7.0f * (float)sub_bg) * big_cell) + (int)(10.0f * sc);
     int sub_sz = (int)(15.0f * sc);
     if (sub_sz < 11) sub_sz = 11;
     DrawText("SHOOTER 3D EM C  //  LAN & SINGLEPLAYER", left_x, sub_y,
@@ -2357,7 +2367,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
         int left_x = (int)((float)sw * 0.050f);
         int top_y = (int)((float)sh * 0.048f);
 
-        /* Logo ASCII DOOM densa no topo esquerdo + inicio da area de conteudo */
+        /* Logo SECTOR 404 densa no topo esquerdo + inicio da area de conteudo */
         int content_y = draw_dense_logo(font, left_x, top_y, sc, now, cfg->ascii_quality, sw, sh);
 
         int btn_w = (int)(395.0f * sc);

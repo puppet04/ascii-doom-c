@@ -1,8 +1,8 @@
-# ASCII DOOM em C — Projeto Final (A2)
+# SECTOR 404 — Equipe 404 NF (A2)
 
-Jogo interativo em primeira pessoa estilo **DOOM em ASCII colorido** em janela gráfica dedicada (**Raylib a 165 FPS**), desenvolvido em **linguagem C** para a Segunda Avaliação (A2) da disciplina de **Linguagem de Programação** (Engenharia da Computação).
+Shooter interativo em primeira pessoa em **ASCII colorido** com janela gráfica própria (motor Raylib/OpenGL embutido estaticamente, rodando a **165 FPS**), desenvolvido em **linguagem C** pela equipe **404 NF** para a Segunda Avaliação (A2) da disciplina de **Linguagem de Programação** (Engenharia da Computação).
 
-O projeto combina **Raycasting DDA colorido em alta resolução (`160x80` caracteres ASCII)**, física independente da taxa de quadros via **Delta Time**, **Mouse Look 360°** e base de **Multiplayer em rede local (LAN/UDP)** usando Winsock2.
+O projeto combina **Raycasting DDA em alta resolução micro-ASCII**, física independente da taxa de quadros via **Delta Time**, **Mouse Look 360°**, sistema de personagens/habilidades e **Multiplayer LAN/UDP para até 4 jogadores** (Co-op e PvP) usando Winsock2.
 
 ---
 

@@ -725,7 +725,7 @@ static void test_medkit_and_traps(void) {
 
 int main(void) {
     printf("============================================================\n");
-    printf("          SUITE DE TESTES - ASCII DOOM EM C (A2)           \n");
+    printf("          SUITE DE TESTES - SECTOR 404 (404 NF)            \n");
     printf("============================================================\n");
 
     test_map_default();
