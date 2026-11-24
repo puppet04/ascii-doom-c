@@ -1634,7 +1634,7 @@ static void api_get_grid_size(int *out_w, int *out_h) {
 }
 
 static float api_get_time(void) {
-    return IsWindowReady() ? (float)GetTime() : 0.0f;
+    return cam_view_ready ? frame_time_now : (IsWindowReady() ? (float)GetTime() : 0.0f);
 }
 
 static float api_get_view_angle(const void *player_ptr) {
@@ -1693,24 +1693,6 @@ static void draw_shadow_flame(const Player *p, float wx, float wy, float height,
                 color = make_color(110, 48, 185); ch = v < -0.6f ? '^' : '+';
             }
             set_cell_if_closer(px, py, depth, ch, color, black);
-        }
-    }
-}
-
-void renderer_draw_burning_enemies(const Player *p, const EnemyManager *enemies) {
-    if (!p || !enemies) return;
-    float time = cam_view_ready ? frame_time_now : (IsWindowReady() ? (float)GetTime() : 0.0f);
-    for (int i = 0; i < enemies->count; i++) {
-        const Enemy *e = &enemies->enemies[i];
-        if (!e->active || e->burn_time <= 0) continue;
-        float fade = fminf(1, e->burn_time * 2);
-        for (int j = 0; j < 7; j++) {
-            float phase = time + i * 1.7f + j * 0.73f;
-            float angle = j * 2.4f + time * 0.7f;
-            float height = 0.12f + fmodf(time * 0.65f + j * 0.137f, 0.85f);
-            draw_shadow_flame(p, e->x + cosf(angle)*0.22f,
-                              e->y + sinf(angle)*0.22f, height,
-                              (0.045f + 0.025f*(1-height))*fade, phase, 0);
         }
     }
 }
@@ -2494,53 +2476,6 @@ void renderer_draw_scene_and_hud(const Player *player, int is_multiplayer,
         DrawText(v_str, vx, cy_px + v_gap, ch_sz, cross_col);
     }
 
-    /* Indicativo visual de queimadura (burn) nas bordas da tela e alerta */
-    if (player && enemies_player_is_burning()) {
-        float t_burn = (float)GetTime();
-        float pulse = 0.55f + 0.45f * sinf(t_burn * 18.0f);
-        unsigned char edge_a = (unsigned char)(65.0f + pulse * 75.0f);
-        unsigned char glow_a = (unsigned char)(30.0f + pulse * 45.0f);
-        Color fire_outer = (Color){255, 65, 15, edge_a};
-        Color fire_inner = (Color){255, 165, 25, glow_a};
-        int border_px = (int)((float)sw * 0.018f);
-        if (border_px < 10) border_px = 10;
-        if (border_px > 26) border_px = 26;
-
-        /* Moldura incandescente pulsante ao redor do viewport */
-        DrawRectangle(0, 0, sw, border_px, fire_outer);
-        DrawRectangle(0, view_h - border_px, sw, border_px, fire_outer);
-        DrawRectangle(0, border_px, border_px, view_h - border_px * 2, fire_outer);
-        DrawRectangle(sw - border_px, border_px, border_px, view_h - border_px * 2, fire_outer);
-        DrawRectangle(border_px, border_px, sw - border_px * 2, border_px / 2, fire_inner);
-        DrawRectangle(border_px, view_h - border_px - border_px / 2, sw - border_px * 2, border_px / 2, fire_inner);
-
-        /* Linguas de fogo ASCII na base do viewport */
-        int flame_fs = (int)(glyph_size * 1.25f);
-        if (flame_fs < 14) flame_fs = 14;
-        if (flame_fs > 28) flame_fs = 28;
-        int step_x = flame_fs;
-        for (int fx = 6; fx < sw - 6; fx += step_x) {
-            float wave = sinf(t_burn * 16.0f + (float)fx * 0.09f);
-            int lift = (int)((0.5f + 0.5f * wave) * (float)(flame_fs / 2));
-            const char *fch = (wave > 0.2f) ? "^" : "*";
-            Color fcol = (wave > 0.2f) ? (Color){255, 225, 70, 220} : (Color){255, 95, 20, 210};
-            DrawText(fch, fx, view_h - flame_fs - lift, flame_fs, fcol);
-        }
-
-        /* Badge de alerta "EM CHAMAS!" */
-        const char *burn_lbl = "!! EM CHAMAS !!";
-        int b_fs = (int)((float)hud_h * 0.22f);
-        if (b_fs < 14) b_fs = 14;
-        if (b_fs > 24) b_fs = 24;
-        int b_tw = MeasureText(burn_lbl, b_fs);
-        int b_pad_x = 12;
-        int b_pad_y = 4;
-        int bx = (sw - b_tw) / 2 - b_pad_x;
-        int by = view_h - flame_fs - b_fs - 18;
-        DrawRectangle(bx, by, b_tw + b_pad_x * 2, b_fs + b_pad_y * 2, (Color){145, 22, 8, 210});
-        DrawRectangleLines(bx, by, b_tw + b_pad_x * 2, b_fs + b_pad_y * 2, (Color){255, 195, 45, 240});
-        DrawText(burn_lbl, bx + b_pad_x, by + b_pad_y, b_fs, (Color){255, 235, 110, 255});
-    }
     int hud_y = view_h;
     DrawRectangle(0, hud_y, sw, hud_h, (Color){16, 19, 27, 255});
     DrawRectangle(0, hud_y, sw, 3, (Color){196, 48, 42, 255});
