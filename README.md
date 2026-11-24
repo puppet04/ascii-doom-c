@@ -45,7 +45,7 @@ No menu, abra **Selecionar personagem**, escolha **Fuzileiro**, **Kasane Teto**,
 Fuzileiro vem selecionado por padrao (100 de vida, 30 de municao e velocidade 4.2). Use o mouse ou as setas; Enter confirma. A escolha vale enquanto o jogo estiver
 aberto, tanto no singleplayer quanto no multiplayer.
 
-Teto tem 100 de vida, 30 de municao e velocidade 4.8, com visual ASCII proprio
+Teto tem 100 de vida, 30 de municao e velocidade 4.2, com visual ASCII proprio
 no pedestal, no retrato do HUD e na camera local em terceira pessoa (`V`).
 O visual escolhido ainda nao e transmitido aos outros jogadores pela rede.
 
@@ -60,10 +60,10 @@ ou `Esc` descarta o rascunho. As setas `<` e `>` mudam a pagina da lista.
 Ha oito vagas de criacao por sessao: os personagens criados permanecem ao voltar
 das partidas, mas nao sao gravados em disco ao fechar o jogo.
 
-Arauto das Sombras tem 120 de vida, 30 de municao e velocidade 4.0. Seu visual
+Arauto das Sombras tem 100 de vida, 30 de municao e velocidade 4.2. Seu visual
 ASCII inclui capuz, manto de penas, correntes e detalhes vermelhos, sem cajado.
 
-Guts tem 150 de vida, 30 de municao e velocidade 3.8. Seu visual inclui armadura
+Guts tem 100 de vida, 30 de municao e velocidade 4.2. Seu visual inclui armadura
 escura, capa, braco metalico e Dragonslayer nas costas, no menu, HUD e terceira
 pessoa. No modo Berserk, a espada passa a ser a arma de combate corpo a corpo.
 
@@ -73,13 +73,15 @@ velocidade 4.2. Sua passiva e Guerrilheiro, descrita abaixo.
 
 ### Habilidades e combate singleplayer
 
-- **Kasane Teto:** uma kill, quando a habilidade esta pronta, cria uma area no
-  local do inimigo com coracoes flutuantes e um circulo rosa no chao. Dura 10 segundos, tem raio de 2 blocos
+- **Kasane Teto:** `E`, quando a habilidade esta pronta, cria uma area na
+  posicao atual da Teto com coracoes flutuantes e um circulo rosa no chao. Dura 10 segundos, tem raio de 3 blocos
   e concede +35% de velocidade e +25% de dano nos tiros somente dentro dela
   (dano arredondado para inteiro). Cooldown de 30 segundos
-  contado a partir da criacao; kills durante a recarga nao criam outra area.
+  contado a partir da ativacao. Nao exige kills e fica pronta no inicio da partida.
 - **Arauto das Sombras:** `E` dispara uma bola de fogo negra que causa 5 de dano
-  ao primeiro inimigo atingido. Para nas paredes. Cooldown de 30 segundos.
+  ao primeiro inimigo atingido e o incendeia por 5 segundos (2 de dano por
+  segundo). Fogo violeta animado com nucleo escuro, rastro e brasas. Para nas
+  paredes. Cooldown de 30 segundos.
 - **Guts:** depois de 5 kills, `E` ativa Berserk por 10 segundos, uma vez por
   partida. Troca para a armadura Berserker e espada com alcance de 1.5 bloco,
   eliminacao em um golpe, sem gastar municao, e dano recebido dobrado.
@@ -100,7 +102,7 @@ sincroniza essas habilidades, inimigos ou dano PvP.
 | Tecla / Botão | Ação |
 | :--- | :--- |
 | `Mouse` (movimento), `Q` ou Setas esquerda/direita | Girar a câmera (360° fluido) |
-| `E` | Habilidade do Arauto / Berserk do Guts quando pronto (tecla reservada) |
+| `E` | Area da Teto / habilidade do Arauto / Berserk do Guts quando pronto (tecla reservada) |
 | `W` / `A` / `S` / `D` | Movimentação contínua (com movimento diagonal normalizado) |
 | `Shift` | Correr (*Sprint*) |
 | `Clique Esquerdo` ou `Espaço` | Atirar |

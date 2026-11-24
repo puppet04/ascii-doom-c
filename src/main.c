@@ -3832,6 +3832,9 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         renderer_draw_sprites(&player, mp_sprites, mp_count);
         map_render_hazards(&map, &player, r_api);
         renderer_draw_ability_effects(&player);
+        if (!is_pvp) {
+            renderer_draw_burning_enemies(&player, &enemies);
+        }
         draw_sliding_minimap(&map, &player, mm_markers, mm_count);
         renderer_draw_weapon(&player);
         renderer_draw_hud(&player);

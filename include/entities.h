@@ -13,6 +13,8 @@
 
 #define MAX_WEAPONS 4
 #define MAX_ENEMIES 32
+#define SHADOW_BURN_DURATION 5.0f
+#define SHADOW_BURN_DAMAGE 2
 
 typedef enum {
     WEAPON_PISTOL = 0,
@@ -81,6 +83,8 @@ typedef struct {
     float attack_cooldown;
     float aggro_range;
     int optional_for_exit;
+    float burn_time;
+    float burn_tick;
 } Enemy;
 
 typedef struct {
