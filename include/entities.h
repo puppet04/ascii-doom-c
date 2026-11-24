@@ -3,6 +3,7 @@
 
 #include "map.h"
 #include "player.h"
+#include "render_api.h"
 
 /*
  * MODULO 5: ARMAS E INIMIGOS (Responsavel: Guilherme - branch guilherme)
@@ -119,5 +120,8 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
  */
 int enemies_check_hit(EnemyManager *mgr, const GameMap *map,
                       Player *player, const Weapon *weapon);
+
+/* Desenha todos os inimigos e projeteis ativos usando a biblioteca de renderizacao. */
+void entities_render(const EnemyManager *mgr, const Player *player, const RendererApi *r);
 
 #endif /* ENTITIES_H */

@@ -11,6 +11,12 @@
 #include "raylib.h"
 #include "renderer.h"
 
+#ifdef _WIN32
+/* Solicita automaticamente a GPU dedicada (NVIDIA Optimus / AMD PowerXpress) em notebooks hibridos */
+__declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+#endif
+
 /* ============================================================================
  * ESTRUTURAS LOCAIS DE MENU, CONFIGURACOES E KEYBINDS (EXCLUSIVO DE main.c)
  * ============================================================================ */
@@ -59,8 +65,10 @@ typedef struct {
     int show_fps;
     int res_idx;
     int ascii_quality;
+    int ascii_style;
     int selected_character;
     int selected_level;
+    int mp_game_mode; /* NET_GAME_COOP (0) ou NET_GAME_PVP (1) */
     CharacterRoster roster;
 } AppConfig;
 
@@ -84,20 +92,26 @@ static void app_config_init(AppConfig *cfg) {
     cfg->fps_cap = TARGET_FPS;
     cfg->selected_character = PRESET_FUZILEIRO;
     cfg->selected_level = 0;
+    cfg->mp_game_mode = NET_GAME_COOP;
     player_roster_init(&cfg->roster);
     cfg->show_fps = 0; /* Desativado por padrao */
     cfg->res_idx = 1;  /* 1280 x 720 padrao */
     cfg->ascii_quality = ASCII_QUALITY_AUTO;
+    cfg->ascii_style = ASCII_STYLE_CLASSIC;
 }
 
 static const char *quality_to_label(int q) {
     switch (q) {
-        case ASCII_QUALITY_LEVE:  return "LEVE";
-        case ASCII_QUALITY_MEDIA: return "MEDIA";
-        case ASCII_QUALITY_ALTA:  return "ALTA";
+        case ASCII_QUALITY_LEVE:  return "BAIXO";
+        case ASCII_QUALITY_MEDIA: return "MEDIO";
+        case ASCII_QUALITY_ALTA:  return "ALTO";
         case ASCII_QUALITY_ULTRA: return "ULTRA";
         default:                  return "AUTO (JANELA)";
     }
+}
+
+static const char *style_to_label(int style) {
+    return (style == ASCII_STYLE_SOLID) ? "ESTILO 2: MICRO-ASCII" : "ESTILO 1: SOBREPOSTO";
 }
 
 static float calc_effective_density_scale(int quality, int sw, int sh) {
@@ -142,6 +156,8 @@ static void cleanup_raylib_screenshots(void) {
     }
 }
 
+/* Alterna janela sem bordas ocupando o monitor inteiro.
+ * Usa (mh + 1) px para impedir promocao do Windows WGL para Exclusive Fullscreen. */
 static void toggle_borderless_window(void) {
     if (!g_borderless_mode) {
         Vector2 wp = GetWindowPosition();
@@ -300,24 +316,66 @@ static const char *key_to_label(int key) {
  * LOGICA DO JOGO E INPUT COM KEYBINDS CUSTOMIZAVEIS
  * ============================================================================ */
 
+/* ============================================================================
+ * REGISTRADORES DA BIBLIOTECA GRAFICA E FUNCOES AUXILIARES DO MENU / PARTIDA
+ * ============================================================================ */
+
+/* Conecta os hooks do modulo map.c (chao, paredes especiais 'E'/'$' e minimapa)
+ * dentro da biblioteca renderer, sem criar dependencia entre renderer e map.c. */
+static void register_renderer_hooks(void) {
+    renderer_set_floor_hook(map_floor_decal_hook);
+    renderer_set_wall_hook(map_wall_style_hook);
+    renderer_set_minimap_hook(map_minimap_tile_hook);
+}
+
+/* Atualiza a camera deslizante 16x16 do minimapa em funcao da posicao do jogador
+ * e converte as coordenadas de inimigos/remoto antes de desenhar o minimapa. */
+static void draw_sliding_minimap(const GameMap *map, const Player *player,
+                                 const SpriteEntity *sprites, int count) {
+    if (!map || !player) {
+        return;
+    }
+    GameMap mm_map;
+    Player mm_player = *player;
+    SpriteEntity mm_sprites[MAX_SPRITES];
+    int mm_cnt = count;
+    if (mm_cnt < 0) mm_cnt = 0;
+    if (mm_cnt > MAX_SPRITES) mm_cnt = MAX_SPRITES;
+
+    map_build_minimap_view(map, &mm_map, &mm_player.x, &mm_player.y);
+    for (int i = 0; i < mm_cnt; i++) {
+        mm_sprites[i] = sprites[i];
+        if (!map_to_minimap_coords(&mm_sprites[i].x, &mm_sprites[i].y)) {
+            mm_sprites[i].active = 0;
+        }
+    }
+    renderer_draw_minimap(&mm_map, &mm_player, mm_sprites, mm_cnt);
+}
+
 static int run_single_test_frame(void) {
     GameMap map;
     Player player;
     SpriteEntity demo_sprite;
 
+    register_renderer_hooks();
     map_load_level(0, &map);
     player_init(&player, 2.5f, 4.5f, 0.15f);
+    map_apply_pending_spawn(&player.x, &player.y);
 
     demo_sprite.x = 5.5f;
     demo_sprite.y = 4.5f;
     demo_sprite.active = 1;
     demo_sprite.shooting = 0;
     demo_sprite.label = 'O';
+    demo_sprite.visual_id = PRESET_FUZILEIRO;
+    memset(&demo_sprite.appearance, 0, sizeof(demo_sprite.appearance));
+    demo_sprite.team_accent = 2;
 
     renderer_clear();
     renderer_draw_walls(&map, &player);
     renderer_draw_sprites(&player, &demo_sprite, 1);
-    renderer_draw_minimap(&map, &player, &demo_sprite, 1);
+    map_render_hazards(&map, &player, renderer_get_api());
+    draw_sliding_minimap(&map, &player, &demo_sprite, 1);
     renderer_draw_weapon(&player);
     renderer_draw_hud(&player);
     renderer_present_stdout(&player, 0, 0);
@@ -419,17 +477,15 @@ static Color shade_rgb(float r, float g, float b, float mul, unsigned char a) {
     return (Color){clamp_u8(r * mul), clamp_u8(g * mul), clamp_u8(b * mul), a};
 }
 
-/* Matriz Bayer 4x4 retornando limiar em [-0.18, +0.18] para dithering ASCII */
-static float bayer4x4(int x, int y) {
-    static const int B[4][4] = {
-        {  0,  8,  2, 10 },
-        { 12,  4, 14,  6 },
-        {  3, 11,  1,  9 },
-        { 15,  7, 13,  5 }
+/* Matriz Bayer 4x4 pre-escalada retornando limiar em [-0.18, +0.18] para dithering ASCII */
+static inline float bayer4x4(int x, int y) {
+    static const float BAYER_OFF[4][4] = {
+        { -0.180000f,  0.012000f, -0.132000f,  0.060000f },
+        {  0.108000f, -0.084000f,  0.156000f, -0.036000f },
+        { -0.108000f,  0.084000f, -0.156000f,  0.036000f },
+        {  0.180000f, -0.012000f,  0.132000f, -0.060000f }
     };
-    int xi = ((x % 4) + 4) % 4;
-    int yi = ((y % 4) + 4) % 4;
-    return ((float)B[yi][xi] / 15.0f - 0.5f) * 0.36f;
+    return BAYER_OFF[y & 3][x & 3];
 }
 
 /* Botao tatico com chanfro duplo e realce energetico */
@@ -498,7 +554,7 @@ static int draw_small_button(int x, int y, int w, int h, const char *label,
     return (hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT));
 }
 
-enum { SHOWCASE_GW = 210, SHOWCASE_GH = 260 };
+enum { SHOWCASE_GW = 280, SHOWCASE_GH = 340 };
 
 typedef struct {
     int gw;
@@ -517,13 +573,16 @@ static ShowcaseLayout calc_showcase_layout(int sw, int sh, float sc, int page, i
     ShowcaseLayout L;
     float dscale = calc_effective_density_scale(quality, sw, sh);
     float grid_f = (dscale > 1.0f) ? 1.0f : dscale;
+    int solid = (renderer_get_visual_style() == ASCII_STYLE_SOLID);
+    int max_gw = solid ? SHOWCASE_GW : 210;
+    int max_gh = solid ? SHOWCASE_GH : 260;
 
-    L.gw = (int)roundf((float)SHOWCASE_GW * grid_f);
-    L.gh = (int)roundf((float)SHOWCASE_GH * grid_f);
-    if (L.gw < 105) L.gw = 105;
-    if (L.gh < 130) L.gh = 130;
-    if (L.gw > SHOWCASE_GW) L.gw = SHOWCASE_GW;
-    if (L.gh > SHOWCASE_GH) L.gh = SHOWCASE_GH;
+    L.gw = (int)roundf((float)max_gw * grid_f);
+    L.gh = (int)roundf((float)max_gh * grid_f);
+    if (L.gw < (max_gw / 2)) L.gw = max_gw / 2;
+    if (L.gh < (max_gh / 2)) L.gh = max_gh / 2;
+    if (L.gw > max_gw) L.gw = max_gw;
+    if (L.gh > max_gh) L.gh = max_gh;
 
     L.total_h = fminf((float)sh * 0.76f, 540.0f * sc);
     if (L.total_h < 220.0f) L.total_h = 220.0f;
@@ -544,17 +603,42 @@ static ShowcaseLayout calc_showcase_layout(int sw, int sh, float sc, int page, i
     return L;
 }
 
-/* Avalia geometria 2.5D continua do soldado placeholder no espaco canonico gx in [-34..34], gy in [0..86] */
+/* Avalia geometria 2.5D continua de qualquer personagem ou skin no espaco canonico gx in [-34..34], gy in [0..86] */
 static int showcase_character = PRESET_FUZILEIRO;
 static CharacterAppearance showcase_appearance;
 static char showcase_name[32] = "Fuzileiro";
 
-static void eval_showcase_point(float gx, float gy, float breath,
-                                int *mat_out, float *nx_out, float *ny_out) {
-    if (player_appearance_visual(showcase_character, &showcase_appearance).custom_sprite && gy < 74.0f) {
-        *mat_out = player_appearance_material(showcase_character, &showcase_appearance, gx / 28.0f, (gy - breath) / 74.0f, 0);
-        *nx_out = gx / 40.0f;
-        *ny_out = 0.0f;
+static void eval_showcase_point_for(int visual_id, const CharacterAppearance *app,
+                                    float gx, float gy, float breath,
+                                    int *mat_out, float *nx_out, float *ny_out) {
+    if (player_appearance_visual(visual_id, app).custom_sprite) {
+        if (gy < 74.0f) {
+            *mat_out = player_appearance_material(visual_id, app, gx / 28.0f, (gy - breath) / 74.0f, 0);
+            *nx_out = gx / 40.0f;
+            *ny_out = 0.0f;
+            return;
+        }
+        /* Na base (>= 74.0), desenha apenas o pedestal holografico para nao vazar botas do Fuzileiro */
+        int pmat = 0;
+        float pnx = 0.0f, pny = 0.0f;
+        float ped_dx = gx / 27.5f;
+        float ped_dy = (gy - 79.2f) / 4.3f;
+        float ped_d = sqrtf(ped_dx * ped_dx + ped_dy * ped_dy);
+        float ped_dy_b = (gy - 80.7f) / 4.2f;
+        float ped_d_b = sqrtf(ped_dx * ped_dx + ped_dy_b * ped_dy_b);
+        if (ped_d <= 1.0f) {
+            int neon_ring = (ped_d > 0.86f) || (fabsf(ped_d - 0.58f) < 0.045f);
+            pmat = neon_ring ? 3 : 5;
+            pnx = ped_dx * 0.48f;
+            pny = ped_dy * 0.58f - 0.45f;
+        } else if (ped_d_b <= 1.0f && gy >= 79.2f) {
+            pmat = 5;
+            pnx = ped_dx * 0.52f;
+            pny = 0.35f;
+        }
+        *mat_out = pmat;
+        *nx_out = pnx;
+        *ny_out = pny;
         return;
     }
     float uy = gy - breath;
@@ -766,115 +850,180 @@ static void eval_showcase_point(float gx, float gy, float breath,
     *ny_out = ny;
 }
 
-/* Cenario cyber-industrial (pilares, brilho no horizonte, piso 3D e brasas) 100% em micro-ASCII continuo */
+static void eval_showcase_point(float gx, float gy, float breath,
+                                int *mat_out, float *nx_out, float *ny_out) {
+    eval_showcase_point_for(showcase_character, &showcase_appearance,
+                            gx, gy, breath, mat_out, nx_out, ny_out);
+}
+
+/* Cenario cyber-industrial (pilares, brilho no horizonte, piso 3D e brasas) renderizado em 1 draw call na GPU */
 static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float t,
                                       int page, int quality) {
+    (void)font;
     float dscale = calc_effective_density_scale(quality, sw, sh);
-    int bg_gw = (int)roundf(320.0f * dscale);
-    int bg_gh = (int)roundf(160.0f * dscale);
-    if (bg_gw < 140) bg_gw = 140;
-    if (bg_gh < 70)  bg_gh = 70;
+    int solid = (renderer_get_visual_style() == ASCII_STYLE_SOLID);
+    int bg_gw = (int)roundf((solid ? 480.0f : 320.0f) * dscale);
+    int bg_gh = (int)roundf((solid ? 240.0f : 160.0f) * dscale);
+    if (solid) {
+        if (bg_gw < 220) bg_gw = 220;
+        if (bg_gh < 110) bg_gh = 110;
+        if (bg_gw > 560) bg_gw = 560;
+        if (bg_gh > 280) bg_gh = 280;
+    } else {
+        if (bg_gw < 140) bg_gw = 140;
+        if (bg_gh < 70)  bg_gh = 70;
+        if (bg_gw > 384) bg_gw = 384;
+        if (bg_gh > 192) bg_gh = 192;
+    }
+
+    static AsciiCell bg_buf[288 * 576];
+    static int bg_c_gw = -1, bg_c_gh = -1, bg_c_page = -1, bg_c_sw = -1, bg_c_sh = -1;
+    static int bg_c_solid = -1, bg_c_char = -1;
+    static CharacterAppearance bg_c_app = {0};
+    static float bg_c_t = -10.0f;
+
+    ClearBackground((Color){5, 7, 11, 255});
+
+    int bg_dirty = (bg_c_gw != bg_gw || bg_c_gh != bg_gh || bg_c_page != page ||
+                    bg_c_sw != sw || bg_c_sh != sh || bg_c_solid != solid ||
+                    fabsf(t - bg_c_t) >= 0.033f || bg_c_t < 0.0f);
+    if (!bg_dirty && page != MENU_PAGE_LOBBY) {
+        if (bg_c_char != showcase_character ||
+            memcmp(&bg_c_app, &showcase_appearance, sizeof(bg_c_app)) != 0) {
+            bg_dirty = 1;
+        }
+    }
+    if (!bg_dirty) {
+        renderer_draw_ascii_buffer(bg_buf, bg_gw, bg_gh, bg_gw, 0.0f, 0.0f, (float)sw, (float)sh);
+        return;
+    }
 
     static const char *SOLID_BG_RAMP = "=+*xX#%8&BWM@"; /* 13 caracteres de alta cobertura */
     static const char *GLOW_RAMP     = ":-~=+*#%8&WM@"; /* 13 niveis para nevoa do horizonte */
     static const float PILLAR_X[7] = {0.08f, 0.22f, 0.36f, 0.50f, 0.64f, 0.78f, 0.92f};
-
-    ClearBackground((Color){5, 7, 11, 255});
 
     ShowcaseLayout L = calc_showcase_layout(sw, sh, sc, page, quality);
     float breath = sinf(t * 2.3f) * 0.60f;
 
     float cw = (float)sw / (float)bg_gw;
     float ch = (float)sh / (float)bg_gh;
-    float glyph_sz = ch * 1.82f;
-    if (glyph_sz < 3.5f) glyph_sz = 3.5f;
-
     const float horizon = 0.62f;
 
+    /* Arrays pre-calculados por coluna (eliminam buscas em 7 pilares, expf e sqrtf por celula) */
+    float col_xn[576];
+    float col_px_c[576];
+    float col_left_atten[576];
+    float col_h_focus[576];
+    float col_glow_x_mod[576];
+    float col_ped_glow_x[576];
+    int   col_pil_idx[576];
+    float col_pil_u[576];
+    float col_pil_cyl[576];
+
+    for (int c = 0; c < bg_gw; c++) {
+        float px_c = ((float)c + 0.5f) * cw;
+        float xn = ((float)c + 0.5f) / (float)bg_gw;
+        float left_atten = 0.46f + 0.54f * smoothstep_f(0.06f, 0.45f, xn);
+        float ped_dx = (xn - 0.70f) / 0.21f;
+
+        col_px_c[c] = px_c;
+        col_xn[c] = xn;
+        col_left_atten[c] = left_atten;
+        col_h_focus[c] = 0.65f + 0.45f * expf(-fabsf(xn - 0.70f) * 3.8f);
+        col_glow_x_mod[c] = 0.64f + 0.14f * sinf(xn * 6.5f + t * 0.45f) +
+                            0.32f * expf(-fabsf(xn - 0.70f) * 3.0f);
+        col_ped_glow_x[c] = expf(-(ped_dx * ped_dx) * 1.35f) * 0.62f;
+
+        int pil_idx = -1;
+        float pil_u = 0.0f;
+        float pil_cyl = 0.0f;
+        for (int i = 0; i < 7; i++) {
+            float pw = 0.015f + 0.004f * fabsf((float)i - 3.0f);
+            float dist_p = fabsf(xn - PILLAR_X[i]);
+            if (dist_p <= pw) {
+                pil_idx = i;
+                pil_u = (xn - PILLAR_X[i]) / pw;
+                pil_cyl = sqrtf(fmaxf(0.10f, 1.0f - pil_u * pil_u));
+                break;
+            }
+        }
+        col_pil_idx[c] = pil_idx;
+        col_pil_u[c] = pil_u;
+        col_pil_cyl[c] = pil_cyl;
+    }
+
+    const float L_x1 = (float)L.x0 + L.total_w;
+    const float L_y1 = (float)L.y0 + L.total_h;
+    const float inv_L_w = 1.0f / L.total_w;
+    const float inv_L_h = 1.0f / L.total_h;
+    const int t_scroll = (int)(t * 17.0f);
+    const AsciiColor bg_zero = {0, 0, 0};
+
     for (int r = 0; r < bg_gh; r++) {
-        float py = (float)r * ch;
-        float py_c = py + ch * 0.5f;
+        float py_c = ((float)r + 0.5f) * ch;
         float yn = ((float)r + 0.5f) / (float)bg_gh;
+        int in_showcase_y = (page != MENU_PAGE_LOBBY && py_c >= (float)L.y0 && py_c <= L_y1);
+        float sy = in_showcase_y ? ((py_c - (float)L.y0) * inv_L_h) * 86.0f : 0.0f;
 
-        for (int c = 0; c < bg_gw; c++) {
-            float px = (float)c * cw;
-            float px_c = px + cw * 0.5f;
-            float xn = ((float)c + 0.5f) / (float)bg_gw;
-
-            /* Recorte limpo sob a silhueta do personagem para manter zero pintura opaca por tras */
-            if (px_c >= (float)L.x0 && px_c <= (float)L.x0 + L.total_w &&
-                py_c >= (float)L.y0 && py_c <= (float)L.y0 + L.total_h) {
-                float sx = ((px_c - (float)L.x0) / L.total_w - 0.5f) * 68.0f;
-                float sy = ((py_c - (float)L.y0) / L.total_h) * 86.0f;
-                int s_mat = 0;
-                float s_nx = 0.0f, s_ny = 0.0f;
-                eval_showcase_point(sx, sy, breath, &s_mat, &s_nx, &s_ny);
-                if (s_mat != 0) {
-                    continue;
+        if (fabsf(yn - horizon) < 0.0080f) {
+            for (int c = 0; c < bg_gw; c++) {
+                int cell_idx = r * bg_gw + c;
+                bg_buf[cell_idx].ch = ' ';
+                if (in_showcase_y && col_px_c[c] >= (float)L.x0 && col_px_c[c] <= L_x1) {
+                    float sx = ((col_px_c[c] - (float)L.x0) * inv_L_w - 0.5f) * 68.0f;
+                    int s_mat = 0; float s_nx = 0.0f, s_ny = 0.0f;
+                    eval_showcase_point(sx, sy, breath, &s_mat, &s_nx, &s_ny);
+                    if (s_mat != 0) continue;
                 }
-            }
-
-            /* Atenuacao suave a esquerda para destacar logo, botoes e paineis sem caixas opacas */
-            float left_atten = 0.46f + 0.54f * smoothstep_f(0.06f, 0.45f, xn);
-            float dither = bayer4x4(c, r);
-
-            /* 1. Feixe luminoso exatamente na linha do horizonte */
-            if (fabsf(yn - horizon) < 0.0080f) {
-                float h_focus = 0.65f + 0.45f * expf(-fabsf(xn - 0.70f) * 3.8f);
-                float h_lum = clamp_f01(h_focus * (0.72f + 0.28f * left_atten));
+                float h_lum = clamp_f01(col_h_focus[c] * (0.72f + 0.28f * col_left_atten[c]));
                 static const char *H_CH = "=#@W";
-                char hch = H_CH[(c + r) % 4];
-                Color hcol = (Color){
-                    clamp_u8(255.0f * h_lum),
-                    clamp_u8(146.0f * h_lum),
-                    clamp_u8(54.0f * h_lum),
-                    245
+                bg_buf[cell_idx] = (AsciiCell){
+                    H_CH[(c + r) & 3],
+                    {clamp_u8(255.0f * h_lum), clamp_u8(146.0f * h_lum), clamp_u8(54.0f * h_lum)},
+                    bg_zero
                 };
-                DrawTextCodepoint(font, (int)hch, (Vector2){px, py}, glyph_sz, hcol);
-                continue;
             }
+            continue;
+        }
 
-            /* 2. Zona superior: pilares industriais, brilho no horizonte e brasas ASCII */
-            if (yn < horizon) {
-                float dy_h = horizon - yn;
-                float glow = expf(-dy_h * 11.2f) *
-                             (0.64f + 0.14f * sinf(xn * 6.5f + t * 0.45f) +
-                              0.32f * expf(-fabsf(xn - 0.70f) * 3.0f));
+        if (yn < horizon) {
+            float dy_h = horizon - yn;
+            float row_glow_y = expf(-dy_h * 11.2f);
+            float rib_mod = fmodf(yn + 0.02f, 0.09f);
+            int is_rib = (rib_mod < 0.012f);
+            int neon_y = (yn >= 0.12f && yn <= 0.60f);
 
-                int in_pillar = 0;
-                int pil_idx = 0;
-                float pil_u = 0.0f;
-                for (int i = 0; i < 7; i++) {
-                    float pw = 0.015f + 0.004f * fabsf((float)i - 3.0f);
-                    float dist_p = fabsf(xn - PILLAR_X[i]);
-                    if (dist_p <= pw) {
-                        in_pillar = 1;
-                        pil_idx = i;
-                        pil_u = (xn - PILLAR_X[i]) / pw;
-                        break;
-                    }
+            for (int c = 0; c < bg_gw; c++) {
+                int cell_idx = r * bg_gw + c;
+                bg_buf[cell_idx].ch = ' ';
+
+                if (in_showcase_y && col_px_c[c] >= (float)L.x0 && col_px_c[c] <= L_x1) {
+                    float sx = ((col_px_c[c] - (float)L.x0) * inv_L_w - 0.5f) * 68.0f;
+                    int s_mat = 0; float s_nx = 0.0f, s_ny = 0.0f;
+                    eval_showcase_point(sx, sy, breath, &s_mat, &s_nx, &s_ny);
+                    if (s_mat != 0) continue;
                 }
 
-                if (in_pillar) {
-                    float cyl = sqrtf(fmaxf(0.10f, 1.0f - pil_u * pil_u));
-                    int is_rib = (fmodf(yn + 0.02f, 0.09f) < 0.012f);
-                    int is_neon = (fabsf(pil_u) < 0.16f && yn >= 0.12f && yn <= 0.60f);
+                float left_atten = col_left_atten[c];
+                float dither = bayer4x4(c, r);
+                float glow = row_glow_y * col_glow_x_mod[c];
 
+                if (col_pil_idx[c] >= 0) {
+                    float pil_u = col_pil_u[c];
+                    int is_neon = (neon_y && fabsf(pil_u) < 0.16f);
                     if (is_neon) {
-                        float pulse = 0.70f + 0.30f * sinf(t * 2.4f - yn * 11.0f + (float)pil_idx * 1.15f);
+                        float pulse = 0.70f + 0.30f * sinf(t * 2.4f - yn * 11.0f + (float)col_pil_idx[c] * 1.15f);
                         float nlum = clamp_f01(pulse * (0.48f + 0.52f * left_atten));
                         static const char *N_CH = "@W#%=";
                         int ni = (int)(clamp_f01(1.0f - pulse + fabsf(pil_u) * 2.5f) * 4.5f);
-                        Color ncol = (Color){
-                            clamp_u8(255.0f * nlum),
-                            clamp_u8(138.0f * nlum),
-                            clamp_u8(44.0f * nlum),
-                            245
+                        bg_buf[cell_idx] = (AsciiCell){
+                            N_CH[ni],
+                            {clamp_u8(255.0f * nlum), clamp_u8(138.0f * nlum), clamp_u8(44.0f * nlum)},
+                            bg_zero
                         };
-                        DrawTextCodepoint(font, (int)N_CH[ni], (Vector2){px, py}, glyph_sz, ncol);
                     } else {
                         int edge = (fabsf(pil_u) > 0.78f);
-                        float illum = (0.20f + 0.28f * cyl + glow * 0.42f + (is_rib ? 0.18f : 0.0f)) * left_atten;
+                        float illum = (0.20f + 0.28f * col_pil_cyl[c] + glow * 0.42f + (is_rib ? 0.18f : 0.0f)) * left_atten;
                         char gch;
                         if (edge) {
                             gch = (pil_u < 0.0f) ? '[' : ']';
@@ -886,74 +1035,84 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
                             if (idx > 12) idx = 12;
                             gch = SOLID_BG_RAMP[idx];
                         }
-                        Color pcol = (Color){
-                            clamp_u8((44.0f + glow * 160.0f) * illum * 1.40f),
-                            clamp_u8((50.0f + glow * 76.0f) * illum * 1.35f),
-                            clamp_u8((66.0f + glow * 28.0f) * illum * 1.35f),
-                            235
+                        bg_buf[cell_idx] = (AsciiCell){
+                            gch,
+                            {clamp_u8((44.0f + glow * 160.0f) * illum * 1.40f),
+                             clamp_u8((50.0f + glow * 76.0f) * illum * 1.35f),
+                             clamp_u8((66.0f + glow * 28.0f) * illum * 1.35f)},
+                            bg_zero
                         };
-                        DrawTextCodepoint(font, (int)gch, (Vector2){px, py}, glyph_sz, pcol);
                     }
                     continue;
                 }
 
-                /* Brasas / fagulhas ascendentes no fundo escuro */
-                int scroll_r = r + (int)(t * 17.0f + (float)((c * 19) % 7));
+                int scroll_r = r + t_scroll + ((c * 19) % 7);
                 unsigned h = (unsigned)(c * 73856093u ^ scroll_r * 19349663u);
                 if ((h % 263u) == 0u && yn > 0.08f && left_atten > 0.55f) {
                     static const char *SPARK_CH = "*+#%";
-                    char sch = SPARK_CH[h % 4u];
                     float sp_lum = (0.68f + 0.32f * sinf(t * 4.0f + (float)c)) * left_atten;
-                    Color scol = (Color){
-                        clamp_u8(255.0f * sp_lum),
-                        clamp_u8(168.0f * sp_lum),
-                        clamp_u8(68.0f * sp_lum),
-                        235
+                    bg_buf[cell_idx] = (AsciiCell){
+                        SPARK_CH[h & 3u],
+                        {clamp_u8(255.0f * sp_lum), clamp_u8(168.0f * sp_lum), clamp_u8(68.0f * sp_lum)},
+                        bg_zero
                     };
-                    DrawTextCodepoint(font, (int)sch, (Vector2){px, py}, glyph_sz, scol);
                     continue;
                 }
 
-                /* Nevoa luminosa continua acima do horizonte em ASCII denso */
                 float g_lum = glow * left_atten;
                 if (g_lum + dither * 0.35f > 0.11f) {
                     int idx = (int)(clamp_f01(g_lum + dither * 0.7f) * 12.9f);
                     if (idx < 0) idx = 0;
                     if (idx > 12) idx = 12;
-                    Color gcol = (Color){
-                        clamp_u8(232.0f * g_lum),
-                        clamp_u8(98.0f * g_lum),
-                        clamp_u8(40.0f * g_lum),
-                        225
+                    bg_buf[cell_idx] = (AsciiCell){
+                        GLOW_RAMP[idx],
+                        {clamp_u8(232.0f * g_lum), clamp_u8(98.0f * g_lum), clamp_u8(40.0f * g_lum)},
+                        bg_zero
                     };
-                    DrawTextCodepoint(font, (int)GLOW_RAMP[idx], (Vector2){px, py}, glyph_sz, gcol);
                 }
-                continue;
+            }
+            continue;
+        }
+
+        /* Metade inferior (chao perspectiva): termos de Z pre-calculados para toda a linha */
+        float dz = yn - horizon + 0.008f;
+        float z_world = 0.32f / dz;
+        float dist_fade = expf(-z_world * 0.14f);
+        float z065 = z_world * 0.65f + 0.5f;
+        float fz = fabsf((z065 - (float)(int)z065) - 0.5f);
+        float radial_w = 0.0088f * z_world * 1.15f;
+        if (radial_w < 0.018f) radial_w = 0.018f;
+        float radial_lim = radial_w * 0.90f;
+        float trans_w = 0.018f * z_world * z_world * 0.65f;
+        if (trans_w < 0.025f) trans_w = 0.025f;
+        int on_trans = (fz < trans_w * 0.78f);
+
+        float ped_dy = (yn - 0.80f) / 0.13f;
+        float row_ped_y = expf(-(ped_dy * ped_dy) * 1.35f);
+        float hor_glow = expf(-(yn - horizon) * 16.0f) * 0.45f;
+        float pulse_ring = 0.86f + 0.14f * sinf(z_world * 1.8f - t * 2.6f);
+        float cos_zw = cosf(z_world * 4.2f);
+        float xw_scale = z_world * 3.1f;
+
+        for (int c = 0; c < bg_gw; c++) {
+            int cell_idx = r * bg_gw + c;
+            bg_buf[cell_idx].ch = ' ';
+
+            if (in_showcase_y && col_px_c[c] >= (float)L.x0 && col_px_c[c] <= L_x1) {
+                float sx = ((col_px_c[c] - (float)L.x0) * inv_L_w - 0.5f) * 68.0f;
+                int s_mat = 0; float s_nx = 0.0f, s_ny = 0.0f;
+                eval_showcase_point(sx, sy, breath, &s_mat, &s_nx, &s_ny);
+                if (s_mat != 0) continue;
             }
 
-            /* 3. Piso da arena em perspectiva 3D continua (yn >= horizon) */
-            float dz = yn - horizon + 0.008f;
-            float z_world = 0.32f / dz;
-            float x_world = (xn - 0.56f) * z_world * 3.1f;
-            float dist_fade = expf(-z_world * 0.14f);
-
-            float fx = fabsf(fmodf(fabsf(x_world * 1.15f) + 0.5f, 1.0f) - 0.5f);
-            float fz = fabsf(fmodf(z_world * 0.65f + 0.5f, 1.0f) - 0.5f);
-
-            float radial_w = 0.0088f * z_world * 1.15f;
-            if (radial_w < 0.018f) radial_w = 0.018f;
-            float trans_w = 0.018f * z_world * z_world * 0.65f;
-            if (trans_w < 0.025f) trans_w = 0.025f;
-
-            int on_radial = (fx < radial_w * 0.90f);
-            int on_trans  = (fz < trans_w * 0.78f);
-
-            /* Reflexo quente sob o pedestal do personagem */
-            float ped_dx = (xn - 0.70f) / 0.21f;
-            float ped_dy = (yn - 0.80f) / 0.13f;
-            float ped_glow = expf(-(ped_dx * ped_dx + ped_dy * ped_dy) * 1.35f) * 0.62f;
-            float hor_glow = expf(-(yn - horizon) * 16.0f) * 0.45f;
-            float pulse_ring = 0.86f + 0.14f * sinf(z_world * 1.8f - t * 2.6f);
+            float xn = col_xn[c];
+            float left_atten = col_left_atten[c];
+            float dither = bayer4x4(c, r);
+            float x_world = (xn - 0.56f) * xw_scale;
+            float axw = fabsf(x_world * 1.15f) + 0.5f;
+            float fx = fabsf((axw - (float)(int)axw) - 0.5f);
+            int on_radial = (fx < radial_lim);
+            float ped_glow = col_ped_glow_x[c] * row_ped_y;
 
             if (on_radial || on_trans) {
                 float line_lum = clamp_f01((0.48f + 0.52f * dist_fade + ped_glow * 0.45f) * pulse_ring * left_atten);
@@ -970,15 +1129,13 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
                     lch = (line_lum > 0.68f) ? '#' : '=';
                 }
 
-                Color lcol = (Color){
-                    clamp_u8(250.0f * line_lum),
-                    clamp_u8(126.0f * line_lum),
-                    clamp_u8(48.0f * line_lum),
-                    245
+                bg_buf[cell_idx] = (AsciiCell){
+                    lch,
+                    {clamp_u8(250.0f * line_lum), clamp_u8(126.0f * line_lum), clamp_u8(48.0f * line_lum)},
+                    bg_zero
                 };
-                DrawTextCodepoint(font, (int)lch, (Vector2){px, py}, glyph_sz, lcol);
             } else {
-                float tile_n = 0.22f + 0.09f * sinf(x_world * 4.2f) * cosf(z_world * 4.2f);
+                float tile_n = 0.22f + 0.09f * sinf(x_world * 4.2f) * cos_zw;
                 float plate_lum = (dist_fade * tile_n + ped_glow + hor_glow) * left_atten;
                 if (plate_lum < 0.025f) continue;
 
@@ -987,16 +1144,23 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
                 if (idx > 12) idx = 12;
 
                 float col_scale = 0.24f + plate_lum * 1.05f;
-                Color fcol = (Color){
-                    clamp_u8((115.0f + ped_glow * 140.0f) * col_scale),
-                    clamp_u8((66.0f + ped_glow * 74.0f) * col_scale),
-                    clamp_u8((44.0f + dist_fade * 36.0f) * col_scale),
-                    225
+                bg_buf[cell_idx] = (AsciiCell){
+                    SOLID_BG_RAMP[idx],
+                    {clamp_u8((115.0f + ped_glow * 140.0f) * col_scale),
+                     clamp_u8((66.0f + ped_glow * 74.0f) * col_scale),
+                     clamp_u8((44.0f + dist_fade * 36.0f) * col_scale)},
+                    bg_zero
                 };
-                DrawTextCodepoint(font, (int)SOLID_BG_RAMP[idx], (Vector2){px, py}, glyph_sz, fcol);
             }
         }
     }
+
+    bg_c_gw = bg_gw; bg_c_gh = bg_gh; bg_c_page = page;
+    bg_c_sw = sw; bg_c_sh = sh; bg_c_solid = solid;
+    bg_c_char = showcase_character;
+    bg_c_app = showcase_appearance;
+    bg_c_t = t;
+    renderer_draw_ascii_buffer(bg_buf, bg_gw, bg_gh, bg_gw, 0.0f, 0.0f, (float)sw, (float)sh);
 }
 
 static const char *glyph_rows_5x7(char ch, int row) {
@@ -1020,19 +1184,155 @@ static const char *glyph_rows_5x7(char ch, int row) {
     }
 }
 
-/* Desenha uma palavra em micro-malha ASCII continua com dithering e sombra ASCII (ZERO DrawRectangle) */
+/* Desenha uma palavra em micro-malha ASCII continua em 1 draw call na GPU (ZERO DrawRectangle) */
 static void draw_dense_ascii_word(Font font, const char *word, int x, int y,
                                   float cell, int sub_div, Color top_col, Color bot_col,
                                   float t) {
     static const char *LOGO_RAMP = "=+*x#%8&WM@"; /* 11 niveis de alta cobertura */
+    enum { LOGO_BUF_W = 256, LOGO_BUF_H = 64 };
+
     int len = (int)strlen(word);
+    if (len <= 0 || sub_div <= 0) return;
+
     int char_cols = 5 * sub_div;
     int gap_cols = sub_div;
     int total_rows = 7 * sub_div;
+    int grid_w = len * (char_cols + gap_cols) - gap_cols + 2;
+    int grid_h = total_rows + 2;
+
+    if (grid_w <= LOGO_BUF_W && grid_h <= LOGO_BUF_H) {
+        (void)font;
+        static AsciiCell word_cache[2][LOGO_BUF_H * LOGO_BUF_W];
+        static char wc_word[2][16] = {"", ""};
+        static int wc_sub[2] = {-1, -1};
+        static int wc_gw[2] = {-1, -1};
+        static int wc_gh[2] = {-1, -1};
+        static int wc_style[2] = {-1, -1};
+        static float wc_t[2] = {-10.0f, -10.0f};
+        int slot = (word[0] == 'D') ? 1 : 0;
+        int cur_style = renderer_get_visual_style();
+        AsciiCell *wbuf = word_cache[slot];
+
+        int w_dirty = (wc_sub[slot] != sub_div || wc_gw[slot] != grid_w ||
+                       wc_gh[slot] != grid_h || wc_style[slot] != cur_style ||
+                       strncmp(wc_word[slot], word, 15) != 0 ||
+                       fabsf(t - wc_t[slot]) >= 0.033f || wc_t[slot] < 0.0f);
+        if (!w_dirty) {
+            renderer_draw_ascii_buffer(wbuf, grid_w, grid_h, grid_w,
+                                       (float)x, (float)y,
+                                       (float)grid_w * cell, (float)grid_h * cell);
+            return;
+        }
+
+        const AsciiColor bg_zero = {0, 0, 0};
+        const AsciiColor sh_col = {8, 10, 16};
+        int total_cells = grid_w * grid_h;
+        for (int i = 0; i < total_cells; i++) {
+            wbuf[i].ch = ' ';
+            wbuf[i].fg = bg_zero;
+            wbuf[i].bg = bg_zero;
+        }
+
+        /* Passada 1: sombra discreta apenas em ASCII puro no buffer GPU */
+        for (int idx = 0; idx < len; idx++) {
+            char ch = word[idx];
+            int mc_base = idx * (char_cols + gap_cols);
+            for (int br = 0; br < 7; br++) {
+                const char *pattern = glyph_rows_5x7(ch, br);
+                for (int bc = 0; bc < 5; bc++) {
+                    if (pattern[bc] != '#') continue;
+                    int empty_right = (bc == 4 || pattern[bc + 1] != '#');
+                    int empty_bot   = (br == 6 || glyph_rows_5x7(ch, br + 1)[bc] != '#');
+                    if (!empty_right && !empty_bot) continue;
+
+                    for (int sr = 0; sr < sub_div; sr++) {
+                        int mr = br * sub_div + sr;
+                        for (int sc_i = 0; sc_i < sub_div; sc_i++) {
+                            int is_r = (empty_right && sc_i == sub_div - 1);
+                            int is_b = (empty_bot && sr == sub_div - 1);
+                            if (!is_r && !is_b) continue;
+                            int mc = mc_base + bc * sub_div + sc_i;
+                            wbuf[(mr + 1) * grid_w + (mc + 1)] = (AsciiCell){':', sh_col, bg_zero};
+                        }
+                    }
+                }
+            }
+        }
+
+        /* Passada 2: preenchimento ultra-denso continuo e degrade vertical no buffer GPU */
+        for (int idx = 0; idx < len; idx++) {
+            char ch = word[idx];
+            int mc_base = idx * (char_cols + gap_cols);
+            for (int br = 0; br < 7; br++) {
+                const char *pattern = glyph_rows_5x7(ch, br);
+                for (int bc = 0; bc < 5; bc++) {
+                    if (pattern[bc] != '#') continue;
+
+                    int empty_left  = (bc == 0 || pattern[bc - 1] != '#');
+                    int empty_right = (bc == 4 || pattern[bc + 1] != '#');
+                    int empty_top   = (br == 0 || glyph_rows_5x7(ch, br - 1)[bc] != '#');
+                    int empty_bot   = (br == 6 || glyph_rows_5x7(ch, br + 1)[bc] != '#');
+
+                    for (int sr = 0; sr < sub_div; sr++) {
+                        int mr = br * sub_div + sr;
+                        float v = (total_rows > 1) ? ((float)mr / (float)(total_rows - 1)) : 0.0f;
+                        float wave = 0.14f * sinf(t * 2.8f - v * 4.5f + (float)idx * 0.7f);
+                        float cr = (float)top_col.r * (1.0f - v) + (float)bot_col.r * v;
+                        float cg = (float)top_col.g * (1.0f - v) + (float)bot_col.g * v;
+                        float cb = (float)top_col.b * (1.0f - v) + (float)bot_col.b * v;
+
+                        for (int sc_i = 0; sc_i < sub_div; sc_i++) {
+                            int mc = mc_base + bc * sub_div + sc_i;
+                            int is_l = (empty_left && sc_i == 0);
+                            int is_r = (empty_right && sc_i == sub_div - 1);
+                            int is_t = (empty_top && sr == 0);
+                            int is_b = (empty_bot && sr == sub_div - 1);
+
+                            char gch;
+                            float boost = 1.0f + wave;
+                            if (is_l && !is_t && !is_b) {
+                                gch = (sub_div > 1) ? '[' : '|';
+                                boost = 1.18f;
+                            } else if (is_r && !is_t && !is_b) {
+                                gch = (sub_div > 1) ? ']' : '|';
+                                boost = 1.12f;
+                            } else if (is_t) {
+                                gch = '=';
+                                boost = 1.24f;
+                            } else if (is_b) {
+                                gch = '_';
+                                boost = 0.92f;
+                            } else {
+                                float dens = (0.85f - v * 0.35f) + wave + bayer4x4(mc + idx * 3, mr) * 0.75f;
+                                int li = (int)(clamp_f01(dens) * 10.9f);
+                                if (li < 0) li = 0;
+                                if (li > 10) li = 10;
+                                gch = LOGO_RAMP[li];
+                            }
+
+                            wbuf[mr * grid_w + mc] = (AsciiCell){
+                                gch,
+                                {clamp_u8(cr * boost), clamp_u8(cg * boost), clamp_u8(cb * boost)},
+                                bg_zero
+                            };
+                        }
+                    }
+                }
+            }
+        }
+
+        snprintf(wc_word[slot], sizeof(wc_word[slot]), "%.15s", word);
+        wc_sub[slot] = sub_div; wc_gw[slot] = grid_w; wc_gh[slot] = grid_h;
+        wc_style[slot] = cur_style; wc_t[slot] = t;
+        renderer_draw_ascii_buffer(wbuf, grid_w, grid_h, grid_w,
+                                   (float)x, (float)y,
+                                   (float)grid_w * cell, (float)grid_h * cell);
+        return;
+    }
+
+    /* Fallback CPU se a palavra exceder os limites estaticos */
     float glyph_sz = cell * 2.65f;
     if (glyph_sz < 3.5f) glyph_sz = 3.5f;
-
-    /* Passada 1: sombra discreta apenas em ASCII puro nas bordas inferiores/direitas */
     float sh_off = cell * 1.35f;
     for (int idx = 0; idx < len; idx++) {
         char ch = word[idx];
@@ -1043,81 +1343,21 @@ static void draw_dense_ascii_word(Font font, const char *word, int x, int y,
                 if (pattern[bc] != '#') continue;
                 int empty_right = (bc == 4 || pattern[bc + 1] != '#');
                 int empty_bot   = (br == 6 || glyph_rows_5x7(ch, br + 1)[bc] != '#');
-                if (!empty_right && !empty_bot) continue;
-
-                for (int sr = 0; sr < sub_div; sr++) {
-                    int mr = br * sub_div + sr;
-                    for (int sc_i = 0; sc_i < sub_div; sc_i++) {
-                        int is_r = (empty_right && sc_i == sub_div - 1);
-                        int is_b = (empty_bot && sr == sub_div - 1);
-                        if (!is_r && !is_b) continue;
-                        int mc = bc * sub_div + sc_i;
-                        float sx = gx0 + (float)mc * cell + sh_off;
-                        float sy = (float)y + (float)mr * cell + sh_off;
-                        DrawTextCodepoint(font, ':', (Vector2){sx, sy}, glyph_sz,
-                                          (Color){8, 10, 16, 225});
-                    }
-                }
-            }
-        }
-    }
-
-    /* Passada 2: preenchimento ultra-denso continuo em ASCII puro */
-    for (int idx = 0; idx < len; idx++) {
-        char ch = word[idx];
-        float gx0 = (float)x + (float)(idx * (char_cols + gap_cols)) * cell;
-        for (int br = 0; br < 7; br++) {
-            const char *pattern = glyph_rows_5x7(ch, br);
-            for (int bc = 0; bc < 5; bc++) {
-                if (pattern[bc] != '#') continue;
-
-                int empty_left  = (bc == 0 || pattern[bc - 1] != '#');
-                int empty_right = (bc == 4 || pattern[bc + 1] != '#');
-                int empty_top   = (br == 0 || glyph_rows_5x7(ch, br - 1)[bc] != '#');
-                int empty_bot   = (br == 6 || glyph_rows_5x7(ch, br + 1)[bc] != '#');
-
                 for (int sr = 0; sr < sub_div; sr++) {
                     int mr = br * sub_div + sr;
                     float v = (total_rows > 1) ? ((float)mr / (float)(total_rows - 1)) : 0.0f;
-                    float wave = 0.14f * sinf(t * 2.8f - v * 4.5f + (float)idx * 0.7f);
                     float cr = (float)top_col.r * (1.0f - v) + (float)bot_col.r * v;
                     float cg = (float)top_col.g * (1.0f - v) + (float)bot_col.g * v;
                     float cb = (float)top_col.b * (1.0f - v) + (float)bot_col.b * v;
-
                     for (int sc_i = 0; sc_i < sub_div; sc_i++) {
                         int mc = bc * sub_div + sc_i;
                         float px = gx0 + (float)mc * cell;
                         float py = (float)y + (float)mr * cell;
-
-                        int is_l = (empty_left && sc_i == 0);
-                        int is_r = (empty_right && sc_i == sub_div - 1);
-                        int is_t = (empty_top && sr == 0);
-                        int is_b = (empty_bot && sr == sub_div - 1);
-
-                        char gch;
-                        float boost = 1.0f + wave;
-                        if (is_l && !is_t && !is_b) {
-                            gch = (sub_div > 1) ? '[' : '|';
-                            boost = 1.18f;
-                        } else if (is_r && !is_t && !is_b) {
-                            gch = (sub_div > 1) ? ']' : '|';
-                            boost = 1.12f;
-                        } else if (is_t) {
-                            gch = '=';
-                            boost = 1.24f;
-                        } else if (is_b) {
-                            gch = '_';
-                            boost = 0.92f;
-                        } else {
-                            float dens = (0.85f - v * 0.35f) + wave + bayer4x4(mc + idx * 3, mr) * 0.75f;
-                            int li = (int)(clamp_f01(dens) * 10.9f);
-                            if (li < 0) li = 0;
-                            if (li > 10) li = 10;
-                            gch = LOGO_RAMP[li];
+                        if ((empty_right && sc_i == sub_div - 1) || (empty_bot && sr == sub_div - 1)) {
+                            DrawTextCodepoint(font, ':', (Vector2){px + sh_off, py + sh_off}, glyph_sz,
+                                              (Color){8, 10, 16, 225});
                         }
-
-                        Color c_fg = shade_rgb(cr, cg, cb, boost, 255);
-                        DrawTextCodepoint(font, (int)gch, (Vector2){px, py}, glyph_sz, c_fg);
+                        DrawTextCodepoint(font, '#', (Vector2){px, py}, glyph_sz, shade_rgb(cr, cg, cb, 1.0f, 255));
                     }
                 }
             }
@@ -1160,80 +1400,104 @@ static int draw_dense_logo(Font font, int left_x, int top_y, float sc, float t,
     return sub_y + sub_sz + (int)(24.0f * sc);
 }
 
-/* Showcase do soldado placeholder em micro-ASCII com densidade dinamica */
-static void draw_dense_character_showcase(Font font, int sw, int sh, float sc, float t,
-                                          int page, int quality) {
-    static const char *SOLID_RAMP = "=-+*xX#%8&BWM@"; /* 14 niveis densos de alta cobertura */
+/* Helper compartilhado: amostra qualquer personagem/skin em uma grade ASCII fornecida */
+static void build_character_ascii_quad(int visual_id, const CharacterAppearance *app,
+                                       int gw, int gh, float t,
+                                       float max_gy, float lum_floor,
+                                       AsciiCell *out_buf) {
+    static const char *SOLID_RAMP = "=+*xX#%8&BWM@"; /* 13 niveis densos de alta cobertura */
     static int mat_grid[SHOWCASE_GH][SHOWCASE_GW];
     static float nx_grid[SHOWCASE_GH][SHOWCASE_GW];
     static float ny_grid[SHOWCASE_GH][SHOWCASE_GW];
 
-    ShowcaseLayout L = calc_showcase_layout(sw, sh, sc, page, quality);
+    if (gw < 8) gw = 8;
+    if (gh < 8) gh = 8;
+    if (gw > SHOWCASE_GW) gw = SHOWCASE_GW;
+    if (gh > SHOWCASE_GH) gh = SHOWCASE_GH;
+
     float breath = sinf(t * 2.3f) * 0.60f;
     float scan_row = fmodf(t * 22.0f, 112.0f) - 12.0f;
+    int is_custom_skin = player_appearance_visual(visual_id, app).custom_sprite;
 
-    /* Primeira passada: amostra geometria continua na grade 210x260 para detectar contornos e juntas */
-    for (int r = 0; r < L.gh; r++) {
-        float gy = (((float)r + 0.5f) / (float)L.gh) * 86.0f;
-        for (int c = 0; c < L.gw; c++) {
-            float gx = (((float)c + 0.5f) / (float)L.gw - 0.5f) * 68.0f;
-            eval_showcase_point(gx, gy, breath,
-                                &mat_grid[r][c], &nx_grid[r][c], &ny_grid[r][c]);
+    /* Passada 1: amostra geometria continua na grade para detectar contornos e juntas */
+    for (int r = 0; r < gh; r++) {
+        float gy = (((float)r + 0.5f) / (float)gh) * max_gy;
+        for (int c = 0; c < gw; c++) {
+            float gx = (((float)c + 0.5f) / (float)gw - 0.5f) * 68.0f;
+            eval_showcase_point_for(visual_id, app, gx, gy, breath,
+                                    &mat_grid[r][c], &nx_grid[r][c], &ny_grid[r][c]);
         }
     }
 
-    /* Segunda passada: desenha exclusivamente caracteres densos encostando entre si */
-    for (int r = 0; r < L.gh; r++) {
-        float gy = (((float)r + 0.5f) / (float)L.gh) * 86.0f;
-        float py = (float)L.y0 + (float)r * L.ch;
+    /* Passada 2: preenche grade ASCII densa no buffer de saida */
+    for (int r = 0; r < gh; r++) {
+        float gy = (((float)r + 0.5f) / (float)gh) * max_gy;
+        float scan = expf(-fabsf(gy - scan_row) * 0.45f) * 0.24f;
 
-        for (int c = 0; c < L.gw; c++) {
+        for (int c = 0; c < gw; c++) {
+            int buf_idx = r * gw + c;
             int mat = mat_grid[r][c];
-            if (mat == 0) continue;
+            if (mat == 0) {
+                out_buf[buf_idx].ch = ' ';
+                continue;
+            }
 
             float nx = nx_grid[r][c];
             float ny = ny_grid[r][c];
             float nz = sqrtf(fmaxf(0.08f, 1.0f - nx * nx * 0.62f - ny * ny * 0.45f));
-            float ndotl = fmaxf(0.20f, (-0.44f * nx - 0.50f * ny + 0.74f * nz));
-            float spec = (mat == 2 || mat == 3)
-                ? powf(fmaxf(0.0f, (-0.30f * nx - 0.42f * ny + 0.86f * nz)), 10.0f) * 0.36f
+            float ndotl = fmaxf(0.26f, (-0.44f * nx - 0.50f * ny + 0.74f * nz));
+            float s = (mat == 2 || mat == 3)
+                ? fmaxf(0.0f, (-0.30f * nx - 0.42f * ny + 0.86f * nz))
                 : 0.0f;
-            float rim = powf(fmaxf(0.0f, 1.0f - nz), 1.8f) * 0.60f;
-            float scan = expf(-fabsf(gy - scan_row) * 0.45f) * 0.24f;
+            float s2 = s * s;
+            float s4 = s2 * s2;
+            float spec = s4 * s4 * s2 * 0.36f;
+            float inv_nz = fmaxf(0.0f, 1.0f - nz);
+            float rim = inv_nz * inv_nz * 0.60f;
 
             float cr, cg, cb;
             if (mat == 1) {
-                cr = 152.0f; cg = 178.0f; cb = 208.0f;
+                cr = 158.0f; cg = 184.0f; cb = 214.0f;
             } else if (mat == 2) {
-                cr = 222.0f; cg = 234.0f; cb = 250.0f;
+                cr = 224.0f; cg = 236.0f; cb = 252.0f;
             } else if (mat == 3) {
-                cr = 255.0f; cg = 188.0f; cb = 68.0f;
+                cr = 255.0f; cg = 192.0f; cb = 74.0f;
                 ndotl = fmaxf(ndotl, 0.90f);
             } else if (mat == 5) {
-                cr = 112.0f; cg = 136.0f; cb = 166.0f;
+                cr = 118.0f; cg = 142.0f; cb = 172.0f;
             } else {
-                cr = 102.0f; cg = 118.0f; cb = 140.0f;
+                cr = 118.0f; cg = 136.0f; cb = 158.0f;
             }
 
-            if (player_appearance_visual(showcase_character, &showcase_appearance).custom_sprite && mat != 5) {
+            if (is_custom_skin && mat != 5) {
+                static const char *SKIN_RAMP = "#%8&BWM@";
                 CharacterColor color = player_get_material_color(mat);
-                cr = color.r; cg = color.g; cb = color.b;
-                ndotl = 0.85f;
-                spec = rim = scan = 0.0f;
+                cr = (float)color.r; cg = (float)color.g; cb = (float)color.b;
+                float mat_lum = (0.299f * cr + 0.587f * cg + 0.114f * cb) / 255.0f;
+                float ch_lum = clamp_f01(0.82f + 0.22f * nz);
+                float gl_val = clamp_f01(mat_lum * 0.65f + 0.35f * nz + bayer4x4(c, r) * 0.22f);
+                int r_idx = (int)(gl_val * 7.9f);
+                if (r_idx < 0) r_idx = 0;
+                if (r_idx > 7) r_idx = 7;
+                out_buf[buf_idx] = (AsciiCell){
+                    SKIN_RAMP[r_idx],
+                    {clamp_u8(cr * ch_lum), clamp_u8(cg * ch_lum), clamp_u8(cb * ch_lum)},
+                    {0, 0, 0}
+                };
+                continue;
             }
-            float lum = ndotl * 1.05f + spec + rim * 0.44f + scan;
-            float px = (float)L.x0 + (float)c * L.cw;
+            float lum = ndotl * 1.08f + spec + rim * 0.44f + scan;
 
             int m_l = (c > 0) ? mat_grid[r][c - 1] : 0;
-            int m_r = (c + 1 < L.gw) ? mat_grid[r][c + 1] : 0;
+            int m_r = (c + 1 < gw) ? mat_grid[r][c + 1] : 0;
             int m_u = (r > 0) ? mat_grid[r - 1][c] : 0;
-            int m_d = (r + 1 < L.gh) ? mat_grid[r + 1][c] : 0;
+            int m_d = (r + 1 < gh) ? mat_grid[r + 1][c] : 0;
 
             int is_outer = (m_l == 0 || m_r == 0 || m_u == 0 || m_d == 0);
             int is_seam = (!is_outer && (m_l != mat || m_r != mat || m_u != mat || m_d != mat));
 
             char glyph;
-            float ch_lum = fmaxf(lum, 0.22f);
+            float ch_lum = fmaxf(lum, lum_floor);
 
             if (is_outer) {
                 if (m_u == 0 || m_d == 0) {
@@ -1243,31 +1507,119 @@ static void draw_dense_character_showcase(Font font, int sw, int sh, float sc, f
                 } else {
                     glyph = (ny < -0.25f) ? '\\' : (ny > 0.25f ? '/' : ']');
                 }
-                ch_lum = fmaxf(ch_lum * 1.18f, 0.78f);
+                ch_lum = fmaxf(ch_lum * 1.18f, 0.80f);
             } else if (mat == 5) {
                 static const char *PAD_CH = "=#*+WM";
                 glyph = PAD_CH[(c + r * 2) % 6];
             } else {
-                float d_lum = lum + bayer4x4(c, r) * 0.75f;
+                float d_lum = lum + bayer4x4(c, r) * 0.65f;
                 if (is_seam) {
-                    d_lum = fmaxf(d_lum, 0.65f);
+                    d_lum = fmaxf(d_lum, 0.68f);
                 }
-                int r_idx = (int)(clamp_f01(d_lum) * 13.9f);
+                int r_idx = (int)(clamp_f01(d_lum) * 12.9f);
                 if (r_idx < 0) r_idx = 0;
-                if (r_idx > 13) r_idx = 13;
+                if (r_idx > 12) r_idx = 12;
                 glyph = is_seam ? ((m_u != mat || m_d != mat) ? '=' : '#') : SOLID_RAMP[r_idx];
             }
 
             float edge_tint = rim * ((mat == 3) ? 0.25f : 0.78f);
-            Color fg = (Color){
-                clamp_u8(cr * ch_lum + edge_tint * 92.0f),
-                clamp_u8(cg * ch_lum + edge_tint * 55.0f),
-                clamp_u8(cb * ch_lum + edge_tint * 25.0f),
-                255
+            out_buf[buf_idx] = (AsciiCell){
+                glyph,
+                {clamp_u8(cr * ch_lum + edge_tint * 92.0f),
+                 clamp_u8(cg * ch_lum + edge_tint * 55.0f),
+                 clamp_u8(cb * ch_lum + edge_tint * 25.0f)},
+                {0, 0, 0}
             };
-            DrawTextCodepoint(font, (int)glyph, (Vector2){px, py}, L.glyph_sz, fg);
         }
     }
+}
+
+/* Preview compacto animado em ASCII (cacheado a 15 Hz por slot) usado no Lobby */
+static void draw_lobby_character_preview(int box_x, int box_y, int box_w, int box_h,
+                                         int visual_id, const CharacterAppearance *app,
+                                         float t) {
+    if (box_w < 24 || box_h < 24) {
+        return;
+    }
+    enum { LB_GW = 148, LB_GH = 184, LB_SLOTS = 4 };
+    static AsciiCell lb_bufs[LB_SLOTS][LB_GH * LB_GW];
+    static int lb_box_x[LB_SLOTS] = {-1, -1, -1, -1};
+    static int lb_vid[LB_SLOTS] = {-1, -1, -1, -1};
+    static CharacterAppearance lb_app[LB_SLOTS] = {0};
+    static int lb_style[LB_SLOTS] = {-1, -1, -1, -1};
+    static float lb_t[LB_SLOTS] = {-10.0f, -10.0f, -10.0f, -10.0f};
+    static int lb_rr = 0;
+
+    int slot = -1;
+    for (int i = 0; i < LB_SLOTS; i++) {
+        if (lb_box_x[i] == box_x) { slot = i; break; }
+    }
+    if (slot < 0) {
+        for (int i = 0; i < LB_SLOTS; i++) {
+            if (lb_box_x[i] < 0) { slot = i; break; }
+        }
+        if (slot < 0) { slot = lb_rr; lb_rr = (lb_rr + 1) % LB_SLOTS; }
+    }
+
+    int cur_style = renderer_get_visual_style();
+    CharacterAppearance zero_app = {0};
+    const CharacterAppearance *eff_app = app ? app : &zero_app;
+    int dirty = (lb_box_x[slot] != box_x || lb_vid[slot] != visual_id ||
+                 lb_style[slot] != cur_style ||
+                 memcmp(&lb_app[slot], eff_app, sizeof(*eff_app)) != 0 ||
+                 fabsf(t - lb_t[slot]) >= 0.066f || lb_t[slot] < 0.0f);
+
+    if (dirty) {
+        build_character_ascii_quad(visual_id, eff_app, LB_GW, LB_GH,
+                                   t, 74.0f, 0.38f, lb_bufs[slot]);
+        lb_box_x[slot] = box_x;
+        lb_vid[slot] = visual_id;
+        lb_app[slot] = *eff_app;
+        lb_style[slot] = cur_style;
+        lb_t[slot] = t;
+    }
+
+    float target_ratio = (float)LB_GW / (float)LB_GH;
+    float draw_h = (float)box_h;
+    float draw_w = draw_h * target_ratio;
+    if (draw_w > (float)box_w) {
+        draw_w = (float)box_w;
+        draw_h = draw_w / target_ratio;
+    }
+    float draw_x = (float)box_x + ((float)box_w - draw_w) * 0.5f;
+    float draw_y = (float)box_y + ((float)box_h - draw_h) * 0.5f;
+
+    renderer_draw_ascii_buffer(lb_bufs[slot], LB_GW, LB_GH, LB_GW,
+                               draw_x, draw_y, draw_w, draw_h);
+}
+
+/* Showcase do personagem em micro-ASCII (cacheado a 30 Hz) em 1 draw call na GPU */
+static void draw_dense_character_showcase(Font font, int sw, int sh, float sc, float t,
+                                          int page, int quality) {
+    (void)font;
+    static AsciiCell sc_buf[SHOWCASE_GH * SHOWCASE_GW];
+    static int sc_gw = -1, sc_gh = -1, sc_vid = -1, sc_style = -1;
+    static CharacterAppearance sc_app = {0};
+    static float sc_t = -10.0f;
+
+    ShowcaseLayout L = calc_showcase_layout(sw, sh, sc, page, quality);
+    int cur_style = renderer_get_visual_style();
+    int dirty = (sc_gw != L.gw || sc_gh != L.gh || sc_vid != showcase_character ||
+                 sc_style != cur_style ||
+                 memcmp(&sc_app, &showcase_appearance, sizeof(sc_app)) != 0 ||
+                 fabsf(t - sc_t) >= 0.033f || sc_t < 0.0f);
+    if (dirty) {
+        build_character_ascii_quad(showcase_character, &showcase_appearance,
+                                   L.gw, L.gh, t, 86.0f, 0.34f, sc_buf);
+        sc_gw = L.gw; sc_gh = L.gh;
+        sc_vid = showcase_character;
+        sc_app = showcase_appearance;
+        sc_style = cur_style;
+        sc_t = t;
+    }
+
+    renderer_draw_ascii_buffer(sc_buf, L.gw, L.gh, L.gw,
+                               (float)L.x0, (float)L.y0, L.total_w, L.total_h);
 
     /* Etiqueta compacta acoplada logo abaixo da plataforma ASCII */
     int tag_y = L.y0 + (int)L.total_h - (int)(6.0f * sc);
@@ -1305,7 +1657,7 @@ static void update_bind_capture(AppConfig *cfg, int *listening_bind) {
     }
     int pressed = GetKeyPressed();
     if (pressed > 0 && pressed != KEY_E && pressed != KEY_F11 &&
-        pressed != KEY_F12 && pressed != KEY_F3 && pressed != KEY_F2) {
+        pressed != KEY_F12 && pressed != KEY_F4 && pressed != KEY_F3 && pressed != KEY_F2) {
         int *bind_ptrs[9] = {
             &cfg->binds.move_forward,
             &cfg->binds.move_backward,
@@ -1334,11 +1686,21 @@ static int draw_settings_panel(AppConfig *cfg, int panel_x, int panel_y,
     int b_font = (int)(13.5f * sc);
     if (b_font < 10) b_font = 10;
 
+    int sq_w_est = (int)(28.0f * sc);
+    if (sq_w_est < 22) sq_w_est = 22;
+    int val_w1 = calc_fit_w("ESTILO 1: SOBREPOSTO", b_font, (int)(160.0f * sc), sc);
+    int val_w2 = calc_fit_w("ESTILO 2: MICRO-ASCII", b_font, (int)(160.0f * sc), sc);
+    int val_w_est = (val_w1 > val_w2) ? val_w1 : val_w2;
+
     int pw = (int)(555.0f * sc);
     int max_pw = center_x ? (sw - 32) : (int)((float)sw * 0.56f);
-    int min_sw = MeasureText("Modo de Exibicao (F11):", lbl_sz) +
-                 calc_fit_w("MODO: SEM BORDAS", b_font, (int)(145.0f * sc), sc) +
-                 pad_x * 2 + (int)(20.0f * sc);
+    int min_sw_mode = MeasureText("Modo de Exibicao (F11):", lbl_sz) +
+                      calc_fit_w("MODO: SEM BORDAS", b_font, (int)(145.0f * sc), sc) +
+                      pad_x * 2 + (int)(20.0f * sc);
+    int min_sw_sty = MeasureText("Qualidade ASCII (F2):", lbl_sz) +
+                     val_w_est + sq_w_est * 2 + 10 +
+                     pad_x * 2 + (int)(20.0f * sc);
+    int min_sw = (min_sw_mode > min_sw_sty) ? min_sw_mode : min_sw_sty;
     if (pw < min_sw) pw = min_sw;
     if (pw > max_pw && max_pw >= 330) pw = max_pw;
 
@@ -1384,16 +1746,15 @@ static int draw_settings_panel(AppConfig *cfg, int panel_x, int panel_y,
     int avail_h = foot_btn_y - (int)(10.0f * sc) - sy;
 
     if (*settings_tab == 0) {
-        int row_step = avail_h / 6;
-        if (row_step > (int)(48.0f * sc)) row_step = (int)(48.0f * sc);
-        if (row_step < 24) row_step = 24;
-        int row_bh = (int)(28.0f * sc);
-        if (row_bh > row_step - 5) row_bh = row_step - 5;
-        if (row_bh < 19) row_bh = 19;
+        int row_step = avail_h / 7;
+        if (row_step > (int)(44.0f * sc)) row_step = (int)(44.0f * sc);
+        if (row_step < 22) row_step = 22;
+        int row_bh = (int)(26.0f * sc);
+        if (row_bh > row_step - 4) row_bh = row_step - 4;
+        if (row_bh < 18) row_bh = 18;
 
-        int sq_w = (int)(28.0f * sc);
-        if (sq_w < 22) sq_w = 22;
-        int val_w = calc_fit_w("AUTO (JANELA)", b_font, (int)(116.0f * sc), sc);
+        int sq_w = sq_w_est;
+        int val_w = val_w_est;
         int gt_x = right_edge - sq_w;
         int val_x = gt_x - 5 - val_w;
         int lt_x = val_x - 5 - sq_w;
@@ -1419,9 +1780,9 @@ static int draw_settings_panel(AppConfig *cfg, int panel_x, int panel_y,
             apply_window_resolution(cfg->res_idx);
         }
 
-        /* Linha 2: Densidade Dinamica ASCII */
+        /* Linha 2: Qualidade Dinamica ASCII */
         int r1y = sy + row_step;
-        DrawText("Densidade ASCII (F2):", panel_x + pad_x, r1y + (row_bh - lbl_sz) / 2, lbl_sz, WHITE);
+        DrawText("Qualidade ASCII (F2):", panel_x + pad_x, r1y + (row_bh - lbl_sz) / 2, lbl_sz, WHITE);
         if (draw_small_button(lt_x, r1y, sq_w, row_bh, "<", b_font,
                               (Color){40, 48, 60, 255}, (Color){205, 85, 35, 255})) {
             cfg->ascii_quality = (cfg->ascii_quality + 4) % 5;
@@ -1438,8 +1799,29 @@ static int draw_settings_panel(AppConfig *cfg, int panel_x, int panel_y,
             cfg->ascii_quality = (cfg->ascii_quality + 1) % 5;
         }
 
-        /* Linha 3: Modo de Exibicao (Janela / Janela Sem Bordas) */
-        int r2y = sy + row_step * 2;
+        /* Linha 3: Estilo Visual (Estilo 1 Sobreposto vs Estilo 2 Micro-ASCII) */
+        int r_sty = sy + row_step * 2;
+        DrawText("Estilo Visual (F4):", panel_x + pad_x, r_sty + (row_bh - lbl_sz) / 2, lbl_sz, WHITE);
+        if (draw_small_button(lt_x, r_sty, sq_w, row_bh, "<", b_font,
+                              (Color){40, 48, 60, 255}, (Color){205, 85, 35, 255})) {
+            cfg->ascii_style = (cfg->ascii_style + 1) % 2;
+        }
+        DrawRectangle(val_x, r_sty, val_w, row_bh, (Color){24, 30, 40, 255});
+        DrawRectangleLinesEx((Rectangle){(float)val_x, (float)r_sty, (float)val_w, (float)row_bh},
+                             1.5f, (Color){82, 98, 115, 255});
+        const char *sty_lbl = style_to_label(cfg->ascii_style);
+        int sw_txt = MeasureText(sty_lbl, b_font);
+        DrawText(sty_lbl, val_x + (val_w - sw_txt) / 2, r_sty + (row_bh - b_font) / 2,
+                 b_font, (cfg->ascii_style == ASCII_STYLE_SOLID)
+                             ? (Color){130, 245, 170, 255}
+                             : (Color){255, 195, 105, 255});
+        if (draw_small_button(gt_x, r_sty, sq_w, row_bh, ">", b_font,
+                              (Color){40, 48, 60, 255}, (Color){205, 85, 35, 255})) {
+            cfg->ascii_style = (cfg->ascii_style + 1) % 2;
+        }
+
+        /* Linha 4: Modo de Exibicao (Janela / Janela Sem Bordas) */
+        int r2y = sy + row_step * 3;
         DrawText("Modo de Exibicao (F11):", panel_x + pad_x, r2y + (row_bh - lbl_sz) / 2, lbl_sz, WHITE);
         int is_bl = g_borderless_mode;
         const char *mode_txt = is_bl ? "MODO: SEM BORDAS" : "MODO: JANELA";
@@ -1451,8 +1833,8 @@ static int draw_settings_panel(AppConfig *cfg, int panel_x, int panel_y,
             toggle_borderless_window();
         }
 
-        /* Linha 4: Mostrar FPS na Tela */
-        int r3y = sy + row_step * 3;
+        /* Linha 5: Mostrar FPS na Tela */
+        int r3y = sy + row_step * 4;
         DrawText("Mostrar FPS na Tela (F3):", panel_x + pad_x, r3y + (row_bh - lbl_sz) / 2, lbl_sz, WHITE);
         const char *sfps_txt = cfg->show_fps ? "FPS: ATIVADO" : "FPS: DESATIVADO";
         int sfps_bw = calc_fit_w("FPS: DESATIVADO", b_font, (int)(152.0f * sc), sc);
@@ -1463,8 +1845,8 @@ static int draw_settings_panel(AppConfig *cfg, int panel_x, int panel_y,
             cfg->show_fps = !cfg->show_fps;
         }
 
-        /* Linha 5: Limite de FPS */
-        int r4y = sy + row_step * 4;
+        /* Linha 6: Limite de FPS */
+        int r4y = sy + row_step * 5;
         const char *fps_lbl = (cfg->fps_cap == 165) ? "165 FPS"
                             : (cfg->fps_cap == 60)  ? "60 FPS"
                                                     : "ILIMITADO";
@@ -1480,8 +1862,8 @@ static int draw_settings_panel(AppConfig *cfg, int panel_x, int panel_y,
             SetTargetFPS(cfg->fps_cap);
         }
 
-        /* Linha 6: Sensibilidade do Mouse */
-        int r5y = sy + row_step * 5;
+        /* Linha 7: Sensibilidade do Mouse */
+        int r5y = sy + row_step * 6;
         DrawText(TextFormat("Sensibilidade Mouse: %.4f", cfg->binds.mouse_sens),
                  panel_x + pad_x, r5y + (row_bh - lbl_sz) / 2, lbl_sz, WHITE);
         int pm_w = (int)(36.0f * sc);
@@ -1600,7 +1982,10 @@ static int draw_character_creator(CharacterClass *draft, int x, int y, int w, in
     return 0;
 }
 
-static void draw_level_minimap_preview(int box_x, int box_y, int box_size, const GameMap *m) {
+/* Preview tatico 16x16 do mapa no menu: centraliza a entrada (P / **) no topo e oculta salas secretas */
+static void draw_level_minimap_preview(int box_x, int box_y, int box_size,
+                                       const GameMap *m,
+                                       float spawn_x, float spawn_y) {
     DrawRectangle(box_x, box_y, box_size, box_size, (Color){10, 14, 20, 255});
     DrawRectangleLinesEx((Rectangle){(float)box_x, (float)box_y, (float)box_size, (float)box_size},
                          1.5f, (Color){82, 108, 138, 255});
@@ -1612,50 +1997,60 @@ static void draw_level_minimap_preview(int box_x, int box_y, int box_size, const
     int inner = box_size - pad * 2;
     if (inner < 16) return;
 
-    /* Auto-enquadramento: exibe 16x16 em tela cheia no preview ou 32x32 em mapas grandes */
-    int max_x = 0;
-    int max_y = 0;
-    for (int y = 0; y < m->height; y++) {
-        for (int x = 0; x < m->width; x++) {
-            char raw = map_get_raw_tile(m, x, y);
-            if (raw != '#') {
-                if (x > max_x) max_x = x;
-                if (y > max_y) max_y = y;
-            }
-        }
-    }
-    int view_w = (max_x < 16 && max_y < 16 && m->width >= 16) ? 16 : m->width;
-    int view_h = (max_x < 16 && max_y < 16 && m->height >= 16) ? 16 : m->height;
+    /* Fixa a janela de previa em 16x16 para nunca revelar a planta completa 32x32 nem salas secretas */
+    int view_w = (m->width < MINIMAP_VIEW_SIZE) ? m->width : MINIMAP_VIEW_SIZE;
+    int view_h = (m->height < MINIMAP_VIEW_SIZE) ? m->height : MINIMAP_VIEW_SIZE;
+    int sp_x = (int)floorf(spawn_x);
+    int sp_y = (int)floorf(spawn_y);
+
+    /* Centraliza o spawn ('P') e o arco superior ('**' em sp_x..sp_x+1) no topo central da grade 16x16 */
+    int start_x = sp_x - (view_w / 2 - 1);
+    int start_y = sp_y - 1;
+    if (start_x < 0) start_x = 0;
+    if (start_x > m->width - view_w) start_x = m->width - view_w;
+    if (start_y < 0) start_y = 0;
+    if (start_y > m->height - view_h) start_y = m->height - view_h;
 
     float cw = (float)inner / (float)view_w;
     float ch = (float)inner / (float)view_h;
     int fsz = (int)fmaxf(6.0f, ch * 0.95f);
 
-    for (int y = 0; y < view_h; y++) {
-        for (int x = 0; x < view_w; x++) {
-            char raw = map_get_raw_tile(m, x, y);
-            char t = map_get_wall_equivalent(raw);
+    for (int dy = 0; dy < view_h; dy++) {
+        int my = start_y + dy;
+        for (int dx = 0; dx < view_w; dx++) {
+            int mx = start_x + dx;
+            char raw = map_get_raw_tile(m, mx, my);
             char glyph = '.';
             Color col = (Color){44, 54, 72, 255};
-            if (raw == 'E') {
+
+            if (mx == sp_x && my == sp_y) {
+                /* Posicao inicial do jogador logo abaixo da entrada superior */
+                glyph = 'P';
+                col = (Color){255, 240, 75, 255};
+            } else if (raw == 'E') {
                 glyph = 'E';
                 col = (Color){255, 240, 110, 255};
-            } else if (t == '#') {
-                glyph = '#';
-                col = (Color){220, 74, 58, 255};
-            } else if (t == '@') {
-                glyph = '@';
-                col = (Color){74, 158, 245, 255};
-            } else if (t == '%') {
-                glyph = '%';
-                col = (Color){72, 212, 120, 255};
-            } else if (t != '.' && t != ' ') {
-                glyph = t;
-                col = (Color){225, 172, 70, 255};
+            } else {
+                /* Converte paredes falsas ('$', '&', '/') e blocos secretos (',', ';', ':', '1'..'9') para solido equivalente */
+                char t = map_get_wall_equivalent(raw);
+                if (t == '#') {
+                    glyph = '#';
+                    col = (Color){220, 74, 58, 255};
+                } else if (t == '@') {
+                    glyph = '@';
+                    col = (Color){74, 158, 245, 255};
+                } else if (t == '%') {
+                    glyph = '%';
+                    col = (Color){72, 212, 120, 255};
+                } else if (t != '.' && t != ' ') {
+                    glyph = t;
+                    col = (Color){225, 172, 70, 255};
+                }
             }
+
             char s[2] = {glyph, '\0'};
-            int px = box_x + pad + (int)((float)x * cw + cw * 0.15f);
-            int py = box_y + pad + (int)((float)y * ch + ch * 0.05f);
+            int px = box_x + pad + (int)((float)dx * cw + cw * 0.15f);
+            int py = box_y + pad + (int)((float)dy * ch + ch * 0.05f);
             DrawText(s, px, py, fsz, col);
         }
     }
@@ -1776,10 +2171,17 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
         }
 
-        /* Sincronizacao continua do Lobby enquanto aguarda ou prepara partida */
+        /* Sincronizacao continua do Lobby (ate 4 jogadores) enquanto aguarda ou prepara partida */
         if (page == MENU_PAGE_LOBBY && lobby_active) {
             CharacterClass my_cls = player_roster_get(&cfg->roster, cfg->selected_character);
             const MapLevelInfo *cur_lvl = map_level_get(cfg->selected_level);
+            int is_host = (lobby_net.mode == NET_MODE_HOST);
+
+            if (is_host) {
+                net_host_update_local_slot(&lobby_net, my_cls.name, cfg->selected_character,
+                                           my_cls.visual_id, &my_cls.appearance,
+                                           cfg->mp_game_mode, cfg->selected_level);
+            }
 
             NetCtrlPacket my_pkt;
             memset(&my_pkt, 0, sizeof(my_pkt));
@@ -1787,46 +2189,58 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             my_pkt.msg_type = NET_MSG_LOBBY_STATE;
             my_pkt.level_idx = cfg->selected_level;
             my_pkt.character_idx = cfg->selected_character;
-            my_pkt.ready = (lobby_net.mode == NET_MODE_HOST) ? 1 : lobby_ready;
-            my_pkt.game_started = (lobby_net.mode == NET_MODE_HOST && lobby_started_burst > 0) ? 1 : 0;
+            my_pkt.ready = is_host ? 1 : lobby_ready;
+            my_pkt.game_started = (is_host && lobby_started_burst > 0) ? 1 : 0;
             my_pkt.port = *port_out;
+            my_pkt.game_mode = cfg->mp_game_mode;
+            my_pkt.visual_id = my_cls.visual_id;
+            my_pkt.appearance = my_cls.appearance;
+            my_pkt.player_count = lobby_net.active_player_count;
+            my_pkt.host_session_id = lobby_net.host_session_id;
+            my_pkt.client_id = lobby_net.local_client_id;
+            my_pkt.in_game = lobby_net.in_game;
             snprintf(my_pkt.player_name, sizeof(my_pkt.player_name), "%s", my_cls.name);
             snprintf(my_pkt.map_name, sizeof(my_pkt.map_name), "%s", cur_lvl->name);
 
             int peer_left = 0;
-            int got_lobby = net_poll_lobby(&lobby_net,
-                                           (lobby_net.mode == NET_MODE_HOST) ? &my_pkt : NULL,
-                                           &peer_left);
+            int got_lobby = net_poll_lobby(&lobby_net, is_host ? &my_pkt : NULL, &peer_left);
             if (got_lobby) {
                 last_lobby_rx_t = now_d;
                 mp_err_msg[0] = '\0';
             }
-            if (peer_left) {
-                lobby_ready = 0;
-                if (lobby_net.mode == NET_MODE_CLIENT) {
-                    mp_err_msg[0] = '\0';
-                    snprintf(mp_err_msg, sizeof(mp_err_msg), "O Anfitriao fechou a sala.");
+            if (is_host) {
+                net_lobby_prune_stale(&lobby_net, 3.0);
+                if (peer_left) {
+                    net_broadcast_lobby_roster(&lobby_net, cfg->selected_level, cur_lvl->name, 0);
+                } else if (lobby_net.connected && (now_d - last_lobby_tx_t) >= 0.08) {
+                    net_broadcast_lobby_roster(&lobby_net, cfg->selected_level, cur_lvl->name, 0);
+                    last_lobby_tx_t = now_d;
                 }
-            }
-            if (lobby_net.connected && (now_d - last_lobby_rx_t) > 3.5) {
-                lobby_net.connected = 0;
-                lobby_net.remote_ready = 0;
-                if (lobby_net.mode == NET_MODE_HOST) {
-                    lobby_net.has_peer_addr = 0;
+            } else {
+                if (peer_left || (lobby_net.connected && (now_d - last_lobby_rx_t) > 3.5)) {
+                    leave_mp_lobby(&lobby_active, &lobby_net);
+                    snprintf(mp_err_msg, sizeof(mp_err_msg),
+                             peer_left ? "O Anfitriao fechou a sala."
+                                       : "Conexao com o Anfitriao perdida.");
+                    page = MENU_PAGE_MULTIPLAYER;
+                    continue;
                 }
-            }
-
-            if (lobby_net.has_peer_addr && (now_d - last_lobby_tx_t) >= 0.08) {
-                net_send_lobby_state(&lobby_net, &my_pkt);
-                last_lobby_tx_t = now_d;
-            }
-
-            if (lobby_net.mode == NET_MODE_CLIENT && lobby_net.remote_started) {
-                cfg->selected_level = map_level_clamp(lobby_net.remote_level);
-                if (net_out) {
-                    *net_out = lobby_net;
+                if (lobby_net.has_peer_addr && (now_d - last_lobby_tx_t) >= 0.08) {
+                    net_send_lobby_state(&lobby_net, &my_pkt);
+                    last_lobby_tx_t = now_d;
                 }
-                return 3;
+                if (lobby_net.connected) {
+                    cfg->selected_level = map_level_clamp(lobby_net.remote_level);
+                    cfg->mp_game_mode = lobby_net.game_mode;
+                }
+                if (lobby_net.remote_started) {
+                    cfg->selected_level = map_level_clamp(lobby_net.remote_level);
+                    cfg->mp_game_mode = lobby_net.game_mode;
+                    if (net_out) {
+                        *net_out = lobby_net;
+                    }
+                    return 3;
+                }
             }
         }
 
@@ -1838,6 +2252,11 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
         }
         if (IsKeyPressed(KEY_F3) && listening_bind < 0) {
             cfg->show_fps = !cfg->show_fps;
+        }
+        if (IsKeyPressed(KEY_F4) &&
+            !IsKeyDown(KEY_LEFT_ALT) && !IsKeyDown(KEY_RIGHT_ALT) &&
+            listening_bind < 0) {
+            cfg->ascii_style = (cfg->ascii_style + 1) % 2;
         }
 
         /* Captura de tecla quando estiver reconfigurando uma bind */
@@ -1916,6 +2335,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
         }
 
         /* ======================== DESENHO DO FRAME ======================== */
+        renderer_set_visual_style(cfg->ascii_style);
         BeginDrawing();
         CharacterClass preview = (page == MENU_PAGE_CREATE)
             ? draft
@@ -2018,6 +2438,11 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                                   (Color){38, 46, 60, 255}, (Color){215, 90, 35, 255})) {
                 cfg->selected_level = (cfg->selected_level + 1) % total_lvls;
             }
+            if (preview_loaded_idx != cfg->selected_level) {
+                map_load_level(cfg->selected_level, &level_preview_map);
+                preview_loaded_idx = cfg->selected_level;
+            }
+            lvl = map_level_get(cfg->selected_level);
 
             /* Preview ASCII do mapa + ficha rapida da fase */
             int prev_y = sel_y + sel_h + (int)(16.0f * sc);
@@ -2026,7 +2451,8 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             if (prev_sz > avail_prev) prev_sz = avail_prev;
             if (prev_sz < 96) prev_sz = 96;
 
-            draw_level_minimap_preview(left_x + pad_x, prev_y, prev_sz, &level_preview_map);
+            draw_level_minimap_preview(left_x + pad_x, prev_y, prev_sz,
+                                       &level_preview_map, lvl->spawn1_x, lvl->spawn1_y);
 
             int info_x = left_x + pad_x + prev_sz + (int)(16.0f * sc);
             int info_sz = (int)(15.0f * sc);
@@ -2066,11 +2492,11 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             DrawRectangleLinesEx((Rectangle){(float)left_x, (float)content_y, (float)pw, (float)ph},
                                  2.0f, (Color){225, 105, 35, 255});
 
-            DrawText("MULTIPLAYER CO-OP (LAN / MESMO PC)", left_x + pad_x,
-                     content_y + (int)(14.0f * sc), btn_font - 1, (Color){255, 200, 90, 255});
+            DrawText("MULTIPLAYER LAN (ATE 4 JOGADORES - CO-OP / PVP)", left_x + pad_x,
+                     content_y + (int)(14.0f * sc), btn_font - 2, (Color){255, 200, 90, 255});
             int sub_sz = (int)(13.5f * sc);
             if (sub_sz < 10) sub_sz = 10;
-            DrawText("Crie uma sala para o amigo achar sozinho ou entre abaixo (sem PvP).",
+            DrawText("Crie uma sala para ate 4 amigos em Co-op ou PvP, ou entre abaixo.",
                      left_x + pad_x, content_y + (int)(42.0f * sc), sub_sz, (Color){165, 185, 210, 255});
 
             int host_btn_y = content_y + (int)(68.0f * sc);
@@ -2123,13 +2549,24 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                     const char *where = (strcmp(disc_rooms[i].ip, "127.0.0.1") == 0)
                         ? "Este PC"
                         : disc_rooms[i].ip;
-                    const char *r_lbl = TextFormat("ENTRAR: %s | %s (%s)",
-                                                   disc_rooms[i].host_name,
-                                                   disc_rooms[i].map_name,
-                                                   where);
+                    const char *m_tag = (disc_rooms[i].game_mode == NET_GAME_PVP) ? "PvP" : "Co-op";
+                    const char *r_lbl = disc_rooms[i].in_game
+                        ? TextFormat("VOLTAR/ENTRAR [EM JOGO]: %s | %s | %s (%d/4) [%s]",
+                                     disc_rooms[i].host_name,
+                                     disc_rooms[i].map_name,
+                                     m_tag,
+                                     disc_rooms[i].player_count,
+                                     where)
+                        : TextFormat("ENTRAR: %s | %s | %s (%d/4) [%s]",
+                                     disc_rooms[i].host_name,
+                                     disc_rooms[i].map_name,
+                                     m_tag,
+                                     disc_rooms[i].player_count,
+                                     where);
+                    Color room_base = disc_rooms[i].in_game ? (Color){28, 62, 92, 255} : (Color){30, 68, 52, 255};
+                    Color room_hov  = disc_rooms[i].in_game ? (Color){48, 118, 168, 255} : (Color){52, 138, 88, 255};
                     if (draw_small_button(left_x + pad_x, ry, pw - pad_x * 2, r_step - 6,
-                                          r_lbl, b_fnt,
-                                          (Color){30, 68, 52, 255}, (Color){52, 138, 88, 255})) {
+                                          r_lbl, b_fnt, room_base, room_hov)) {
                         copy_ip_str(ip_buf, ip_size, disc_rooms[i].ip);
                         stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
                         mp_err_msg[0] = '\0';
@@ -2235,56 +2672,65 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             }
         } else if (page == MENU_PAGE_LOBBY && lobby_active) {
             int is_host = (lobby_net.mode == NET_MODE_HOST);
-            int pw = (int)(920.0f * sc);
+            int pw = (int)(1160.0f * sc);
             int max_pw = sw - left_x * 2;
             if (pw > max_pw) pw = max_pw;
-            if (pw < 520) pw = 520;
-            int ph = (int)(445.0f * sc);
+            if (pw < 560) pw = 560;
+            int ph = (int)(456.0f * sc);
             if (content_y + ph > footer_top) ph = footer_top - content_y;
+
+            int active_mode = is_host ? cfg->mp_game_mode
+                                      : (lobby_net.connected ? lobby_net.game_mode : cfg->mp_game_mode);
+            int is_pvp = (active_mode == NET_GAME_PVP);
 
             DrawRectangle(left_x, content_y, pw, ph, (Color){12, 16, 24, 244});
             DrawRectangleLinesEx((Rectangle){(float)left_x, (float)content_y, (float)pw, (float)ph},
                                  2.0f, lobby_net.connected ? (Color){75, 215, 125, 255}
                                                            : (Color){230, 125, 45, 255});
 
-            int b_fnt = (int)(15.0f * sc);
-            if (b_fnt < 11) b_fnt = 11;
-            int sub_sz = (int)(13.5f * sc);
-            if (sub_sz < 10) sub_sz = 10;
+            int b_fnt = (int)(14.5f * sc);
+            if (b_fnt < 10) b_fnt = 10;
+            int sub_sz = (int)(12.5f * sc);
+            if (sub_sz < 9) sub_sz = 9;
 
-            /* Cabecalho do Lobby + Pill de Status da Conexao */
+            /* Cabecalho do Lobby + Pill com lotacao e modo */
             const char *role_title = is_host
-                ? "SALA DE ESPERA (ANFITRIAO)"
-                : "SALA DE ESPERA (CONVIDADO)";
-            DrawText(role_title, left_x + pad_x, content_y + (int)(14.0f * sc),
-                     btn_font, (Color){255, 205, 95, 255});
+                ? TextFormat("SALA DE ESPERA (ANFITRIAO) - %d/4 JOGADORES", lobby_net.active_player_count)
+                : "SALA DE ESPERA (CONVIDADO - ATE 4 JOGADORES)";
+            DrawText(role_title, left_x + pad_x, content_y + (int)(12.0f * sc),
+                     btn_font - 2, (Color){255, 205, 95, 255});
 
             const char *conn_lbl = lobby_net.connected
-                ? "CONECTADO! AMBOS NA SALA"
-                : (is_host ? "AGUARDANDO AMIGO ENTRAR..." : "CONECTANDO NA SALA...");
+                ? TextFormat("CONECTADO (%d/4) | %s",
+                             lobby_net.active_player_count > 1 ? lobby_net.active_player_count : 2,
+                             is_pvp ? "PVP" : "CO-OP")
+                : (is_host ? "AGUARDANDO JOGADORES..." : "CONECTANDO NA SALA...");
             Color conn_bg = lobby_net.connected ? (Color){32, 108, 56, 255} : (Color){135, 78, 22, 255};
             Color conn_fg = lobby_net.connected ? (Color){135, 255, 165, 255} : (Color){255, 220, 130, 255};
-            int cw = MeasureText(conn_lbl, b_fnt) + 24;
+            int cw = MeasureText(conn_lbl, b_fnt) + 22;
             int cx = left_x + pw - pad_x - cw;
-            int cy = content_y + (int)(12.0f * sc);
-            DrawRectangle(cx, cy, cw, (int)(30.0f * sc), conn_bg);
-            DrawRectangleLinesEx((Rectangle){(float)cx, (float)cy, (float)cw, (float)(30.0f * sc)},
+            int cy = content_y + (int)(10.0f * sc);
+            DrawRectangle(cx, cy, cw, (int)(28.0f * sc), conn_bg);
+            DrawRectangleLinesEx((Rectangle){(float)cx, (float)cy, (float)cw, (float)(28.0f * sc)},
                                  1.5f, conn_fg);
-            DrawText(conn_lbl, cx + 12, cy + ((int)(30.0f * sc) - b_fnt) / 2, b_fnt, conn_fg);
+            DrawText(conn_lbl, cx + 11, cy + ((int)(28.0f * sc) - b_fnt) / 2, b_fnt, conn_fg);
 
-            /* Faixa com dica clara de rede / IP para leigos */
-            int tip_y = content_y + (int)(48.0f * sc);
+            /* Faixa de status/IP da sala */
+            int tip_y = content_y + (int)(44.0f * sc);
             const char *tip_str = (mp_err_msg[0] != '\0')
                 ? mp_err_msg
                 : (is_host
                     ? (lobby_net.connected
-                        ? TextFormat("Conexao ativa na porta %d | Modo Co-op: sem PvP entre jogadores.", *port_out)
-                        : TextFormat("Seu amigo na mesma rede encontra sua sala sozinho! Se precisar digitar: %s (ou 127.0.0.1 aqui)", local_ip_str))
+                        ? TextFormat("Porta %d aberta | Ate 4 jogadores na sala | Modo %s ativo.",
+                                     *port_out, is_pvp ? "PvP (Todos contra Todos)" : "Co-op (Equipe)")
+                        : TextFormat("Amigos na LAN acham sozinhos! IP local: %s (ou 127.0.0.1 no mesmo PC)", local_ip_str))
                     : (lobby_net.connected
-                        ? TextFormat("Conectado ao Anfitriao (%s)! Confirme seu personagem e clique em ESTOU PRONTO.", ip_buf)
-                        : TextFormat("Chamando sala em %s (porta %d)... Confira se o Anfitriao ja abriu a sala.", ip_buf, *port_out)));
+                        ? TextFormat("Conectado ao Anfitriao (%s)! Voce e o Jogador %d.",
+                                     ip_buf,
+                                     (lobby_net.local_slot >= 1 ? lobby_net.local_slot + 1 : 2))
+                        : TextFormat("Chamando sala em %s (porta %d)...", ip_buf, *port_out)));
             int tip_sz = sub_sz;
-            while (tip_sz > 10 && MeasureText(tip_str, tip_sz) > pw - pad_x * 2) {
+            while (tip_sz > 9 && MeasureText(tip_str, tip_sz) > pw - pad_x * 2) {
                 tip_sz--;
             }
             Color tip_col = (mp_err_msg[0] != '\0')
@@ -2292,123 +2738,183 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                 : (Color){180, 200, 225, 255};
             DrawText(tip_str, left_x + pad_x, tip_y, tip_sz, tip_col);
 
-            /* Area central com 3 colunas: Jogador 1 | Jogador 2 | Fase e Config */
-            int col_y = tip_y + (int)(28.0f * sc);
-            int foot_h = (int)(42.0f * sc);
-            if (foot_h < 30) foot_h = 30;
-            int col_h = ph - (col_y - content_y) - foot_h - (int)(22.0f * sc);
-            int col_gap = (int)(12.0f * sc);
-            int col_w = (pw - pad_x * 2 - col_gap * 2) / 3;
+            /* Area central: 4 cartoes de jogador com boneco ASCII ao vivo + 1 coluna de Modo/Fase */
+            int col_y = tip_y + (int)(24.0f * sc);
+            int foot_h = (int)(40.0f * sc);
+            if (foot_h < 28) foot_h = 28;
+            int col_h = ph - (col_y - content_y) - foot_h - (int)(18.0f * sc);
+            int col_gap = (int)(10.0f * sc);
+            if (col_gap < 6) col_gap = 6;
+            int inner_w = pw - pad_x * 2;
+            int cfg_w = (int)((float)inner_w * 0.24f);
+            if (cfg_w < 190) cfg_w = 190;
+            if (cfg_w > 275) cfg_w = 275;
+            int p_card_w = (inner_w - cfg_w - col_gap * 4) / 4;
 
-            int p1_x = left_x + pad_x;
-            int p2_x = p1_x + col_w + col_gap;
-            int c3_x = p2_x + col_w + col_gap;
-
+            int my_slot = is_host ? 0
+                                  : ((lobby_net.local_slot >= 1 && lobby_net.local_slot < NET_MAX_PLAYERS)
+                                        ? lobby_net.local_slot : 1);
             int total_chars = player_roster_count(&cfg->roster);
             CharacterClass local_cls = player_roster_get(&cfg->roster, cfg->selected_character);
-            int sw_bw = (int)(34.0f * sc);
-            if (sw_bw < 24) sw_bw = 24;
-            int sw_bh = (int)(28.0f * sc);
-            if (sw_bh < 22) sw_bh = 22;
+            int sw_bw = (int)(32.0f * sc);
+            if (sw_bw < 22) sw_bw = 22;
+            int sw_bh = (int)(26.0f * sc);
+            if (sw_bh < 20) sw_bh = 20;
 
-            /* Coluna 1: JOGADOR 1 (ANFITRIAO) */
-            DrawRectangle(p1_x, col_y, col_w, col_h, (Color){20, 25, 36, 255});
-            DrawRectangleLinesEx((Rectangle){(float)p1_x, (float)col_y, (float)col_w, (float)col_h},
-                                 1.5f, is_host ? (Color){115, 195, 255, 255} : (Color){70, 88, 112, 255});
-            DrawText("JOGADOR 1 (ANFITRIAO)", p1_x + 12, col_y + 12, b_fnt, (Color){130, 210, 255, 255});
-            const char *p1_name = is_host
-                ? local_cls.name
-                : (lobby_net.connected && lobby_net.remote_name[0] ? lobby_net.remote_name : "Conectando...");
-            DrawText(p1_name, p1_x + 12, col_y + (int)(44.0f * sc), b_fnt + 1, WHITE);
-            DrawText((is_host || lobby_net.connected) ? "STATUS: PRONTO (HOST)" : "STATUS: AGUARDANDO",
-                     p1_x + 12, col_y + (int)(74.0f * sc), sub_sz, (Color){110, 230, 145, 255});
-            if (is_host && total_chars > 1) {
-                int cy_btn = col_y + col_h - sw_bh - 12;
-                DrawText("Trocar personagem:", p1_x + 12, cy_btn - 18, sub_sz - 1, (Color){165, 180, 200, 255});
-                if (draw_small_button(p1_x + 12, cy_btn, sw_bw, sw_bh, "<", b_fnt,
-                                      (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
-                    cfg->selected_character = (cfg->selected_character + total_chars - 1) % total_chars;
-                }
-                if (draw_small_button(p1_x + 12 + sw_bw + 8, cy_btn, sw_bw, sw_bh, ">", b_fnt,
-                                      (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
-                    cfg->selected_character = (cfg->selected_character + 1) % total_chars;
+            static const Color SLOT_ACCENTS[4] = {
+                {115, 200, 255, 255},
+                {255, 185, 100, 255},
+                {110, 235, 150, 255},
+                {230, 130, 250, 255}
+            };
+
+            for (int slot = 0; slot < NET_MAX_PLAYERS; slot++) {
+                int cx_card = left_x + pad_x + slot * (p_card_w + col_gap);
+                int occupied = (slot == my_slot) || lobby_net.slots[slot].active;
+                Color acc = SLOT_ACCENTS[slot];
+                Color border_c = occupied ? acc : (Color){58, 70, 92, 255};
+
+                DrawRectangle(cx_card, col_y, p_card_w, col_h, (Color){18, 23, 34, 255});
+                DrawRectangleLinesEx((Rectangle){(float)cx_card, (float)col_y, (float)p_card_w, (float)col_h},
+                                     occupied ? 1.8f : 1.0f, border_c);
+
+                const char *hdr = (slot == 0)
+                    ? TextFormat("P1 (HOST)%s", (slot == my_slot) ? " *" : "")
+                    : TextFormat("P%d%s", slot + 1, (slot == my_slot) ? " (VOCE)" : "");
+                DrawText(hdr, cx_card + 8, col_y + 8, sub_sz, acc);
+
+                if (occupied) {
+                    const char *sname = (slot == my_slot)
+                        ? local_cls.name
+                        : (lobby_net.slots[slot].name[0] ? lobby_net.slots[slot].name : "Conectado");
+                    int s_vid = (slot == my_slot) ? local_cls.visual_id : lobby_net.slots[slot].visual_id;
+                    const CharacterAppearance *s_app = (slot == my_slot)
+                        ? &local_cls.appearance : &lobby_net.slots[slot].appearance;
+                    int s_ready = (slot == 0) ? 1
+                        : ((slot == my_slot) ? lobby_ready : lobby_net.slots[slot].ready);
+
+                    int name_sz = sub_sz + 1;
+                    while (name_sz > 9 && MeasureText(sname, name_sz) > p_card_w - 16) {
+                        name_sz--;
+                    }
+                    DrawText(sname, cx_card + 8, col_y + (int)(26.0f * sc), name_sz, WHITE);
+
+                    const char *st_txt = (slot == 0)
+                        ? "PRONTO (HOST)"
+                        : (s_ready ? "PRONTO!" : "PREPARANDO...");
+                    Color st_col = s_ready ? (Color){110, 235, 145, 255} : (Color){245, 195, 85, 255};
+                    DrawText(st_txt, cx_card + 8, col_y + (int)(44.0f * sc), sub_sz - 1, st_col);
+
+                    /* Preview ASCII animado do personagem do jogador dentro do cartao */
+                    int pv_top = col_y + (int)(62.0f * sc);
+                    int pv_bot = col_y + col_h - ((slot == my_slot) ? (sw_bh + 14) : 10);
+                    int pv_h = pv_bot - pv_top;
+                    if (pv_h > 36) {
+                        draw_lobby_character_preview(cx_card + 6, pv_top,
+                                                     p_card_w - 12, pv_h,
+                                                     s_vid, s_app, now + (float)slot * 0.5f);
+                    }
+
+                    if (slot == my_slot && total_chars > 1) {
+                        int cy_btn = col_y + col_h - sw_bh - 8;
+                        if (draw_small_button(cx_card + 8, cy_btn, sw_bw, sw_bh, "<", b_fnt,
+                                              (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
+                            cfg->selected_character = (cfg->selected_character + total_chars - 1) % total_chars;
+                        }
+                        if (draw_small_button(cx_card + p_card_w - sw_bw - 8, cy_btn, sw_bw, sw_bh, ">", b_fnt,
+                                              (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
+                            cfg->selected_character = (cfg->selected_character + 1) % total_chars;
+                        }
+                        const char *skin_lbl = "SKIN";
+                        int sk_w = MeasureText(skin_lbl, sub_sz - 1);
+                        DrawText(skin_lbl, cx_card + (p_card_w - sk_w) / 2,
+                                 cy_btn + (sw_bh - (sub_sz - 1)) / 2,
+                                 sub_sz - 1, (Color){165, 180, 200, 255});
+                    }
+                } else {
+                    const char *empty_t = "[ VAGA LIVRE ]";
+                    const char *wait_t  = "Aguardando...";
+                    int ew = MeasureText(empty_t, sub_sz);
+                    int ww = MeasureText(wait_t, sub_sz - 1);
+                    DrawText(empty_t, cx_card + (p_card_w - ew) / 2, col_y + col_h / 2 - 14,
+                             sub_sz, (Color){95, 110, 132, 255});
+                    DrawText(wait_t, cx_card + (p_card_w - ww) / 2, col_y + col_h / 2 + 8,
+                             sub_sz - 1, (Color){78, 92, 112, 255});
                 }
             }
 
-            /* Coluna 2: JOGADOR 2 (CONVIDADO) */
-            DrawRectangle(p2_x, col_y, col_w, col_h, (Color){20, 25, 36, 255});
-            DrawRectangleLinesEx((Rectangle){(float)p2_x, (float)col_y, (float)col_w, (float)col_h},
-                                 1.5f, (!is_host || lobby_net.connected) ? (Color){115, 195, 255, 255}
-                                                                         : (Color){70, 88, 112, 255});
-            DrawText("JOGADOR 2 (CONVIDADO)", p2_x + 12, col_y + 12, b_fnt, (Color){255, 185, 110, 255});
-            const char *p2_name = !is_host
-                ? local_cls.name
-                : (lobby_net.connected && lobby_net.remote_name[0] ? lobby_net.remote_name : "Aguardando entrar...");
-            DrawText(p2_name, p2_x + 12, col_y + (int)(44.0f * sc), b_fnt + 1,
-                     (!is_host || lobby_net.connected) ? WHITE : (Color){135, 145, 165, 255});
-            const char *p2_stat = !is_host
-                ? (lobby_ready ? "STATUS: PRONTO!" : "STATUS: CLIQUE EM PRONTO")
-                : (lobby_net.connected
-                    ? (lobby_net.remote_ready ? "STATUS: PRONTO!" : "STATUS: PREPARANDO...")
-                    : "STATUS: DESCONECTADO");
-            Color p2_col = (!is_host ? lobby_ready : (lobby_net.connected && lobby_net.remote_ready))
-                ? (Color){110, 235, 145, 255}
-                : (Color){245, 195, 85, 255};
-            DrawText(p2_stat, p2_x + 12, col_y + (int)(74.0f * sc), sub_sz, p2_col);
-            if (!is_host && total_chars > 1) {
-                int cy_btn = col_y + col_h - sw_bh - 12;
-                DrawText("Trocar personagem:", p2_x + 12, cy_btn - 18, sub_sz - 1, (Color){165, 180, 200, 255});
-                if (draw_small_button(p2_x + 12, cy_btn, sw_bw, sw_bh, "<", b_fnt,
-                                      (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
-                    cfg->selected_character = (cfg->selected_character + total_chars - 1) % total_chars;
-                }
-                if (draw_small_button(p2_x + 12 + sw_bw + 8, cy_btn, sw_bw, sw_bh, ">", b_fnt,
-                                      (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
-                    cfg->selected_character = (cfg->selected_character + 1) % total_chars;
-                }
-            }
-
-            /* Coluna 3: FASE SELECIONADA + MINI-MAPA */
+            /* Coluna 5: MODO (CO-OP / PVP) + FASE + MINI-MAPA */
+            int c3_x = left_x + pad_x + 4 * (p_card_w + col_gap);
             int total_lvls = map_level_count();
             int active_lvl_idx = is_host ? cfg->selected_level
                                          : map_level_clamp(lobby_net.connected ? lobby_net.remote_level
                                                                                : cfg->selected_level);
-            if (!is_host && lobby_net.connected) {
-                cfg->selected_level = active_lvl_idx;
+            if (preview_loaded_idx != active_lvl_idx) {
+                map_load_level(active_lvl_idx, &level_preview_map);
+                preview_loaded_idx = active_lvl_idx;
             }
             const MapLevelInfo *mp_lvl = map_level_get(active_lvl_idx);
 
-            DrawRectangle(c3_x, col_y, col_w, col_h, (Color){20, 25, 36, 255});
-            DrawRectangleLinesEx((Rectangle){(float)c3_x, (float)col_y, (float)col_w, (float)col_h},
+            DrawRectangle(c3_x, col_y, cfg_w, col_h, (Color){20, 25, 36, 255});
+            DrawRectangleLinesEx((Rectangle){(float)c3_x, (float)col_y, (float)cfg_w, (float)col_h},
                                  1.5f, (Color){95, 130, 165, 255});
-            DrawText("FASE / CONFIGURACAO", c3_x + 12, col_y + 12, b_fnt, (Color){135, 230, 175, 255});
-            DrawText(mp_lvl->name, c3_x + 12, col_y + (int)(38.0f * sc), sub_sz, WHITE);
-            DrawText("Modo: Co-op (Sem PvP)", c3_x + 12, col_y + (int)(58.0f * sc),
-                     sub_sz - 1, (Color){165, 195, 220, 255});
+            DrawText("MODO E FASE", c3_x + 10, col_y + 10, b_fnt, (Color){135, 230, 175, 255});
 
-            int mp_prev_sz = col_h - (int)(116.0f * sc);
-            if (mp_prev_sz > col_w - 28) mp_prev_sz = col_w - 28;
-            if (mp_prev_sz < 72) mp_prev_sz = 72;
-            draw_level_minimap_preview(c3_x + (col_w - mp_prev_sz) / 2,
-                                       col_y + (int)(80.0f * sc),
-                                       mp_prev_sz, &level_preview_map);
+            /* Botao/Badge de selecao Co-op vs PvP */
+            int mode_by = col_y + (int)(32.0f * sc);
+            int mode_bh = (int)(28.0f * sc);
+            if (mode_bh < 22) mode_bh = 22;
+            const char *mode_btn_lbl = is_pvp ? "MODO: PVP" : "MODO: CO-OP";
+            Color mode_base = is_pvp ? (Color){145, 42, 42, 255} : (Color){32, 102, 62, 255};
+            Color mode_hov  = is_pvp ? (Color){195, 62, 52, 255} : (Color){52, 148, 88, 255};
+            if (is_host) {
+                if (draw_small_button(c3_x + 10, mode_by, cfg_w - 20, mode_bh,
+                                      mode_btn_lbl, sub_sz, mode_base, mode_hov)) {
+                    cfg->mp_game_mode = is_pvp ? NET_GAME_COOP : NET_GAME_PVP;
+                    lobby_net.game_mode = cfg->mp_game_mode;
+                }
+            } else {
+                DrawRectangle(c3_x + 10, mode_by, cfg_w - 20, mode_bh, mode_base);
+                DrawRectangleLinesEx((Rectangle){(float)(c3_x + 10), (float)mode_by,
+                                                 (float)(cfg_w - 20), (float)mode_bh}, 1.0f, WHITE);
+                int mw_t = MeasureText(mode_btn_lbl, sub_sz);
+                DrawText(mode_btn_lbl, c3_x + 10 + (cfg_w - 20 - mw_t) / 2,
+                         mode_by + (mode_bh - sub_sz) / 2, sub_sz, WHITE);
+            }
+
+            int lvl_y = mode_by + mode_bh + (int)(8.0f * sc);
+            int lvl_sz = sub_sz;
+            while (lvl_sz > 9 && MeasureText(mp_lvl->name, lvl_sz) > cfg_w - 20) {
+                lvl_sz--;
+            }
+            DrawText(mp_lvl->name, c3_x + 10, lvl_y, lvl_sz, WHITE);
+
+            int mm_top = lvl_y + lvl_sz + (int)(6.0f * sc);
+            int mm_bot = col_y + col_h - (is_host ? (sw_bh + 14) : 10);
+            int mp_prev_sz = mm_bot - mm_top;
+            if (mp_prev_sz > cfg_w - 22) mp_prev_sz = cfg_w - 22;
+            if (mp_prev_sz < 64) mp_prev_sz = 64;
+            draw_level_minimap_preview(c3_x + (cfg_w - mp_prev_sz) / 2,
+                                       mm_top,
+                                       mp_prev_sz, &level_preview_map,
+                                       mp_lvl->spawn1_x, mp_lvl->spawn1_y);
 
             if (is_host && total_lvls > 1) {
-                int cy_btn = col_y + col_h - sw_bh - 10;
-                if (draw_small_button(c3_x + 12, cy_btn, sw_bw, sw_bh, "<", b_fnt,
+                int cy_btn = col_y + col_h - sw_bh - 8;
+                if (draw_small_button(c3_x + 10, cy_btn, sw_bw, sw_bh, "<", b_fnt,
                                       (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
                     cfg->selected_level = (cfg->selected_level + total_lvls - 1) % total_lvls;
                 }
-                if (draw_small_button(c3_x + col_w - sw_bw - 12, cy_btn, sw_bw, sw_bh, ">", b_fnt,
+                if (draw_small_button(c3_x + cfg_w - sw_bw - 10, cy_btn, sw_bw, sw_bh, ">", b_fnt,
                                       (Color){38, 46, 62, 255}, (Color){210, 90, 35, 255})) {
                     cfg->selected_level = (cfg->selected_level + 1) % total_lvls;
                 }
             }
 
             /* Rodape de acoes do Lobby */
-            int foot_y = content_y + ph - foot_h - (int)(12.0f * sc);
+            int foot_y = content_y + ph - foot_h - (int)(10.0f * sc);
             int leave_w = (int)(185.0f * sc);
-            if (leave_w < 135) leave_w = 135;
+            if (leave_w < 130) leave_w = 130;
             if (draw_small_button(left_x + pad_x, foot_y, leave_w, foot_h,
                                   is_host ? "FECHAR SALA" : "SAIR DA SALA", b_fnt,
                                   (Color){62, 36, 40, 255}, (Color){195, 65, 55, 255})) {
@@ -2416,29 +2922,21 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                 page = MENU_PAGE_MULTIPLAYER;
             }
 
-            int go_w = (int)(310.0f * sc);
+            int go_w = (int)(340.0f * sc);
             if (go_w > pw - pad_x * 2 - leave_w - 16) go_w = pw - pad_x * 2 - leave_w - 16;
             int go_x = left_x + pw - pad_x - go_w;
             if (is_host) {
-                if (lobby_net.connected) {
-                    const char *start_lbl = lobby_net.remote_ready
-                        ? "INICIAR PARTIDA (AMBOS PRONTOS)"
-                        : "INICIAR PARTIDA AGORA";
+                if (lobby_net.connected && lobby_net.active_player_count >= 2) {
+                    const char *start_lbl = TextFormat("INICIAR %s (%d/4)",
+                                                       is_pvp ? "PVP" : "CO-OP",
+                                                       lobby_net.active_player_count);
                     if (draw_small_button(go_x, foot_y, go_w, foot_h, start_lbl, b_fnt,
                                           (Color){38, 128, 62, 255}, (Color){56, 178, 86, 255})) {
-                        NetCtrlPacket go_pkt;
-                        memset(&go_pkt, 0, sizeof(go_pkt));
-                        go_pkt.magic = NET_CTRL_MAGIC;
-                        go_pkt.msg_type = NET_MSG_LOBBY_STATE;
-                        go_pkt.level_idx = cfg->selected_level;
-                        go_pkt.character_idx = cfg->selected_character;
-                        go_pkt.ready = 1;
-                        go_pkt.game_started = 1;
-                        go_pkt.port = *port_out;
-                        snprintf(go_pkt.player_name, sizeof(go_pkt.player_name), "%s", local_cls.name);
-                        snprintf(go_pkt.map_name, sizeof(go_pkt.map_name), "%s", mp_lvl->name);
-                        for (int k = 0; k < 4; k++) {
-                            net_send_lobby_state(&lobby_net, &go_pkt);
+                        net_host_update_local_slot(&lobby_net, local_cls.name, cfg->selected_character,
+                                                   local_cls.visual_id, &local_cls.appearance,
+                                                   cfg->mp_game_mode, cfg->selected_level);
+                        for (int k = 0; k < 6; k++) {
+                            net_broadcast_lobby_roster(&lobby_net, cfg->selected_level, mp_lvl->name, 1);
                         }
                         if (net_out) {
                             *net_out = lobby_net;
@@ -2576,6 +3074,340 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
     return 4;
 }
 
+/* Retorna 1 se a celula (tx, ty) for chao comum aberto e caminhavel (longe de paredes e armadilhas). */
+static int is_safe_mp_tile(const GameMap *map, int tx, int ty) {
+    if (!map || tx < 1 || tx >= map->width - 1 || ty < 1 || ty >= map->height - 1) {
+        return 0;
+    }
+    char raw = map_get_raw_tile(map, tx, ty);
+    if (raw != '.' && raw != 'P' && raw != ' ' && !map_is_enemy_spawn_char(raw)) {
+        return 0;
+    }
+    float cx = (float)tx + 0.5f;
+    float cy = (float)ty + 0.5f;
+    const float r = 0.28f;
+    if (map_is_wall(map, tx, ty) ||
+        map_is_wall(map, (int)floorf(cx - r), (int)floorf(cy - r)) ||
+        map_is_wall(map, (int)floorf(cx + r), (int)floorf(cy - r)) ||
+        map_is_wall(map, (int)floorf(cx - r), (int)floorf(cy + r)) ||
+        map_is_wall(map, (int)floorf(cx + r), (int)floorf(cy + r))) {
+        return 0;
+    }
+    return 1;
+}
+
+/* Calcula 4 pontos de spawn garantidamente caminhaveis via BFS a partir de ('P') do mapa:
+ * - No modo Co-op: posiciona todos os 4 slots em piso livre lado a lado ao Anfitriao.
+ * - No modo PvP : espalha os 4 slots pelo ponto mais distante possivel da arena alcancavel. */
+static void compute_mp_spawn_points(const GameMap *map, float base_x, float base_y,
+                                    int game_mode,
+                                    float out_x[NET_MAX_PLAYERS],
+                                    float out_y[NET_MAX_PLAYERS],
+                                    float out_ang[NET_MAX_PLAYERS]) {
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        out_x[i] = base_x;
+        out_y[i] = base_y;
+        out_ang[i] = PI_F * 0.5f;
+    }
+    if (!map) {
+        return;
+    }
+
+    int sx = (int)floorf(base_x);
+    int sy = (int)floorf(base_y);
+    if (!is_safe_mp_tile(map, sx, sy)) {
+        int found = 0;
+        for (int y = 1; y < map->height - 1 && !found; y++) {
+            for (int x = 1; x < map->width - 1; x++) {
+                if (is_safe_mp_tile(map, x, y)) {
+                    sx = x;
+                    sy = y;
+                    base_x = (float)x + 0.5f;
+                    base_y = (float)y + 0.5f;
+                    found = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    unsigned char vis[MAP_HEIGHT][MAP_WIDTH];
+    memset(vis, 0, sizeof(vis));
+    int qx[MAP_WIDTH * MAP_HEIGHT];
+    int qy[MAP_WIDTH * MAP_HEIGHT];
+    int head = 0, tail = 0;
+
+    if (sx >= 0 && sx < map->width && sy >= 0 && sy < map->height) {
+        vis[sy][sx] = 1;
+        qx[tail] = sx;
+        qy[tail] = sy;
+        tail++;
+    }
+
+    static const int DX[4] = {1, -1, 0, 0};
+    static const int DY[4] = {0, 0, 1, -1};
+    while (head < tail) {
+        int cx = qx[head];
+        int cy = qy[head];
+        head++;
+        for (int d = 0; d < 4; d++) {
+            int nx = cx + DX[d];
+            int ny = cy + DY[d];
+            if (nx >= 1 && nx < map->width - 1 && ny >= 1 && ny < map->height - 1 &&
+                !vis[ny][nx] && is_safe_mp_tile(map, nx, ny)) {
+                vis[ny][nx] = 1;
+                qx[tail] = nx;
+                qy[tail] = ny;
+                tail++;
+            }
+        }
+    }
+
+    if (tail <= 0) {
+        return;
+    }
+
+    out_x[0] = (float)qx[0] + 0.5f;
+    out_y[0] = (float)qy[0] + 0.5f;
+
+    if (game_mode == NET_GAME_COOP) {
+        /* Em Co-op, mantem P2..P4 nas celulas mais proximas em visao direta ao lado do Host */
+        int picked[NET_MAX_PLAYERS];
+        picked[0] = 0;
+        for (int s = 1; s < NET_MAX_PLAYERS; s++) {
+            int best = (s < tail) ? s : (tail - 1);
+            picked[s] = best;
+            out_x[s] = (float)qx[best] + 0.5f;
+            out_y[s] = (float)qy[best] + 0.5f;
+            /* Faz P2..P4 olhar para o centro do grupo para se enxergarem no inicio */
+            float ddx = out_x[0] - out_x[s];
+            float ddy = out_y[0] - out_y[s];
+            out_ang[s] = (fabsf(ddx) + fabsf(ddy) > 0.1f) ? atan2f(ddy, ddx) : (PI_F * 0.5f);
+        }
+        (void)picked;
+        return;
+    }
+
+    /* Em PvP, usa selecao gulosa pelo ponto mais distante na arena conectada */
+    int chosen[NET_MAX_PLAYERS];
+    chosen[0] = 0;
+    for (int s = 1; s < NET_MAX_PLAYERS; s++) {
+        float best_min_d2 = -1.0f;
+        int best_idx = 0;
+        for (int k = 0; k < tail; k++) {
+            float min_d2 = 1e9f;
+            for (int p = 0; p < s; p++) {
+                float dx = (float)(qx[k] - qx[chosen[p]]);
+                float dy = (float)(qy[k] - qy[chosen[p]]);
+                float d2 = dx * dx + dy * dy;
+                if (d2 < min_d2) min_d2 = d2;
+            }
+            if (min_d2 > best_min_d2) {
+                best_min_d2 = min_d2;
+                best_idx = k;
+            }
+        }
+        chosen[s] = best_idx;
+        out_x[s] = (float)qx[best_idx] + 0.5f;
+        out_y[s] = (float)qy[best_idx] + 0.5f;
+    }
+
+    float cx_mean = 0.0f, cy_mean = 0.0f;
+    for (int s = 0; s < NET_MAX_PLAYERS; s++) {
+        cx_mean += out_x[s];
+        cy_mean += out_y[s];
+    }
+    cx_mean *= 0.25f;
+    cy_mean *= 0.25f;
+    for (int s = 0; s < NET_MAX_PLAYERS; s++) {
+        float dx = cx_mean - out_x[s];
+        float dy = cy_mean - out_y[s];
+        if (fabsf(dx) + fabsf(dy) > 0.1f) {
+            out_ang[s] = atan2f(dy, dx);
+        }
+    }
+}
+
+static int mp_has_line_of_sight(const GameMap *map, float x0, float y0, float x1, float y1) {
+    float dx = x1 - x0;
+    float dy = y1 - y0;
+    float dist = sqrtf(dx * dx + dy * dy);
+    if (dist < 0.05f) {
+        return 1;
+    }
+    int steps = (int)(dist / 0.08f);
+    if (steps < 1) steps = 1;
+    for (int i = 1; i < steps; i++) {
+        float t = (float)i / (float)steps;
+        int tx = (int)floorf(x0 + dx * t);
+        int ty = (int)floorf(y0 + dy * t);
+        if (map_is_wall(map, tx, ty)) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Testa acerto PvP hitscan/espada contra os outros jogadores ativos com checagem de parede */
+static int check_pvp_player_hit(const GameMap *map, Player *shooter, NetContext *net,
+                                const Weapon *weapons, int my_slot) {
+    if (!map || !shooter || !net || !weapons || shooter->health <= 0) {
+        return 0;
+    }
+    int berserk = (shooter->ability_state.berserk_time > 0.0f);
+    int multiplier = (shooter->ability == ABILITY_GUERRILLA && shooter->ability_state.boosted_shot) ? 2 : 1;
+    shooter->ability_state.boosted_shot = 0;
+    float best_dist = berserk ? 1.5f : weapons[WEAPON_PISTOL].range;
+    int best_slot = -1;
+
+    for (int s = 0; s < NET_MAX_PLAYERS; s++) {
+        if (s == my_slot || !net->slots[s].active || !net->slots[s].has_pos || net->slots[s].health <= 0) {
+            continue;
+        }
+        float dx = net->slots[s].x - shooter->x;
+        float dy = net->slots[s].y - shooter->y;
+        float dist = sqrtf(dx * dx + dy * dy);
+        if (dist < 0.05f || dist > best_dist) {
+            continue;
+        }
+        float diff = atan2f(dy, dx) - shooter->angle;
+        while (diff > PI_F) diff -= 2.0f * PI_F;
+        while (diff < -PI_F) diff += 2.0f * PI_F;
+
+        float cone = berserk ? 0.45f : fmaxf(0.12f, atan2f(0.32f, dist));
+        if (fabsf(diff) <= cone && mp_has_line_of_sight(map, shooter->x, shooter->y,
+                                                         net->slots[s].x, net->slots[s].y)) {
+            best_dist = dist;
+            best_slot = s;
+        }
+    }
+
+    if (best_slot >= 0) {
+        int base_dmg = berserk ? 45 : weapons[WEAPON_PISTOL].damage;
+        int dmg = player_attack_damage(shooter, base_dmg * multiplier);
+        if (dmg < 1) dmg = 1;
+        net->outgoing_pvp_dmg[best_slot] += dmg;
+        shooter->score += dmg;
+        return 1;
+    }
+    return 0;
+}
+
+/* Desenha painel compacto no canto superior direito com nome e barra de vida
+ * de todos os jogadores ativos (somente quem permanece conectado na partida). */
+static void draw_mp_players_hp_hud(int sw, int sh, float sc,
+                                   const Player *local_player, const NetContext *net,
+                                   int my_slot, int is_pvp) {
+    (void)sh;
+    if (!local_player || !net) {
+        return;
+    }
+
+    int active_slots[NET_MAX_PLAYERS];
+    int n_show = 0;
+    for (int s = 0; s < NET_MAX_PLAYERS; s++) {
+        if (s == my_slot || net->slots[s].active) {
+            active_slots[n_show++] = s;
+        }
+    }
+    if (n_show <= 0) {
+        return;
+    }
+
+    int f_hud = (sw < 1000) ? 12 : 16;
+    int start_y = 12 + (f_hud + 14) + 3 + (f_hud + 10) + 10;
+
+    int panel_w = (int)(230.0f * sc);
+    if (panel_w < 175) panel_w = 175;
+    if (panel_w > 265) panel_w = 265;
+    int panel_x = sw - panel_w - 12;
+
+    int hdr_sz = (int)(12.0f * sc);
+    if (hdr_sz < 10) hdr_sz = 10;
+    int nm_sz = (int)(12.0f * sc);
+    if (nm_sz < 10) nm_sz = 10;
+    int row_h = (int)(30.0f * sc);
+    if (row_h < 25) row_h = 25;
+    int pad_x = 9;
+    int hdr_h = hdr_sz + 10;
+    int panel_h = hdr_h + n_show * row_h + 6;
+
+    DrawRectangle(panel_x, start_y, panel_w, panel_h, (Color){12, 16, 24, 218});
+    DrawRectangleLinesEx((Rectangle){(float)panel_x, (float)start_y, (float)panel_w, (float)panel_h},
+                         1.5f, is_pvp ? (Color){225, 90, 68, 220} : (Color){82, 195, 138, 220});
+
+    const char *hdr_txt = TextFormat("JOGADORES (%d/4)", net->active_player_count);
+    DrawText(hdr_txt, panel_x + pad_x, start_y + 5, hdr_sz,
+             is_pvp ? (Color){255, 190, 130, 255} : (Color){145, 240, 185, 255});
+
+    static const Color SLOT_COLS[NET_MAX_PLAYERS] = {
+        {115, 200, 255, 255},
+        {255, 185, 100, 255},
+        {110, 235, 150, 255},
+        {230, 130, 250, 255}
+    };
+
+    for (int i = 0; i < n_show; i++) {
+        int s = active_slots[i];
+        int ry = start_y + hdr_h + i * row_h;
+        int is_me = (s == my_slot);
+
+        int hp = is_me ? local_player->health : net->slots[s].health;
+        int max_hp = is_me ? local_player->max_health : net->slots[s].max_health;
+        if (max_hp <= 0) max_hp = 100;
+        if (hp < 0) hp = 0;
+
+        const char *raw_name = is_me
+            ? (local_player->class_name[0] ? local_player->class_name : "Voce")
+            : (net->slots[s].name[0] ? net->slots[s].name : "Jogador");
+
+        char name_buf[48];
+        snprintf(name_buf, sizeof(name_buf), "P%d %s%s",
+                 s + 1, raw_name, is_me ? "*" : "");
+
+        char val_buf[48];
+        if (hp <= 0) {
+            snprintf(val_buf, sizeof(val_buf), "CAIU");
+        } else if (is_pvp) {
+            snprintf(val_buf, sizeof(val_buf), "%d/%d K:%d", hp, max_hp, net->slot_pvp_kills[s]);
+        } else {
+            snprintf(val_buf, sizeof(val_buf), "%d/%d", hp, max_hp);
+        }
+
+        int vw = MeasureText(val_buf, nm_sz);
+        int max_nw = panel_w - pad_x * 2 - vw - 8;
+        while (strlen(name_buf) > 4 && MeasureText(name_buf, nm_sz) > max_nw) {
+            name_buf[strlen(name_buf) - 1] = '\0';
+        }
+
+        Color hp_col = (hp <= 0) ? (Color){235, 68, 68, 255}
+                     : (hp * 100 > max_hp * 60) ? (Color){78, 226, 122, 255}
+                     : (hp * 100 > max_hp * 30) ? (Color){248, 200, 58, 255}
+                                                : (Color){240, 72, 72, 255};
+
+        DrawText(name_buf, panel_x + pad_x, ry + 2, nm_sz, SLOT_COLS[s]);
+        DrawText(val_buf, panel_x + panel_w - pad_x - vw, ry + 2, nm_sz,
+                 (hp <= 0) ? (Color){255, 95, 85, 255} : WHITE);
+
+        int bar_y = ry + nm_sz + 5;
+        int bar_w = panel_w - pad_x * 2;
+        int bar_h = 7;
+        float ratio = (float)hp / (float)max_hp;
+        if (ratio < 0.0f) ratio = 0.0f;
+        if (ratio > 1.0f) ratio = 1.0f;
+
+        DrawRectangle(panel_x + pad_x, bar_y, bar_w, bar_h, (Color){28, 34, 46, 255});
+        int fill_w = (int)roundf((float)bar_w * ratio);
+        if (fill_w > 0) {
+            DrawRectangle(panel_x + pad_x, bar_y, fill_w, bar_h, hp_col);
+        }
+        DrawRectangleLines(panel_x + pad_x, bar_y, bar_w, bar_h, (Color){58, 70, 92, 255});
+    }
+}
+
+/* Executa uma partida completa (Singleplayer Offline, Host UDP ou Client UDP de ate 4 jogadores)
+ * mantendo velocidade independente de FPS via Delta Time (dt), controle de pause,
+ * sincronizacao multiplayer Co-op/PvP e ordem canonica das chamadas da biblioteca renderer. */
 static void run_game_session(NetMode mode, const char *host_ip, int port,
                              AppConfig *cfg, NetContext *existing_net,
                              char *err_buf, size_t err_size) {
@@ -2587,25 +3419,112 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
     Player player;
     NetContext net;
 
-    if (mode == NET_MODE_HOST) {
-        player_init(&player, lvl_info->spawn1_x, lvl_info->spawn1_y, lvl_info->spawn1_angle);
-        player.id = 1;
-    } else if (mode == NET_MODE_CLIENT) {
-        player_init(&player, lvl_info->spawn2_x, lvl_info->spawn2_y, lvl_info->spawn2_angle);
-        player.id = 2;
-    } else {
-        player_init(&player, lvl_info->spawn1_x, lvl_info->spawn1_y, lvl_info->spawn1_angle);
-    }
-
-    CharacterClass selected_class = player_roster_get(&cfg->roster, cfg->selected_character);
-    player_apply_class(&player, &selected_class);
-
     if (existing_net && existing_net->initialized && mode != NET_MODE_OFFLINE) {
         net = *existing_net;
     } else if (!net_init(&net, mode, host_ip, port)) {
         snprintf(err_buf, err_size,
                  "Erro ao iniciar rede UDP na porta %d (IP: %s).", port, host_ip);
         return;
+    }
+
+    if (mode != NET_MODE_OFFLINE && cfg) {
+        if (mode == NET_MODE_HOST) {
+            net.game_mode = cfg->mp_game_mode;
+        }
+        net.remote_level = level_idx;
+    }
+    net.applied_pvp_dmg = 0;
+    memset(net.outgoing_pvp_dmg, 0, sizeof(net.outgoing_pvp_dmg));
+    memset(net.killed_by_counts, 0, sizeof(net.killed_by_counts));
+    memset(net.remote_pvp_dmg_matrix, 0, sizeof(net.remote_pvp_dmg_matrix));
+    memset(net.remote_killed_by_matrix, 0, sizeof(net.remote_killed_by_matrix));
+    memset(net.total_dmg_to_slot, 0, sizeof(net.total_dmg_to_slot));
+    memset(net.slot_pvp_kills, 0, sizeof(net.slot_pvp_kills));
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        net.last_attacker_of_slot[i] = -1;
+    }
+    if (mode != NET_MODE_OFFLINE) {
+        net_begin_match(&net, level_idx, lvl_info->name);
+    }
+
+    int is_multiplayer = (mode != NET_MODE_OFFLINE);
+    int my_slot = 0;
+    if (mode == NET_MODE_CLIENT) {
+        my_slot = (net.local_slot >= 1 && net.local_slot < NET_MAX_PLAYERS) ? net.local_slot : 1;
+    }
+
+    float base_sx = lvl_info->spawn1_x;
+    float base_sy = lvl_info->spawn1_y;
+    map_apply_pending_spawn(&base_sx, &base_sy);
+
+    float mp_sx[NET_MAX_PLAYERS];
+    float mp_sy[NET_MAX_PLAYERS];
+    float mp_sang[NET_MAX_PLAYERS];
+    compute_mp_spawn_points(&map, base_sx, base_sy,
+                            is_multiplayer ? net.game_mode : NET_GAME_COOP,
+                            mp_sx, mp_sy, mp_sang);
+
+    if (is_multiplayer) {
+        player_init(&player, mp_sx[my_slot], mp_sy[my_slot], mp_sang[my_slot]);
+        player.id = my_slot + 1;
+    } else {
+        player_init(&player, base_sx, base_sy, PI_F * 0.5f);
+    }
+
+    CharacterClass selected_class = player_roster_get(&cfg->roster, cfg->selected_character);
+    int restored_rejoin = 0;
+    if (mode == NET_MODE_CLIENT && net.has_restore_state && net.restore_state.valid) {
+        const NetSavedPlayerState *sv = &net.restore_state;
+        int total_r = player_roster_count(&cfg->roster);
+        if (sv->character_idx >= 0 && sv->character_idx < total_r) {
+            CharacterClass cand = player_roster_get(&cfg->roster, sv->character_idx);
+            if (cand.visual_id == sv->visual_id &&
+                memcmp(&cand.appearance, &sv->appearance, sizeof(sv->appearance)) == 0) {
+                selected_class = cand;
+                cfg->selected_character = sv->character_idx;
+            }
+        } else if (!sv->appearance.enabled) {
+            selected_class = player_get_preset_class(sv->visual_id);
+        } else {
+            selected_class = player_get_preset_class(PRESET_FUZILEIRO);
+            selected_class.visual_id = sv->visual_id;
+            selected_class.appearance = sv->appearance;
+            selected_class.ability = ABILITY_NONE;
+            snprintf(selected_class.name, sizeof(selected_class.name), "%s", sv->name);
+        }
+        player_apply_class(&player, &selected_class);
+
+        if (!map_is_wall(&map, (int)floorf(sv->x), (int)floorf(sv->y))) {
+            player.x = sv->x;
+            player.y = sv->y;
+        }
+        player.angle = sv->angle;
+        if (sv->max_health > 0) player.max_health = sv->max_health;
+        player.health = (sv->health > 0) ? sv->health : player.max_health;
+        if (player.health > player.max_health) player.health = player.max_health;
+        player.ammo = sv->ammo;
+        player.active_weapon = sv->active_weapon;
+        player.score = sv->score;
+        player.ability_state = sv->ability_state;
+        for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+            net.outgoing_pvp_dmg[i] = sv->outgoing_pvp_dmg[i];
+            net.killed_by_counts[i] = sv->killed_by_counts[i];
+        }
+        net.applied_pvp_dmg = (net.total_dmg_to_slot[my_slot] > sv->applied_pvp_dmg)
+            ? net.total_dmg_to_slot[my_slot] : sv->applied_pvp_dmg;
+        restored_rejoin = 1;
+    } else {
+        player_apply_class(&player, &selected_class);
+    }
+
+    if (mode == NET_MODE_HOST) {
+        net_host_update_local_slot(&net, selected_class.name, cfg->selected_character,
+                                   selected_class.visual_id, &selected_class.appearance,
+                                   net.game_mode, level_idx);
+    }
+
+    if (is_multiplayer) {
+        net_send_match_state(&net, &player, 0);
     }
 
     if (IsWindowFocused()) {
@@ -2620,13 +3539,26 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
     int pause_sel = 0;     /* 0 = Continuar, 1 = Config, 2 = Menu Principal */
     int pause_tab = 0;
     int pause_listening_bind = -1;
-    int is_multiplayer = (mode != NET_MODE_OFFLINE);
     float cam_pitch = 0.0f;
     int third_person = 0;
+    float pvp_hit_timer = 0.0f;
+    float pvp_hurt_timer = 0.0f;
+    float respawn_banner_timer = restored_rejoin ? 2.6f : 0.0f;
+    char respawn_msg[96] = "";
+    if (restored_rejoin) {
+        snprintf(respawn_msg, sizeof(respawn_msg), "RECONECTADO! PROGRESSO RESTAURADO.");
+    }
     EnemyManager enemies = {0};
     Weapon weapons[MAX_WEAPONS];
     weapons_init_defaults(weapons);
-    if (!is_multiplayer) enemies_spawn_wave(&enemies, &map, &player);
+
+    int use_coop_enemies = (!is_multiplayer || net.game_mode == NET_GAME_COOP);
+    if (use_coop_enemies) {
+        map_begin_enemy_spawn();
+        enemies_spawn_wave(&enemies, &map, &player);
+        map_end_enemy_spawn();
+        map_set_enemies_alive(enemies_alive(&enemies));
+    }
     float wave_timer = 3.0f;
 
     while (!WindowShouldClose() && running) {
@@ -2650,6 +3582,12 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         if (dt > 0.1f) {
             dt = 0.1f;
         }
+        if (!paused) {
+            renderer_update_auto_perf(dt);
+        }
+        if (pvp_hit_timer > 0.0f) pvp_hit_timer = fmaxf(0.0f, pvp_hit_timer - dt);
+        if (pvp_hurt_timer > 0.0f) pvp_hurt_timer = fmaxf(0.0f, pvp_hurt_timer - dt);
+        if (respawn_banner_timer > 0.0f) respawn_banner_timer = fmaxf(0.0f, respawn_banner_timer - dt);
 
         if (IsKeyPressed(KEY_F11)) {
             toggle_borderless_window();
@@ -2659,6 +3597,9 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         }
         if (IsKeyPressed(KEY_F3) && pause_listening_bind < 0) {
             cfg->show_fps = !cfg->show_fps;
+        }
+        if (IsKeyPressed(KEY_F4) && !alt_down && pause_listening_bind < 0) {
+            cfg->ascii_style = (cfg->ascii_style + 1) % 2;
         }
 
         if (paused && pause_subpage == 1 && pause_tab == 1 && pause_listening_bind >= 0) {
@@ -2705,44 +3646,256 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
             handle_custom_input(&player, &map, &cfg->binds, dt, &running, &did_shoot, &cam_pitch);
         }
 
-        if (!paused) {
-            if (did_shoot) enemies_check_hit(&enemies, &map, &player, &weapons[WEAPON_PISTOL]);
-            enemies_update_fireball(&enemies, &map, &player, dt);
-            enemies_update(&enemies, &map, &player, dt);
-            if (!is_multiplayer && enemies_alive(&enemies) == 0) {
-                wave_timer -= dt;
-                if (wave_timer <= 0) { enemies_spawn_wave(&enemies, &map, &player); wave_timer = 3; }
+        int is_pvp = (is_multiplayer && net.game_mode == NET_GAME_PVP);
+        if (is_multiplayer) {
+            if (mode == NET_MODE_CLIENT && net.local_slot >= 1 && net.local_slot < NET_MAX_PLAYERS) {
+                my_slot = net.local_slot;
+                player.id = my_slot + 1;
             }
-            if (player.health <= 0) {
-                snprintf(err_buf, err_size, "Fim de partida: %d kills. Inicie outra para tentar novamente.", player.ability_state.kills);
+            use_coop_enemies = (net.game_mode == NET_GAME_COOP);
+        }
+
+        if (!paused) {
+            if (did_shoot) {
+                if (is_pvp) {
+                    if (check_pvp_player_hit(&map, &player, &net, weapons, my_slot)) {
+                        pvp_hit_timer = 0.22f;
+                    }
+                } else {
+                    enemies_check_hit(&enemies, &map, &player, &weapons[WEAPON_PISTOL]);
+                }
+            }
+            if (!is_pvp) {
+                enemies_update_fireball(&enemies, &map, &player, dt);
+                enemies_update(&enemies, &map, &player, dt);
+                int alive = map_set_enemies_alive(enemies_alive(&enemies));
+                if (!is_multiplayer) {
+                    if (map_has_exit_tile(&map) && alive == 0) {
+                        wave_timer = 3.0f;
+                    }
+                    int nav = map_try_advance_level(&map, &player.x, &player.y, &player.angle);
+                    if (nav > 0) {
+                        map_begin_enemy_spawn();
+                        enemies_spawn_wave(&enemies, &map, &player);
+                        map_end_enemy_spawn();
+                        map_set_enemies_alive(enemies_alive(&enemies));
+                        wave_timer = 3.0f;
+                    } else if (nav < 0) {
+                        snprintf(err_buf, err_size,
+                                 "Todas as fases concluidas! Kills: %d.",
+                                 player.ability_state.kills);
+                        running = 0;
+                    } else if (alive == 0) {
+                        wave_timer -= dt;
+                        if (wave_timer <= 0.0f) {
+                            map_begin_enemy_spawn();
+                            enemies_spawn_wave(&enemies, &map, &player);
+                            map_end_enemy_spawn();
+                            map_set_enemies_alive(enemies_alive(&enemies));
+                            wave_timer = 3.0f;
+                        }
+                    }
+                } else if (alive == 0) {
+                    wave_timer -= dt;
+                    if (wave_timer <= 0.0f) {
+                        map_begin_enemy_spawn();
+                        enemies_spawn_wave(&enemies, &map, &player);
+                        map_end_enemy_spawn();
+                        map_set_enemies_alive(enemies_alive(&enemies));
+                        wave_timer = 3.0f;
+                    }
+                }
+            }
+        }
+
+        if (is_multiplayer) {
+            net_receive_match_state(&net);
+            if (mode == NET_MODE_CLIENT && net.host_disconnected) {
+                snprintf(err_buf, err_size,
+                         "O Anfitriao encerrou a partida. Voltando ao menu.");
                 running = 0;
+            }
+            if (mode == NET_MODE_CLIENT && net.local_slot >= 1 && net.local_slot < NET_MAX_PLAYERS) {
+                my_slot = net.local_slot;
+                player.id = my_slot + 1;
+            }
+            is_pvp = (net.game_mode == NET_GAME_PVP);
+
+            if (running && is_pvp && net.total_dmg_to_slot[my_slot] > net.applied_pvp_dmg) {
+                int delta = net.total_dmg_to_slot[my_slot] - net.applied_pvp_dmg;
+                net.applied_pvp_dmg = net.total_dmg_to_slot[my_slot];
+                player_take_damage(&player, delta);
+                pvp_hurt_timer = 0.28f;
+            }
+            if (running && is_pvp) {
+                player.ability_state.kills = net.slot_pvp_kills[my_slot];
+            }
+            if (running) {
+                net_send_match_state(&net, &player, did_shoot);
+            }
+        }
+
+        if (player.health <= 0) {
+            if (!is_multiplayer) {
+                snprintf(err_buf, err_size,
+                         "Fim de partida: %d kills. Inicie outra para tentar novamente.",
+                         player.ability_state.kills);
+                running = 0;
+            } else {
+                /* Em Co-op e PvP, reaparece num ponto seguro sem derrubar a sala */
+                int killer = net.last_attacker_of_slot[my_slot];
+                if (is_pvp && killer >= 0 && killer < NET_MAX_PLAYERS && killer != my_slot) {
+                    net.killed_by_counts[killer]++;
+                    snprintf(respawn_msg, sizeof(respawn_msg),
+                             "ELIMINADO POR P%d (%s)! REAPARECENDO...",
+                             killer + 1,
+                             net.slots[killer].name[0] ? net.slots[killer].name : "Rival");
+                } else {
+                    snprintf(respawn_msg, sizeof(respawn_msg), "VOCE CAIU! REAPARECENDO...");
+                }
+
+                compute_mp_spawn_points(&map, base_sx, base_sy, net.game_mode, mp_sx, mp_sy, mp_sang);
+                int pick = my_slot;
+                if (is_pvp) {
+                    float best_r_d2 = -1.0f;
+                    for (int cand = 0; cand < NET_MAX_PLAYERS; cand++) {
+                        float min_d2 = 1e9f;
+                        for (int r = 0; r < NET_MAX_PLAYERS; r++) {
+                            if (r != my_slot && net.slots[r].active && net.slots[r].has_pos &&
+                                net.slots[r].health > 0) {
+                                float ddx = mp_sx[cand] - net.slots[r].x;
+                                float ddy = mp_sy[cand] - net.slots[r].y;
+                                float d2 = ddx * ddx + ddy * ddy;
+                                if (d2 < min_d2) min_d2 = d2;
+                            }
+                        }
+                        if (min_d2 > best_r_d2) {
+                            best_r_d2 = min_d2;
+                            pick = cand;
+                        }
+                    }
+                }
+                player.x = mp_sx[pick];
+                player.y = mp_sy[pick];
+                player.angle = mp_sang[pick];
+                player.health = player.max_health;
+                player.ammo = selected_class.start_ammo;
+                respawn_banner_timer = 2.2f;
+                net_send_match_state(&net, &player, 0);
+            }
+        }
+
+        SpriteEntity mp_sprites[NET_MAX_PLAYERS];
+        int mp_count = 0;
+        SpriteEntity mm_markers[MAX_SPRITES];
+        int mm_count = 0;
+        if (!is_pvp) {
+            for (int i = 0; i < enemies.count && mm_count < MAX_SPRITES; i++) {
+                const Enemy *e = &enemies.enemies[i];
+                if (e->active) {
+                    mm_markers[mm_count++] = (SpriteEntity){e->x, e->y, 1, 0, e->symbol, 0, {0}, 0};
+                }
             }
         }
         if (is_multiplayer) {
-            net_receive_state(&net);
-            net_send_state(&net, &player, did_shoot);
+            for (int s = 0; s < NET_MAX_PLAYERS; s++) {
+                if (s == my_slot || !net.slots[s].active || !net.slots[s].has_pos ||
+                    net.slots[s].health <= 0) {
+                    continue;
+                }
+                SpriteEntity rem;
+                memset(&rem, 0, sizeof(rem));
+                rem.x = net.slots[s].x;
+                rem.y = net.slots[s].y;
+                rem.active = 1;
+                rem.shooting = net.slots[s].shooting;
+                rem.label = 'O';
+                rem.visual_id = net.slots[s].visual_id;
+                rem.appearance = net.slots[s].appearance;
+                rem.team_accent = is_pvp ? -(s + 1) : (s + 1);
+                mp_sprites[mp_count++] = rem;
+                if (mm_count < MAX_SPRITES) {
+                    mm_markers[mm_count++] = rem;
+                }
+            }
         }
-        SpriteEntity sprites[MAX_SPRITES];
-        int sprite_count = 0;
-        for (int i = 0; i < enemies.count && sprite_count < MAX_SPRITES; i++) {
-            Enemy *e = &enemies.enemies[i];
-            if (e->active) sprites[sprite_count++] = (SpriteEntity){e->x, e->y, 1, 0, e->symbol};
-        }
-        if (is_multiplayer && net.connected && sprite_count < MAX_SPRITES)
-            sprites[sprite_count++] = (SpriteEntity){net.remote_state.x, net.remote_state.y, 1, net.remote_state.shooting, 'O'};
+
+        const RendererApi *r_api = renderer_get_api();
+        renderer_set_visual_style(cfg->ascii_style);
         renderer_set_ascii_density(cfg->ascii_quality, sw, sh);
         renderer_set_camera_view(cam_pitch, third_person);
         renderer_clear();
         renderer_draw_walls(&map, &player);
-        renderer_draw_sprites(&player, sprites, sprite_count);
+        if (!is_pvp) {
+            entities_render(&enemies, &player, r_api);
+        }
+        renderer_draw_sprites(&player, mp_sprites, mp_count);
+        map_render_hazards(&map, &player, r_api);
         renderer_draw_ability_effects(&player);
-        renderer_draw_minimap(&map, &player, sprites, sprite_count);
+        draw_sliding_minimap(&map, &player, mm_markers, mm_count);
         renderer_draw_weapon(&player);
         renderer_draw_hud(&player);
 
         BeginDrawing();
         renderer_draw_scene_and_hud(&player, is_multiplayer, net.connected,
                                     mouse_locked, cfg->show_fps ? cfg->fps_cap : -1);
+
+        /* Feedback visual de multiplayer (modo, placar PvP, marcador de acerto e dano) */
+        if (is_multiplayer) {
+            int hud_h_px = (int)((float)sh * 0.145f);
+            if (hud_h_px < 82) hud_h_px = 82;
+            int view_h_px = sh - hud_h_px;
+
+            if (pvp_hit_timer > 0.0f) {
+                int cx_m = sw / 2, cy_m = view_h_px / 2;
+                DrawLine(cx_m - 10, cy_m - 10, cx_m - 4, cy_m - 4, (Color){255, 85, 65, 255});
+                DrawLine(cx_m + 10, cy_m - 10, cx_m + 4, cy_m - 4, (Color){255, 85, 65, 255});
+                DrawLine(cx_m - 10, cy_m + 10, cx_m - 4, cy_m + 4, (Color){255, 85, 65, 255});
+                DrawLine(cx_m + 10, cy_m + 10, cx_m + 4, cy_m + 4, (Color){255, 85, 65, 255});
+            }
+            if (pvp_hurt_timer > 0.0f) {
+                unsigned char a = (unsigned char)(190.0f * (pvp_hurt_timer / 0.28f));
+                DrawRectangleLinesEx((Rectangle){0, 0, (float)sw, (float)view_h_px},
+                                     6.0f, (Color){235, 42, 42, a});
+            }
+
+            int mf_sz = (int)(13.5f * sc);
+            if (mf_sz < 10) mf_sz = 10;
+            char top_bar[160];
+            if (is_pvp) {
+                snprintf(top_bar, sizeof(top_bar), "PVP (%d/4)", net.active_player_count);
+                for (int s = 0; s < NET_MAX_PLAYERS; s++) {
+                    if (net.slots[s].active) {
+                        char part[32];
+                        snprintf(part, sizeof(part), " | P%d:%d", s + 1, net.slot_pvp_kills[s]);
+                        strncat(top_bar, part, sizeof(top_bar) - strlen(top_bar) - 1);
+                    }
+                }
+            } else {
+                snprintf(top_bar, sizeof(top_bar), "CO-OP (%d/4 JOGADORES)", net.active_player_count);
+            }
+            int tw_b = MeasureText(top_bar, mf_sz) + 20;
+            int bx_b = (sw - tw_b) / 2;
+            DrawRectangle(bx_b, 8, tw_b, mf_sz + 10, (Color){12, 16, 24, 210});
+            DrawRectangleLinesEx((Rectangle){(float)bx_b, 8.0f, (float)tw_b, (float)(mf_sz + 10)},
+                                 1.5f, is_pvp ? (Color){235, 95, 70, 235} : (Color){95, 215, 145, 235});
+            DrawText(top_bar, bx_b + 10, 13, mf_sz,
+                     is_pvp ? (Color){255, 195, 135, 255} : (Color){145, 245, 185, 255});
+
+            if (respawn_banner_timer > 0.0f && respawn_msg[0] != '\0') {
+                int r_sz = (int)(18.0f * sc);
+                if (r_sz < 13) r_sz = 13;
+                int rw = MeasureText(respawn_msg, r_sz) + 28;
+                int rx_b = (sw - rw) / 2;
+                int ry_b = view_h_px / 3;
+                DrawRectangle(rx_b, ry_b, rw, r_sz + 16, (Color){18, 12, 16, 225});
+                DrawRectangleLinesEx((Rectangle){(float)rx_b, (float)ry_b, (float)rw, (float)(r_sz + 16)},
+                                     2.0f, (Color){255, 110, 80, 255});
+                DrawText(respawn_msg, rx_b + 14, ry_b + 8, r_sz, WHITE);
+            }
+
+            draw_mp_players_hp_hud(sw, sh, sc, &player, &net, my_slot, is_pvp);
+        }
 
         if (paused) {
             /* Sobreposicao esmaecida mantendo a cena 3D e o HUD visiveis ao fundo */
@@ -2851,16 +4004,22 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         EndDrawing();
     }
 
+    if (is_multiplayer && !net.host_disconnected) {
+        net_send_lobby_leave(&net);
+    }
     renderer_set_camera_view(0.0f, 0);
     net_close(&net);
 }
 
+/* Ponto de entrada: suporta modo headless (--test-frame) para CI/testes ou loop
+ * menu <-> partida mantendo configuracoes, roster e hooks ativos durante todo o jogo. */
 int main(int argc, char *argv[]) {
     if (argc > 1 && strcmp(argv[1], "--test-frame") == 0) {
         return run_single_test_frame();
     }
 
     renderer_init();
+    register_renderer_hooks();
 
     AppConfig cfg;
     app_config_init(&cfg);

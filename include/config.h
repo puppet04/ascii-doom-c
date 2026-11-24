@@ -32,6 +32,6 @@
 /* Configuracoes de rede e taxa de quadros */
 #define DEFAULT_PORT 5000
 #define TARGET_FPS   165
-#define MAX_SPRITES  8
+#define MAX_SPRITES  64
 
 #endif /* CONFIG_H */

@@ -2,6 +2,7 @@
 #define MAP_H
 
 #include "config.h"
+#include "render_api.h"
 
 #undef MAP_WIDTH
 #undef MAP_HEIGHT
@@ -122,80 +123,16 @@ int map_to_minimap_coords(float *x, float *y);
 /* Aplica a posicao de spawn ('P') carregada do mapa atual nas coordenadas do jogador. */
 void map_apply_pending_spawn(float *player_x, float *player_y);
 
-#ifdef RENDERER_H
-static float perp_dist __attribute__((unused));
-static int is_block_edge __attribute__((unused));
-static int side __attribute__((unused));
-#define map_is_wall(map, x, y) map_is_visible_wall((map), (x), (y))
-#define MAP_GTBC_char get_tile_base_color(char
-#define MAP_GTBC_tile (((tile) == 'E' && !map_are_enemies_alive()) \
-    ? (perp_dist = -50.0f, is_block_edge = 0, side = 0, make_color(255, 255, 255)) \
-    : (map_last_tile_is_passable() \
-        ? make_color(map_lighten_channel_for_tile((tile), get_tile_base_color(tile).r), \
-                     map_lighten_channel_for_tile((tile), get_tile_base_color(tile).g), \
-                     map_lighten_channel_for_tile((tile), get_tile_base_color(tile).b)) \
-        : get_tile_base_color(tile))
-#define get_tile_base_color(x) MAP_GTBC_##x)
-#endif
+/* Hooks e renderizador 3D do modulo de mapas (registrados na biblioteca renderer). */
+int map_floor_decal_hook(const void *map_ptr, int mx, int my,
+                         float fu, float fv, float row_dist,
+                         char *out_ch, AsciiColor *out_col);
+void map_wall_style_hook(const void *map_ptr, int mx, int my, char tile,
+                         AsciiColor *io_color, float *io_fog_dist,
+                         int *io_is_edge, int *io_side);
+int map_minimap_tile_hook(const void *mm_map_ptr, int mx, int my,
+                          char *out_ch, AsciiColor *out_col);
+void map_render_hazards(const GameMap *map, const void *player_ptr,
+                        const RendererApi *r);
 
 #endif /* MAP_H */
-
-#ifdef MAX_ENEMIES
-#ifndef MAP_ENTITIES_HOOKED
-#define MAP_ENTITIES_HOOKED
-#define enemies_alive(mgr) map_set_enemies_alive(enemies_alive(mgr))
-#define enemies_spawn_wave(mgr, map, player) \
-    (map_begin_enemy_spawn(), enemies_spawn_wave((mgr), (map), (player)), map_end_enemy_spawn(), (void)enemies_alive(mgr))
-#define enemies_update(mgr, map_ptr, player_ptr, dt) \
-    do { \
-        enemies_update((mgr), (map_ptr), (player_ptr), (dt)); \
-        if (map_has_exit_tile(map_ptr) && !map_are_enemies_alive()) { \
-            wave_timer = 3.0f; \
-        } \
-        int _nav = map_try_advance_level((map_ptr), &(player_ptr)->x, &(player_ptr)->y, &(player_ptr)->angle); \
-        if (_nav > 0) { \
-            enemies_spawn_wave((mgr), (map_ptr), (player_ptr)); \
-            wave_timer = 3.0f; \
-        } else if (_nav < 0) { \
-            running = 0; \
-        } \
-    } while (0)
-#define player_apply_class(p_ptr, cls_ptr) \
-    do { \
-        player_apply_class((p_ptr), (cls_ptr)); \
-        if ((p_ptr)->id == 1) { \
-            map_apply_pending_spawn(&(p_ptr)->x, &(p_ptr)->y); \
-            (p_ptr)->angle = PI_F * 0.5f; \
-        } \
-    } while (0)
-#endif
-#endif
-
-#ifdef RENDERER_H
-#ifndef MAP_MINIMAP_HOOKED
-#define MAP_MINIMAP_HOOKED
-#define MAP_RDM_CALL(map_arg, player_arg, sprites_arg, count_arg) \
-    do { \
-        GameMap _mm_map; \
-        Player _mm_player = *(player_arg); \
-        SpriteEntity _mm_sprites[MAX_SPRITES]; \
-        int _mm_cnt = (count_arg); \
-        if (_mm_cnt > MAX_SPRITES) _mm_cnt = MAX_SPRITES; \
-        map_build_minimap_view((map_arg), &_mm_map, &_mm_player.x, &_mm_player.y); \
-        for (int _i = 0; _i < _mm_cnt; _i++) { \
-            _mm_sprites[_i] = (sprites_arg)[_i]; \
-            if (!map_to_minimap_coords(&_mm_sprites[_i].x, &_mm_sprites[_i].y)) { \
-                _mm_sprites[_i].active = 0; \
-            } \
-        } \
-        renderer_draw_minimap(&_mm_map, &_mm_player, _mm_sprites, _mm_cnt); \
-    } while (0
-#define MAP_RDM_int \
-    renderer_draw_minimap(const GameMap *map, const Player *player, const SpriteEntity *sprites, int
-#define MAP_RDM_1 \
-    MAP_RDM_CALL(&map, &player, &demo_sprite, 1)
-#define MAP_RDM_sprite_count \
-    MAP_RDM_CALL(&map, &player, sprites, sprite_count)
-#define renderer_draw_minimap(a, b, c, d) MAP_RDM_##d)
-#endif
-#endif
