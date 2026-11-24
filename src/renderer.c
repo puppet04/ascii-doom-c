@@ -65,6 +65,15 @@ static float prev_bob_phase = 0.0f;
 static float walk_amp = 0.0f;
 static const GameMap *cam_view_map = NULL;
 
+/* Cache do floor-casting do frame atual para uso via RendererApi (ex.: aneis no chao) */
+static float floor_rel_inv_cos[MAX_R_WIDTH];
+static float floor_base_dist[MAX_R_HEIGHT];
+static float floor_col_step_x[MAX_R_WIDTH];
+static float floor_col_step_y[MAX_R_WIDTH];
+static int floor_col_draw_end[MAX_R_WIDTH];
+static int floor_cast_begin = 0;
+static int floor_cast_ready = 0;
+
 /* Hooks registrados por outros modulos (ex.: map.c para armadilhas/kits/saida 'E') */
 static RendererFloorHookFn g_floor_hook = NULL;
 static RendererWallStyleHookFn g_wall_hook = NULL;
@@ -675,6 +684,7 @@ void renderer_clear(void) {
 
     cam_view_ready = 0;
     cam_view_map = NULL;
+    floor_cast_ready = 0;
     const size_t row_cells_bytes = (size_t)r_width * sizeof(AsciiCell);
     const size_t row_depth_bytes = (size_t)r_width * sizeof(float);
     for (int y = 0; y < r_height; y++) {
@@ -751,7 +761,6 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
     /* LUT relativa dos raios da camera: zero sinf/cosf dentro do laco de colunas */
     static float rel_cos_lut[MAX_R_WIDTH];
     static float rel_sin_lut[MAX_R_WIDTH];
-    static float rel_inv_cos_lut[MAX_R_WIDTH];
     static int ray_lut_w = -1;
     static float ray_lut_fov = -1.0f;
     if (ray_lut_w != r_width || fabsf(ray_lut_fov - player->fov) > 1e-6f) {
@@ -762,7 +771,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
             rel_cos_lut[x] = cosf(rel_a);
             rel_sin_lut[x] = sinf(rel_a);
             float cc = (rel_cos_lut[x] < 0.25f) ? 0.25f : rel_cos_lut[x];
-            rel_inv_cos_lut[x] = 1.0f / cc;
+            floor_rel_inv_cos[x] = 1.0f / cc;
         }
         ray_lut_w = r_width;
         ray_lut_fov = player->fov;
@@ -772,11 +781,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
 
     /* Arrays pre-calculados por coluna (Passe 1) para cast de teto/chao em ordem de linha (Passe 2) */
     static float base_ceil_dist[MAX_R_HEIGHT];
-    static float base_floor_dist[MAX_R_HEIGHT];
-    static float col_step_x[MAX_R_WIDTH];
-    static float col_step_y[MAX_R_WIDTH];
     static int col_draw_start[MAX_R_WIDTH];
-    static int col_draw_end[MAX_R_WIDTH];
 
     for (int y = 0; y < r_height; y++) {
         float cy = (float)y + 0.5f;
@@ -785,10 +790,9 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
         base_ceil_dist[y] = (EYE_CEIL_H * (float)r_height) / pc;
         float pf = cy - horizon_y;
         if (pf < 0.5f) pf = 0.5f;
-        base_floor_dist[y] = (EYE_FLOOR_H * (float)r_height) / pf;
+        floor_base_dist[y] = (EYE_FLOOR_H * (float)r_height) / pf;
     }
 
-    int has_teto_zone = (player->ability_state.zone_time > 0.0f);
     const float inv_13_5 = 1.0f / 13.5f;
     const float inv_13_0 = 1.0f / 13.0f;
 
@@ -852,7 +856,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
         }
 
         float cos_corr = (r_c_lut < 0.25f) ? 0.25f : r_c_lut;
-        float inv_cos = rel_inv_cos_lut[x];
+        float inv_cos = floor_rel_inv_cos[x];
 
         float perp_dist = raw_dist * cos_corr;
         if (perp_dist < 0.1f) perp_dist = 0.1f;
@@ -876,10 +880,10 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
         int draw_end = (raw_end >= r_height) ? (r_height - 1) : raw_end;
         float inv_lh = 1.0f / (float)line_height;
 
-        col_step_x[x] = ray_dir_x * inv_cos;
-        col_step_y[x] = ray_dir_y * inv_cos;
+        floor_col_step_x[x] = ray_dir_x * inv_cos;
+        floor_col_step_y[x] = ray_dir_y * inv_cos;
         col_draw_start[x] = draw_start;
-        col_draw_end[x] = draw_end;
+        floor_col_draw_end[x] = draw_end;
 
         char tile = hit ? map_get_tile(map, map_x, map_y) : '#';
         AsciiColor base_wall = get_tile_base_color(tile);
@@ -1018,11 +1022,11 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
         for (int x = 0; x < r_width; x++) {
             if (y >= col_draw_start[x]) continue;
 
-            float row_dist = bcd * rel_inv_cos_lut[x];
+            float row_dist = bcd * floor_rel_inv_cos[x];
             if (row_dist > MAX_DEPTH) continue;
 
-            float wx = cam_view_x + bcd * col_step_x[x];
-            float wy = cam_view_y + bcd * col_step_y[x];
+            float wx = cam_view_x + bcd * floor_col_step_x[x];
+            float wy = cam_view_y + bcd * floor_col_step_y[x];
             float cu = wx - (float)fast_floor_i(wx);
             float cv = wy - (float)fast_floor_i(wy);
 
@@ -1054,50 +1058,22 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
     int floor_begin = fast_floor_i(horizon_y);
     if (floor_begin < 0) floor_begin = 0;
     if (floor_begin > r_height) floor_begin = r_height;
-
-    const float teto_zx = has_teto_zone ? player->ability_state.zone_x : 0.0f;
-    const float teto_zy = has_teto_zone ? player->ability_state.zone_y : 0.0f;
-    const float inv_rh_teto = 0.65f / (float)r_height;
-    const float teto_max_edge = 2.0f * (0.07f + MAX_DEPTH * inv_rh_teto);
-    const float teto_r_hi_sq = (TETO_ZONE_RADIUS + teto_max_edge) * (TETO_ZONE_RADIUS + teto_max_edge);
-    const float teto_r_lo = (TETO_ZONE_RADIUS > teto_max_edge) ? (TETO_ZONE_RADIUS - teto_max_edge) : 0.0f;
-    const float teto_r_lo_sq = teto_r_lo * teto_r_lo;
+    floor_cast_begin = floor_begin;
+    floor_cast_ready = 1;
 
     for (int y = floor_begin; y < r_height; y++) {
-        float bfd = base_floor_dist[y];
+        float bfd = floor_base_dist[y];
         if (bfd > MAX_DEPTH) continue;
 
         AsciiCell *row = screen_grid[y];
         for (int x = 0; x < r_width; x++) {
-            if (y <= col_draw_end[x]) continue;
+            if (y <= floor_col_draw_end[x]) continue;
 
-            float row_dist = bfd * rel_inv_cos_lut[x];
+            float row_dist = bfd * floor_rel_inv_cos[x];
             if (row_dist > MAX_DEPTH) continue;
 
-            float wx = cam_view_x + bfd * col_step_x[x];
-            float wy = cam_view_y + bfd * col_step_y[x];
-
-            if (has_teto_zone) {
-                float dx = wx - teto_zx;
-                float dy = wy - teto_zy;
-                float d2 = dx * dx + dy * dy;
-                if (d2 <= teto_r_hi_sq && d2 >= teto_r_lo_sq) {
-                    float edge = fabsf(sqrtf(d2) - TETO_ZONE_RADIUS);
-                    float thickness = 0.07f + row_dist * inv_rh_teto;
-                    if (edge < thickness) {
-                        row[x].ch = '#';
-                        row[x].fg = make_color(255, 80, 170);
-                        row[x].bg = bg_black;
-                        continue;
-                    }
-                    if (edge < thickness * 2.0f) {
-                        row[x].ch = '+';
-                        row[x].fg = make_color(190, 55, 120);
-                        row[x].bg = bg_black;
-                        continue;
-                    }
-                }
-            }
+            float wx = cam_view_x + bfd * floor_col_step_x[x];
+            float wy = cam_view_y + bfd * floor_col_step_y[x];
 
             int floor_mx = fast_floor_i(wx);
             int floor_my = fast_floor_i(wy);
@@ -1621,6 +1597,53 @@ static void api_draw_world_orb(const void *player_ptr,
     }
 }
 
+static void api_draw_world_floor_ring(float cx, float cy, float radius,
+                                      char inner_ch, AsciiColor inner_col,
+                                      char outer_ch, AsciiColor outer_col) {
+    if (!floor_cast_ready || radius <= 0.0f) {
+        return;
+    }
+    const float inv_rh = 0.65f / (float)r_height;
+    const float max_edge = 2.0f * (0.07f + MAX_DEPTH * inv_rh);
+    const float r_hi_sq = (radius + max_edge) * (radius + max_edge);
+    const float r_lo = (radius > max_edge) ? (radius - max_edge) : 0.0f;
+    const float r_lo_sq = r_lo * r_lo;
+    AsciiColor bg_black = make_color(0, 0, 0);
+
+    for (int y = floor_cast_begin; y < r_height; y++) {
+        float bfd = floor_base_dist[y];
+        if (bfd > MAX_DEPTH) continue;
+
+        AsciiCell *row = screen_grid[y];
+        float *drow = cell_depth[y];
+        for (int x = 0; x < r_width; x++) {
+            if (y <= floor_col_draw_end[x]) continue;
+
+            float row_dist = bfd * floor_rel_inv_cos[x];
+            if (row_dist > MAX_DEPTH || row_dist >= drow[x]) continue;
+
+            float wx = cam_view_x + bfd * floor_col_step_x[x];
+            float wy = cam_view_y + bfd * floor_col_step_y[x];
+            float dx = wx - cx;
+            float dy = wy - cy;
+            float d2 = dx * dx + dy * dy;
+            if (d2 <= r_hi_sq && d2 >= r_lo_sq) {
+                float edge = fabsf(sqrtf(d2) - radius);
+                float thickness = 0.07f + row_dist * inv_rh;
+                if (edge < thickness) {
+                    row[x].ch = inner_ch;
+                    row[x].fg = inner_col;
+                    row[x].bg = bg_black;
+                } else if (edge < thickness * 2.0f) {
+                    row[x].ch = outer_ch;
+                    row[x].fg = outer_col;
+                    row[x].bg = bg_black;
+                }
+            }
+        }
+    }
+}
+
 static int api_project_point(const void *player_ptr,
                              float world_x, float world_y, float height,
                              int *out_sx, int *out_sy, float *out_depth) {
@@ -1643,11 +1666,12 @@ static float api_get_view_angle(const void *player_ptr) {
 }
 
 /* Expoe a vtable estatica RendererApi com operacoes independentes de Raylib.
- * Chamado em main.c para entregar a biblioteca grafica a entities.c e map.c. */
+ * Chamado em main.c para entregar a biblioteca grafica a entities.c, map.c e player.c. */
 const RendererApi *renderer_get_api(void) {
     static const RendererApi API = {
         api_draw_world_sprite,
         api_draw_world_orb,
+        api_draw_world_floor_ring,
         api_project_point,
         set_cell,
         set_cell_if_closer,
@@ -1660,111 +1684,8 @@ const RendererApi *renderer_get_api(void) {
     return &API;
 }
 
-/* Chamas afiladas: o movimento sobe pelo corpo em vez de piscar aleatoriamente. */
-static void draw_shadow_flame(const Player *p, float wx, float wy, float height,
-                              float size, float phase, int dark_core) {
-    int sx, sy; float depth;
-    if (!project_effect(p, wx, wy, height, &sx, &sy, &depth)) return;
-    int radius = (int)(r_height * size / depth);
-    if (radius < 2) radius = 2;
-    if (radius > 32) radius = 32;
-    AsciiColor black = make_color(0, 0, 0);
-    for (int y = -radius * 2; y <= radius; y++) {
-        float v = (float)y / radius;
-        float width = v < 0 ? 1.0f + v * 0.46f : sqrtf(fmaxf(0, 1-v*v));
-        float sway = sinf(phase * 7 + v * 5) * 0.16f * (1-v);
-        for (int x = -radius * 2; x <= radius * 2; x++) {
-            int px = sx+x, py = sy+y;
-            if (px < 0 || px >= r_width || py < 0 || py >= r_height || depth >= z_buffer[px]) continue;
-            float u = (float)x/radius - sway;
-            float edge = fabsf(u) / fmaxf(width, 0.01f);
-            float ripple = 0.09f*sinf(v*13 + phase*11 + u*4);
-            if (edge > 1+ripple) continue;
-            float vein = sinf(u*9 + v*8 - phase*12);
-            AsciiColor color;
-            char ch;
-            if (dark_core && u*u + v*v < 0.30f) {
-                color = make_color(65, 28, 95); ch = ':';
-            } else if (edge < 0.48f && v > -0.6f) {
-                color = make_color(250, 205, 255); ch = '@';
-            } else if (edge < 0.78f) {
-                color = make_color(195, 95, 255); ch = vein > 0 ? '#' : '*';
-            } else {
-                color = make_color(110, 48, 185); ch = v < -0.6f ? '^' : '+';
-            }
-            set_cell_if_closer(px, py, depth, ch, color, black);
-        }
-    }
-}
-
-void renderer_draw_ability_effects(const Player *p) {
-    const AbilityState *s = &p->ability_state;
-    AsciiColor black = make_color(0, 0, 0);
-    float time = cam_view_ready ? frame_time_now : (IsWindowReady() ? (float)GetTime() : 0.0f);
-    if (s->zone_time > 0.0f) {
-        for (int i = 0; i < 16; i++) {
-            float a = (float)i * 2.4f;
-            float radius = 0.5f + (float)(i % 4) * 0.42f;
-            float height = 0.15f + fmodf(time * 0.45f + (float)i * 0.17f, 0.8f);
-            int sx, sy;
-            float depth;
-            if (!project_effect(p, s->zone_x + cosf(a) * radius,
-                                s->zone_y + sinf(a) * radius, height, &sx, &sy, &depth)) {
-                continue;
-            }
-            static const char *heart[] = {"@ @", "@@@", " @ "};
-            for (int r = 0; r < 3; r++) {
-                for (int c = 0; c < 3; c++) {
-                    int px = sx + c - 1;
-                    if (heart[r][c] != ' ' && px >= 0 && px < r_width && depth < z_buffer[px]) {
-                        set_cell_if_closer(px, sy + r, depth, heart[r][c], make_color(255, 115, 180), black);
-                    }
-                }
-            }
-        }
-    }
-    if (s->fireball_active) {
-        float age = fmaxf(0, 3.0f-s->fireball_time);
-        for (int i=7; i>=1; i--) {
-            float lag = i*0.075f;
-            if (lag > age*7) continue;
-            float flutter = sinf(time*14-i*1.8f)*0.035f;
-            draw_shadow_flame(p, s->fireball_x-s->fireball_dx*lag-s->fireball_dy*flutter,
-                              s->fireball_y-s->fireball_dy*lag+s->fireball_dx*flutter,
-                              0.48f+i*0.012f, 0.075f-i*0.008f, time+i*0.4f, 0);
-        }
-        draw_shadow_flame(p, s->fireball_x, s->fireball_y, 0.48f,
-                          0.115f+0.009f*sinf(time*17), time, 1);
-    }
-}
-
 void renderer_draw_weapon(const Player *player) {
     if (!player || cam_third_person) {
-        return;
-    }
-
-    if (player->ability_state.berserk_time > 0) {
-        float swing = player->shoot_timer > 0 ? sinf(player->shoot_timer / 0.60f * PI_F) : 0.0f;
-        for (int y = r_height / 3; y < r_height; y++) {
-            float t = (float)(y - r_height / 3) / (float)(r_height * 2 / 3);
-            int center = (int)((float)r_width * (0.68f - t * 0.18f - swing * 0.28f));
-            int width = (int)((float)r_width * (0.016f + t * 0.045f));
-            if (t > 0.80f) width = (int)((float)r_width * 0.09f);
-            if (t > 0.85f) width = (int)((float)r_width * 0.015f);
-            for (int x = -width; x <= width; x++) {
-                float nx = (width > 0) ? ((float)abs(x) / (float)width) : 0.0f;
-                int is_handle = (t > 0.85f);
-                int is_edge = (!is_handle && abs(x) > width - 2);
-                float lum = is_handle ? (0.35f + 0.28f * (1.0f - nx))
-                          : is_edge   ? 0.92f
-                                      : (0.40f + 0.50f * (1.0f - nx));
-                char gch = sample_dense_ramp(lum, center + x, y);
-                AsciiColor color = is_handle ? scale_rgb(82.0f, 55.0f, 50.0f, 0.72f + 0.28f * (1.0f - nx))
-                                 : is_edge   ? make_color(225, 232, 245)
-                                             : scale_rgb(125.0f, 138.0f, 160.0f, 0.70f + 0.35f * (1.0f - nx));
-                set_cell(center + x, y, gch, color, make_color(0, 0, 0));
-            }
-        }
         return;
     }
 
@@ -2552,18 +2473,19 @@ void renderer_draw_scene_and_hud(const Player *player, int is_multiplayer,
 
         draw_hud_mugshot(face_x, face_y, face_w, face_h, player);
 
+        PlayerWeaponHudInfo whud;
+        player_get_weapon_hud_info(player, &whud);
         Color ammo_col = (player->ammo > 5) ? (Color){252, 208, 72, 255}
                                             : (Color){245, 72, 72, 255};
-        int melee = player->ability_state.berserk_time > 0;
-        const char *am_val = melee ? "1.5m" : TextFormat("%02d/30", player->ammo);
+        const char *am_val = whud.custom ? whud.value : TextFormat("%02d/30", player->ammo);
         int am_lf = fit_hud_font("MUN", lbl_font, (s4_w - 20) / 2);
-        const char *am_lbl = melee ? "ESPADA" :
+        const char *am_lbl = whud.custom ? whud.label :
             (MeasureText("MUNICAO", am_lf) + MeasureText(am_val, val_font) + 28 <= s4_w) ? "MUNICAO" : "MUN";
         int am_vf = fit_hud_font(am_val, val_font, s4_w - MeasureText(am_lbl, am_lf) - 24);
         DrawText(am_lbl, s4_x + 10, card_y + 8, am_lf, lbl_col);
         DrawText(am_val, s4_x + s4_w - MeasureText(am_val, am_vf) - 10, card_y + 6, am_vf, ammo_col);
         draw_hud_ascii_meter(s4_x + 10, bar_y, s4_w - 20, bar_h,
-                             melee ? 1.0f - fminf(1.0f, player->shoot_timer / 0.60f) : (float)player->ammo / 30.0f, ammo_col);
+                             whud.custom ? whud.bar_ratio : (float)player->ammo / 30.0f, ammo_col);
 
         int row_gap = (card_h - 12) / 3;
         const char *mode_str = is_multiplayer
@@ -2591,51 +2513,6 @@ void renderer_draw_scene_and_hud(const Player *player, int is_multiplayer,
             Color lock_col = mouse_locked ? (Color){130, 165, 145, 255} : (Color){245, 185, 85, 255};
             int f5_2 = fit_hud_font(lock_str, stat_font, s5_w - 18);
             DrawText(lock_str, s5_x + 9, card_y + card_h - f5_2 - 6, f5_2, lock_col);
-        }
-
-        const AbilityState *a = &player->ability_state;
-        const char *status = "SEM HABILIDADE";
-        Color accent = {190, 205, 220, 255};
-        if (player->ability == ABILITY_TETO) {
-            accent = (Color){255, 115, 180, 255};
-            status = player_attack_damage(player, 100) > 100
-                ? TextFormat("DANO +25%% | VEL +35%% | %.1fs", a->zone_time)
-                : (a->zone_time > 0
-                    ? TextFormat("CORACOES %.1fs | RECARGA %.0fs", a->zone_time, ceilf(a->cooldown))
-                    : (a->cooldown > 0
-                        ? TextFormat("CORACOES: RECARGA %.0fs", ceilf(a->cooldown))
-                        : "[E] CORACOES: PRONTO"));
-        } else if (player->ability == ABILITY_SHADOW) {
-            accent = (Color){185, 125, 245, 255};
-            status = a->cooldown > 0
-                ? TextFormat("FOGO NEGRO: %.0fs", ceilf(a->cooldown))
-                : "[E] FOGO NEGRO: PRONTO";
-        } else if (player->ability == ABILITY_GUERRILLA) {
-            accent = (Color){175, 225, 115, 255};
-            status = a->guerrilla_time >= GUERRILLA_CHARGE_TIME
-                ? "GUERRILHEIRO: PROXIMO TIRO x2"
-                : TextFormat("GUERRILHEIRO: %.1fs SEM DANO", GUERRILLA_CHARGE_TIME - a->guerrilla_time);
-        } else if (player->ability == ABILITY_BERSERK) {
-            accent = (Color){255, 95, 80, 255};
-            status = a->berserk_time > 0
-                ? TextFormat("BERSERK %.1fs | ESPADA | DANO RECEBIDO x2", a->berserk_time)
-                : (a->berserk_used
-                    ? "BERSERK: JA UTILIZADO"
-                    : (a->kills >= BERSERK_KILLS
-                        ? "[E] BERSERK: PRONTO"
-                        : TextFormat("BERSERK: %d/5 KILLS", a->kills)));
-        }
-        int f = GetScreenWidth() < 1000 ? 12 : 16;
-        int width = MeasureText(status, f) + 24;
-        DrawRectangle(GetScreenWidth() - width - 12, 12, width, f + 14, (Color){12, 14, 22, 225});
-        DrawText(status, GetScreenWidth() - width, 19, f, accent);
-        const char *kills = TextFormat("KILLS: %d", a->kills);
-        int kw = MeasureText(kills, f) + 20;
-        DrawRectangle(GetScreenWidth() - kw - 12, f + 29, kw, f + 10, (Color){12, 14, 22, 220});
-        DrawText(kills, GetScreenWidth() - kw - 2, f + 34, f, WHITE);
-        if (a->berserk_time > 0) {
-            DrawRectangleLinesEx((Rectangle){2, 2, (float)GetScreenWidth() - 4, (float)GetScreenHeight() - 4},
-                                 4, (Color){190, 20, 30, 220});
         }
     }
 }

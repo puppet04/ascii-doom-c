@@ -10,7 +10,7 @@ A biblioteca é dividida em dois cabeçalhos para manter baixo acoplamento e tes
 
 1. **`include/render_api.h` (Interface Pura em C, Zero Raylib):**
    - Define os tipos leves `AsciiColor`, `AsciiCell`, `RenderSpriteSpec`, os ponteiros de hooks e a vtable `RendererApi`.
-   - Pode ser incluído livremente em `entities.h`, `map.h` e `player.c` sem puxar `<raylib.h>` — garantindo que `bin/test_runner.exe` teste IA, mapas e projéteis sem depender de janela gráfica.
+   - Pode ser incluído livremente em `entities.h`, `map.h` e `player.h` sem puxar `<raylib.h>` — garantindo baixo acoplamento entre os módulos da equipe.
 2. **`include/renderer.h` + `src/renderer.c` (Backend Raylib + GPU Shader `#version 330`):**
    - Implementa o raycasting 3D em 2 passes, o z-buffer, o atlas mipmapped `16×6` de glifos ASCII `64×64` (renderizado em `50px` inteiros), os presets de qualidade (`F2`) e estilo (`F4`), o suporte a skins remotas em `SpriteEntity` (`visual_id`, `appearance`, `team_accent`), o HUD e a `RendererApi`.
    - Expõe `renderer_get_api()` e os registradores de hooks usados em `src/main.c`.
@@ -42,13 +42,16 @@ renderer_draw_walls(&map, &player);
 entities_render(&enemies, &player, r_api);      /* Modulo 5 (Guilherme) */
 renderer_draw_sprites(&player, mp_sprites, mp_count);
 map_render_hazards(&map, &player, r_api);       /* Modulo 1 (Lucas) */
-renderer_draw_ability_effects(&player);
+player_render_abilities(&player, r_api);        /* Modulo 2 (Strazzer) */
 draw_sliding_minimap(&map, &player, mm_markers, mm_count);
-renderer_draw_weapon(&player);
+if (third_person || !player_render_weapon(&player, r_api)) {
+    renderer_draw_weapon(&player);
+}
 renderer_draw_hud(&player);
 
-renderer_present_window(&player, is_multiplayer, net.connected, mouse_locked,
-                        cfg->show_fps ? cfg->fps_cap : -1);
+renderer_draw_scene_and_hud(&player, is_multiplayer, net.connected, mouse_locked,
+                            cfg->show_fps ? cfg->fps_cap : -1);
+player_draw_ability_hud(&player, sw, sh);
 ```
 
 ---
@@ -72,6 +75,7 @@ renderer_present_window(&player, is_multiplayer, net.connected, mouse_locked,
 | :--- | :--- |
 | `r->draw_world_sprite(player, &spec, sampler, ctx)` | Projeta um billboard 3D, calcula fog + z-buffer e chama `sampler(...)` apenas nos pixels visíveis. |
 | `r->draw_world_orb(player, x, y, h, rad_scale, min_r, max_r, core_ch, core_col, edge_ch, edge_col, thresh)` | Desenha um projétil esférico 3D (bola de fogo, orbe de energia) com oclusão por paredes. |
+| `r->draw_world_floor_ring(cx, cy, radius, inner_ch, inner_col, outer_ch, outer_col)` | Desenha um anel circular no chão 3D (ex.: área de habilidade) com oclusão por paredes e sprites. |
 | `r->project_point(player, x, y, h, &sx, &sy, &depth)` | Converte `(x, y, altura)` do mundo para célula `(sx, sy)` e retorna `1` se estiver à frente de `z_buffer[sx]`. |
 | `r->set_cell(x, y, ch, fg, bg)` | Escreve uma célula diretamente na grade ASCII do frame. |
 | `r->set_cell_if_closer(x, y, depth, ch, fg, bg)` | Escreve apenas se `depth < z_buffer[x]` e `depth < cell_depth[y][x]`. |
@@ -168,7 +172,7 @@ renderer_draw_ascii_buffer(painel, 80, 40, 80, pos_x, pos_y, largura_px, altura_
 
 ## 6. Boas Práticas para a Equipe
 
-1. **Nunca edite `src/renderer.c` para adicionar inimigos, armas no mundo ou itens de mapa:** crie tudo no seu próprio arquivo (`entities.c` ou `map.c`) via `RendererApi` e hooks.
+1. **Nunca edite `src/renderer.c` para adicionar inimigos, armas/habilidades ou itens de mapa:** crie tudo no seu próprio arquivo (`entities.c`, `player.c` ou `map.c`) via `RendererApi` e hooks.
 2. **Não inclua `"raylib.h"` em módulos de lógica:** inclua apenas `"render_api.h"`, preservando a compilação limpa da suíte `tests/test_main.c`.
 3. **Respeite a qualidade dinâmica (`F2`):** em vez de travar o corpo do sprite em um único caractere fixo (`#`), use `r->sample_ramp(lum, sx, sy)` nas superfícies principais e reserve símbolos fixos apenas para detalhes finos (olhos, chifres, mira, contornos).
 4. **Zero quadrados de fundo em UI:** sempre preencha `.bg = {0, 0, 0}` e use `' '` para espaços vazios ao chamar `renderer_draw_ascii_buffer()`.
