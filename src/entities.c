@@ -56,12 +56,12 @@ void enemies_init_defaults(EnemyManager *mgr) {
     memset(mgr, 0, sizeof(*mgr));
 
     /* Inimigos base prontos para serem expandidos no modulo */
-    mgr->enemies[0] = (Enemy){1, 7.5f,  4.5f, 60,  60,  10, 1.4f, 'Z', 0.0f};
-    mgr->enemies[1] = (Enemy){1, 11.5f, 7.5f, 100, 100, 15, 1.8f, 'D', 0.0f};
-    mgr->enemies[2] = (Enemy){1, 8.5f, 12.5f, 80,  80,  12, 1.6f, 'I', 0.0f};
-    mgr->enemies[3] = (Enemy){1, 4.5f, 7.5f, 60, 60, 10, 1.2f, 'Z', 0};
-    mgr->enemies[4] = (Enemy){1, 12.5f, 12.5f, 80, 80, 12, 1.3f, 'I', 0};
-    mgr->enemies[5] = (Enemy){1, 10.5f, 4.5f, 60, 60, 10, 1.4f, 'Z', 0};
+    mgr->enemies[0] = (Enemy){1, 7.5f,  4.5f, 60,  60,  10, 1.4f, 'Z', 0.0f, 0, 0};
+    mgr->enemies[1] = (Enemy){1, 11.5f, 7.5f, 100, 100, 15, 1.8f, 'D', 0.0f, 0, 0};
+    mgr->enemies[2] = (Enemy){1, 8.5f, 12.5f, 80,  80,  12, 1.6f, 'I', 0.0f, 0, 0};
+    mgr->enemies[3] = (Enemy){1, 4.5f, 7.5f, 60, 60, 10, 1.2f, 'Z', 0, 0, 0};
+    mgr->enemies[4] = (Enemy){1, 12.5f, 12.5f, 80, 80, 12, 1.3f, 'I', 0, 0, 0};
+    mgr->enemies[5] = (Enemy){1, 10.5f, 4.5f, 60, 60, 10, 1.4f, 'Z', 0, 0, 0};
     mgr->count = 6;
 }
 
@@ -98,6 +98,7 @@ static void damage_enemy(Enemy *e, Player *p, int damage) {
         e->health = 0;
         e->active = 0;
         player_register_kill(p, e->x, e->y);
+        e->burn_time = e->burn_tick = 0;
     }
 }
 
@@ -120,6 +121,10 @@ void enemies_update_fireball(EnemyManager *mgr, const GameMap *map, Player *p, f
             float dx=e->x-s->fireball_x, dy=e->y-s->fireball_y;
             if (e->active && dx*dx+dy*dy < 0.28f*0.28f) {
                 damage_enemy(e, p, 5);
+                if (e->active) {
+                    e->burn_time = SHADOW_BURN_DURATION;
+                    e->burn_tick = 0;
+                }
                 s->fireball_active = 0;
                 break;
             }
@@ -138,6 +143,17 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
         Enemy *e = &mgr->enemies[i];
         if (!e->active) {
             continue;
+        }
+
+        if (e->burn_time > 0) {
+            e->burn_tick += fminf(dt, e->burn_time);
+            e->burn_time = fmaxf(0, e->burn_time - dt);
+            while (e->active && e->burn_tick >= 0.9999f) {
+                e->burn_tick = fmaxf(0, e->burn_tick - 1.0f);
+                damage_enemy(e, player, SHADOW_BURN_DAMAGE);
+            }
+            if (e->burn_time == 0) e->burn_tick = 0;
+            if (!e->active) continue;
         }
 
         if (e->attack_timer > 0.0f) {

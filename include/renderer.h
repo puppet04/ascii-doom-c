@@ -4,6 +4,7 @@
 #include "config.h"
 #include "map.h"
 #include "player.h"
+#include "entities.h"
 
 /*
  * MODULO 3: MOTOR GRAFICO RAYCASTING ASCII COLORIDO (RAYLIB) + HUD
@@ -66,6 +67,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
 void renderer_draw_weapon(const Player *player);
 /* Particulas da area da Teto e projetil do Arauto, com oclusao por paredes. */
 void renderer_draw_ability_effects(const Player *player);
+void renderer_draw_burning_enemies(const Player *player, const EnemyManager *enemies);
 
 /* Desenha o minimapa 2D colorido no canto superior esquerdo da tela. */
 void renderer_draw_minimap(const GameMap *map, const Player *player,

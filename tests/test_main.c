@@ -146,7 +146,7 @@ static void test_teto_selection(void) {
     ASSERT_TRUE(strcmp(p.class_name, "Kasane Teto") == 0, "Selecao aplica Kasane Teto");
     ASSERT_TRUE(p.health == 100 && p.max_health == 100 && p.ammo == 30,
                 "Teto inicia com vida e municao corretas");
-    ASSERT_TRUE(fabsf(p.move_speed - 4.8f) < 0.001f && p.active_weapon == 0,
+    ASSERT_TRUE(fabsf(p.move_speed - 4.2f) < 0.001f && p.active_weapon == 0,
                 "Teto recebe velocidade e arma inicial");
     ASSERT_TRUE(p.id == 2 && p.x == 2.5f && p.y == 4.5f,
                 "Selecao preserva ID multiplayer e ponto de spawn");
@@ -163,8 +163,8 @@ static void test_shadow_selection(void) {
     player_apply_class(&p, &cls);
     ASSERT_TRUE(strcmp(p.class_name, "Arauto das Sombras") == 0,
                 "Arauto das Sombras disponivel na selecao");
-    ASSERT_TRUE(p.health == 120 && p.max_health == 120 && p.ammo == 30 &&
-                fabsf(p.move_speed - 4.0f) < 0.001f, "Atributos do Arauto aplicados");
+    ASSERT_TRUE(p.health == 100 && p.max_health == 100 && p.ammo == 30 &&
+                fabsf(p.move_speed - 4.2f) < 0.001f, "Atributos do Arauto aplicados");
     ASSERT_TRUE(player_character_material(PRESET_SHADOW_HERALD, 0.06f, 0.17f, 0) == 17 &&
                 player_character_material(PRESET_SHADOW_HERALD, 0.06f, 0.17f, 1) != 17,
                 "Olhos vermelhos aparecem apenas na vista frontal");
@@ -179,9 +179,9 @@ static void test_guts_selection(void) {
     player_init(&p, 2.5f, 4.5f, 0.0f);
     CharacterClass cls = player_get_preset_class(PRESET_GUTS);
     player_apply_class(&p, &cls);
-    ASSERT_TRUE(strcmp(p.class_name, "Guts") == 0 && p.health == 150 && p.max_health == 150,
-                "Guts selecionavel com 150 de vida");
-    ASSERT_TRUE(p.ammo == 30 && fabsf(p.move_speed - 3.8f) < 0.001f,
+    ASSERT_TRUE(strcmp(p.class_name, "Guts") == 0 && p.health == 100 && p.max_health == 100,
+                "Guts selecionavel com 100 de vida");
+    ASSERT_TRUE(p.ammo == 30 && fabsf(p.move_speed - 4.2f) < 0.001f,
                 "Guts recebe municao e velocidade corretas");
     ASSERT_TRUE(player_character_material(PRESET_GUTS, -0.60f, 0.10f, 0) != 0 &&
                 player_character_material(PRESET_GUTS, -0.60f, 0.10f, 1) != 0,
@@ -326,7 +326,41 @@ static void prepare_combat(Player *p, EnemyManager *mgr, GameMap *map, int prese
     player_apply_class(p,&cls);
     memset(mgr,0,sizeof(*mgr));
     mgr->count=1;
-    mgr->enemies[0]=(Enemy){1,3.5f,4.5f,60,60,10,0,'Z',0};
+    mgr->enemies[0]=(Enemy){1,3.5f,4.5f,60,60,10,0,'Z',0, 0, 0};
+}
+
+static void test_shadow_burn(void) {
+    Player p; EnemyManager mgr; GameMap map;
+    prepare_combat(&p, &mgr, &map, PRESET_SHADOW_HERALD);
+    player_activate_ability(&p);
+    enemies_update_fireball(&mgr, &map, &p, 0.5f);
+    ASSERT_TRUE(mgr.enemies[0].burn_time == 5 && mgr.enemies[0].health == 55,
+                "Impacto aplica cinco segundos de fogo");
+    enemies_update(&mgr, &map, &p, 0.5f);
+    ASSERT_TRUE(mgr.enemies[0].health == 55, "Fogo acumula tempo antes do primeiro dano");
+    enemies_update(&mgr, &map, &p, 0.5f);
+    ASSERT_TRUE(mgr.enemies[0].health == 53, "Fogo causa dois de dano por segundo");
+    for (int i=0; i<240; i++) enemies_update(&mgr, &map, &p, 1.0f/60.0f);
+    enemies_update(&mgr, &map, &p, 0.01f);
+    ASSERT_TRUE(mgr.enemies[0].health == 45 && mgr.enemies[0].burn_time == 0,
+                "Fogo expira com dez de dano total em passos pequenos");
+    enemies_update(&mgr, &map, &p, 3);
+    ASSERT_TRUE(mgr.enemies[0].health == 45, "Fogo expirado nao causa dano");
+    player_tick_ability(&p, 30); player_activate_ability(&p);
+    enemies_update_fireball(&mgr, &map, &p, 0.5f);
+    enemies_update(&mgr, &map, &p, 8);
+    ASSERT_TRUE(mgr.enemies[0].health == 30 && mgr.enemies[0].burn_time == 0,
+                "Passo longo limita dano a cinco segundos");
+    player_tick_ability(&p, 30); player_activate_ability(&p);
+    enemies_update_fireball(&mgr, &map, &p, 0.5f);
+    mgr.enemies[0].health = 2;
+    enemies_update(&mgr, &map, &p, 1);
+    enemies_update(&mgr, &map, &p, 5);
+    ASSERT_TRUE(!mgr.enemies[0].active && p.ability_state.kills == 1 &&
+                mgr.enemies[0].burn_time == 0, "Morte pelo fogo conta uma unica kill e apaga chamas");
+    enemies_init_defaults(&mgr);
+    ASSERT_TRUE(mgr.enemies[0].burn_time == 0 && mgr.enemies[0].burn_tick == 0,
+                "Nova onda inicia sem fogo residual");
 }
 
 static void test_character_abilities(void) {
@@ -423,7 +457,7 @@ static void test_character_abilities(void) {
         if(map_is_wall(&map,(int)mgr.enemies[i].x,(int)mgr.enemies[i].y)||dx*dx+dy*dy<12.25f) valid=0;
     }
     ASSERT_TRUE(valid,"Onda tem inimigos suficientes para cinco kills e spawn seguro");
-    mgr.count=1; mgr.enemies[0]=(Enemy){1,3.1f,4.5f,60,60,10,0,'Z',0};
+    mgr.count=1; mgr.enemies[0]=(Enemy){1,3.1f,4.5f,60,60,10,0,'Z',0, 0, 0};
     p.ability_state.berserk_time=1; hp=p.health;
     enemies_update(&mgr,&map,&p,0.1f);
     ASSERT_TRUE(p.health==hp-20, "Ataque real da IA respeita vulnerabilidade do Berserk");
@@ -502,6 +536,7 @@ int main(void) {
     test_character_creator();
     test_modular_appearance();
     test_character_abilities();
+    test_shadow_burn();
     test_guerrilla();
     test_teto_damage_bonus();
     test_network_udp_loopback();

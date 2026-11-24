@@ -499,11 +499,11 @@ static int is_position_blocked(const GameMap *map, float x, float y) {
 
 CharacterClass player_get_preset_class(int index) {
     static const CharacterClass PRESETS[PRESET_CLASS_COUNT] = {
-        {"Fuzileiro", 100, 30, 4.2f, 0, PRESET_FUZILEIRO, {0}, ABILITY_NONE},
-        {"Kasane Teto", 100, 30, 4.8f, 0, PRESET_KASANE_TETO, {0}, ABILITY_TETO},
-        {"Arauto das Sombras", 120, 30, 4.0f, 0, PRESET_SHADOW_HERALD, {0}, ABILITY_SHADOW},
-        {"Guts", 150, 30, 3.8f, 0, PRESET_GUTS, {0}, ABILITY_BERSERK},
-        {"Rambo", 100, 30, 4.2f, 0, PRESET_RAMBO, {0}, ABILITY_GUERRILLA}
+        {"Fuzileiro", PLAYER_MAX_HEALTH, 30, MOVE_SPEED, 0, PRESET_FUZILEIRO, {0}, ABILITY_NONE},
+        {"Kasane Teto", PLAYER_MAX_HEALTH, 30, MOVE_SPEED, 0, PRESET_KASANE_TETO, {0}, ABILITY_TETO},
+        {"Arauto das Sombras", PLAYER_MAX_HEALTH, 30, MOVE_SPEED, 0, PRESET_SHADOW_HERALD, {0}, ABILITY_SHADOW},
+        {"Guts", PLAYER_MAX_HEALTH, 30, MOVE_SPEED, 0, PRESET_GUTS, {0}, ABILITY_BERSERK},
+        {"Rambo", PLAYER_MAX_HEALTH, 30, MOVE_SPEED, 0, PRESET_RAMBO, {0}, ABILITY_GUERRILLA}
     };
 
     if (index < 0 || index >= PRESET_CLASS_COUNT) {
@@ -529,20 +529,23 @@ void player_tick_ability(Player *p, float dt) {
 }
 
 void player_register_kill(Player *p, float x, float y) {
+    (void)x;
+    (void)y;
     if (!p || p->health <= 0) return;
     AbilityState *s = &p->ability_state;
     s->kills++;
     p->score += 10;
-    if (p->ability == ABILITY_TETO && s->cooldown <= 0) {
-        s->zone_x = x; s->zone_y = y;
-        s->zone_time = TETO_ZONE_DURATION;
-        s->cooldown = ABILITY_COOLDOWN;
-    }
 }
 
 int player_activate_ability(Player *p) {
     if (!p || p->health <= 0) return 0;
     AbilityState *s = &p->ability_state;
+    if (p->ability == ABILITY_TETO && s->cooldown <= 0) {
+        s->zone_x = p->x; s->zone_y = p->y;
+        s->zone_time = TETO_ZONE_DURATION;
+        s->cooldown = ABILITY_COOLDOWN;
+        return 1;
+    }
     if (p->ability == ABILITY_SHADOW && s->cooldown <= 0 && !s->fireball_active) {
         s->fireball_active = 1;
         s->fireball_x = p->x; s->fireball_y = p->y;
@@ -666,7 +669,7 @@ void player_apply_class(Player *p, const CharacterClass *cls) {
     p->appearance = player_appearance_valid(&cls->appearance) ? cls->appearance : (CharacterAppearance){0};
     p->visual_id = (cls->visual_id >= 0 && cls->visual_id < PRESET_CLASS_COUNT)
         ? cls->visual_id : PRESET_FUZILEIRO;
-    p->max_health = (cls->max_health > 0) ? cls->max_health : 100;
+    p->max_health = (cls->max_health > 0) ? cls->max_health : PLAYER_MAX_HEALTH;
     p->health = p->max_health;
     p->ammo = (cls->start_ammo > 0) ? cls->start_ammo : 30;
     p->move_speed = (cls->move_speed > 0.5f) ? cls->move_speed : MOVE_SPEED;

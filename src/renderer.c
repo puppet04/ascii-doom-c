@@ -792,6 +792,60 @@ static int project_effect(const Player *p, float x, float y, float height,
     return *sx>=0 && *sx<r_width && dist<z_buffer[*sx];
 }
 
+/* Chamas afiladas: o movimento sobe pelo corpo em vez de piscar aleatoriamente. */
+static void draw_shadow_flame(const Player *p, float wx, float wy, float height,
+                              float size, float phase, int dark_core) {
+    int sx, sy; float depth;
+    if (!project_effect(p, wx, wy, height, &sx, &sy, &depth)) return;
+    int radius = (int)(r_height * size / depth);
+    if (radius < 2) radius = 2;
+    if (radius > 32) radius = 32;
+    AsciiColor black = make_color(0, 0, 0);
+    for (int y = -radius * 2; y <= radius; y++) {
+        float v = (float)y / radius;
+        float width = v < 0 ? 1.0f + v * 0.46f : sqrtf(fmaxf(0, 1-v*v));
+        float sway = sinf(phase * 7 + v * 5) * 0.16f * (1-v);
+        for (int x = -radius * 2; x <= radius * 2; x++) {
+            int px = sx+x, py = sy+y;
+            if (px < 0 || px >= r_width || py < 0 || py >= r_height || depth >= z_buffer[px]) continue;
+            float u = (float)x/radius - sway;
+            float edge = fabsf(u) / fmaxf(width, 0.01f);
+            float ripple = 0.09f*sinf(v*13 + phase*11 + u*4);
+            if (edge > 1+ripple) continue;
+            float vein = sinf(u*9 + v*8 - phase*12);
+            AsciiColor color;
+            char ch;
+            if (dark_core && u*u + v*v < 0.30f) {
+                color = make_color(65, 28, 95); ch = ':';
+            } else if (edge < 0.48f && v > -0.6f) {
+                color = make_color(250, 205, 255); ch = '@';
+            } else if (edge < 0.78f) {
+                color = make_color(195, 95, 255); ch = vein > 0 ? '#' : '*';
+            } else {
+                color = make_color(110, 48, 185); ch = v < -0.6f ? '^' : '+';
+            }
+            set_cell(px, py, ch, color, black);
+        }
+    }
+}
+
+void renderer_draw_burning_enemies(const Player *p, const EnemyManager *enemies) {
+    float time = IsWindowReady() ? (float)GetTime() : 0;
+    for (int i = 0; i < enemies->count; i++) {
+        const Enemy *e = &enemies->enemies[i];
+        if (!e->active || e->burn_time <= 0) continue;
+        float fade = fminf(1, e->burn_time * 2);
+        for (int j = 0; j < 7; j++) {
+            float phase = time + i * 1.7f + j * 0.73f;
+            float angle = j * 2.4f + time * 0.7f;
+            float height = 0.12f + fmodf(time * 0.65f + j * 0.137f, 0.85f);
+            draw_shadow_flame(p, e->x + cosf(angle)*0.22f,
+                              e->y + sinf(angle)*0.22f, height,
+                              (0.045f + 0.025f*(1-height))*fade, phase, 0);
+        }
+    }
+}
+
 void renderer_draw_ability_effects(const Player *p) {
     const AbilityState *s=&p->ability_state;
     AsciiColor black=make_color(0,0,0);
@@ -812,18 +866,17 @@ void renderer_draw_ability_effects(const Player *p) {
         }
     }
     if (s->fireball_active) {
-        int sx,sy; float depth;
-        if (project_effect(p,s->fireball_x,s->fireball_y,0.48f,&sx,&sy,&depth)) {
-            int radius=(int)(r_height*0.11f/depth);
-            if (radius<2) radius=2;
-            if (radius>30) radius=30;
-            for (int y=-radius;y<=radius;y++) for (int x=-radius;x<=radius;x++) {
-                float d=(float)(x*x+y*y)/(radius*radius);
-                int px=sx+x;
-                if (d>1 || px<0 || px>=r_width || depth>=z_buffer[px]) continue;
-                set_cell(px,sy+y,d>0.65f?'*':'@',d>0.65f ? make_color(155,65,215) : make_color(30,15,44),black);
-            }
+        float age = fmaxf(0, 3.0f-s->fireball_time);
+        for (int i=7; i>=1; i--) {
+            float lag = i*0.075f;
+            if (lag > age*7) continue;
+            float flutter = sinf(time*14-i*1.8f)*0.035f;
+            draw_shadow_flame(p, s->fireball_x-s->fireball_dx*lag-s->fireball_dy*flutter,
+                              s->fireball_y-s->fireball_dy*lag+s->fireball_dx*flutter,
+                              0.48f+i*0.012f, 0.075f-i*0.008f, time+i*0.4f, 0);
         }
+        draw_shadow_flame(p, s->fireball_x, s->fireball_y, 0.48f,
+                          0.115f+0.009f*sinf(time*17), time, 1);
     }
 }
 void renderer_draw_weapon(const Player *player) {
@@ -1504,7 +1557,7 @@ void renderer_draw_scene_and_hud(const Player *player, int is_multiplayer,
             accent=(Color){255,115,180,255};
             status=player_attack_damage(player,100)>100 ? TextFormat("DANO +25%% | VEL +35%% | %.1fs",a->zone_time) :
                    a->zone_time>0 ? TextFormat("CORACOES %.1fs | RECARGA %.0fs",a->zone_time,ceilf(a->cooldown)) :
-                   a->cooldown>0 ? TextFormat("CORACOES: RECARGA %.0fs",ceilf(a->cooldown)) : "CORACOES: PRONTO (AO ELIMINAR)";
+                   a->cooldown>0 ? TextFormat("CORACOES: RECARGA %.0fs",ceilf(a->cooldown)) : "[E] CORACOES: PRONTO";
         } else if (player->ability == ABILITY_SHADOW) {
             accent=(Color){185,125,245,255};
             status=a->cooldown>0 ? TextFormat("FOGO NEGRO: %.0fs",ceilf(a->cooldown)) : "[E] FOGO NEGRO: PRONTO";

@@ -2736,6 +2736,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         renderer_draw_walls(&map, &player);
         renderer_draw_sprites(&player, sprites, sprite_count);
         renderer_draw_ability_effects(&player);
+        renderer_draw_burning_enemies(&player, &enemies);
         renderer_draw_minimap(&map, &player, sprites, sprite_count);
         renderer_draw_weapon(&player);
         renderer_draw_hud(&player);
