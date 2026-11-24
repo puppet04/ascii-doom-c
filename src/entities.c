@@ -10,6 +10,43 @@ static float wrap_angle(float a) {
     return a;
 }
 
+#define ENEMY_WALL_RADIUS      0.22f
+#define ENEMY_SEPARATION_DIST  0.80f
+
+static int enemy_can_occupy(const GameMap *map, float x, float y) {
+    const float r = ENEMY_WALL_RADIUS;
+    return !map_is_wall(map, (int)floorf(x - r), (int)floorf(y - r)) &&
+           !map_is_wall(map, (int)floorf(x + r), (int)floorf(y - r)) &&
+           !map_is_wall(map, (int)floorf(x - r), (int)floorf(y + r)) &&
+           !map_is_wall(map, (int)floorf(x + r), (int)floorf(y + r));
+}
+
+static int projectile_hits_wall(const GameMap *map, float x, float y, float dir_x, float dir_y) {
+    int mx = (int)floorf(x);
+    int my = (int)floorf(y);
+    if (!map_is_wall(map, mx, my)) {
+        return 0;
+    }
+    /* Margem apenas nas bordas paralelas ao trajeto: quem bate de frente colide imediatamente,
+     * quem passa rente a uma parede/quina nao some no ar. */
+    float len = sqrtf(dir_x * dir_x + dir_y * dir_y);
+    float ndx = (len > 0.0001f) ? fabsf(dir_x / len) : 1.0f;
+    float ndy = (len > 0.0001f) ? fabsf(dir_y / len) : 1.0f;
+    float fx = x - (float)mx;
+    float fy = y - (float)my;
+    const float inset = 0.09f;
+    int graze_x = (ndx < 0.35f) &&
+                  (((fx < inset) && !map_is_wall(map, mx - 1, my)) ||
+                   ((fx > 1.0f - inset) && !map_is_wall(map, mx + 1, my)));
+    int graze_y = (ndy < 0.35f) &&
+                  (((fy < inset) && !map_is_wall(map, mx, my - 1)) ||
+                   ((fy > 1.0f - inset) && !map_is_wall(map, mx, my + 1)));
+    if (graze_x || graze_y) {
+        return 0;
+    }
+    return 1;
+}
+
 static int has_line_of_sight(const GameMap *map, float x0, float y0, float x1, float y1) {
     float dx = x1 - x0;
     float dy = y1 - y0;
@@ -23,9 +60,7 @@ static int has_line_of_sight(const GameMap *map, float x0, float y0, float x1, f
 
     for (int i = 1; i < steps; i++) {
         float t = (float)i / (float)steps;
-        int mx = (int)floorf(x0 + dx * t);
-        int my = (int)floorf(y0 + dy * t);
-        if (map_is_wall(map, mx, my)) {
+        if (projectile_hits_wall(map, x0 + dx * t, y0 + dy * t, dx, dy)) {
             return 0;
         }
     }
@@ -99,6 +134,10 @@ const EnemyProjectile *enemies_projectile_pool(void) {
     return enemy_projectiles;
 }
 
+int enemies_player_is_burning(void) {
+    return g_fire_burn_timer > 0.0f ? 1 : 0;
+}
+
 static const EnemyStats *enemy_stats_for_type(EnemyType type) {
     if ((int)type < 0 || type >= ENEMY_TYPE_COUNT) {
         return &ENEMY_STATS[ENEMY_LEGACY_Z];
@@ -136,7 +175,17 @@ void enemies_init_defaults(EnemyManager *mgr) {
     g_fire_burn_timer = 0.0f;
 }
 
+static int is_optional_enemy_symbol(char symbol) {
+    return (symbol == 'U' || symbol == 'V' || symbol == 'W' || symbol == 'X');
+}
+
 static int enemy_type_from_symbol(char symbol, EnemyType *out_type) {
+    if (is_optional_enemy_symbol(symbol)) {
+        if (out_type) {
+            *out_type = ENEMY_BERSERK_ZODD;
+        }
+        return 1;
+    }
     for (int i = 0; i < ENEMY_TYPE_COUNT; i++) {
         if (ENEMY_STATS[i].symbol == symbol) {
             if (out_type) {
@@ -151,6 +200,16 @@ static int enemy_type_from_symbol(char symbol, EnemyType *out_type) {
 int enemies_alive(const EnemyManager *mgr) {
     int count = 0;
     for (int i = 0; i < mgr->count; i++) if (mgr->enemies[i].active) count++;
+    return count;
+}
+
+int enemies_required_alive(const EnemyManager *mgr) {
+    int count = 0;
+    for (int i = 0; i < mgr->count; i++) {
+        if (mgr->enemies[i].active && !mgr->enemies[i].optional_for_exit) {
+            count++;
+        }
+    }
     return count;
 }
 
@@ -172,9 +231,27 @@ void enemies_spawn_wave(EnemyManager *mgr, const GameMap *map, const Player *p) 
             if (!enemy_type_from_symbol(tile, &type)) {
                 continue;
             }
-            mgr->enemies[mgr->count++] = enemy_create(type, (float)x + 0.5f, (float)y + 0.5f);
+            float sx = (float)x + 0.5f;
+            float sy = (float)y + 0.5f;
+            if (!enemy_can_occupy(map, sx, sy)) {
+                static const float nudges[8][2] = {
+                    {0.25f, 0.0f}, {-0.25f, 0.0f}, {0.0f, 0.25f}, {0.0f, -0.25f},
+                    {0.25f, 0.25f}, {-0.25f, 0.25f}, {0.25f, -0.25f}, {-0.25f, -0.25f}
+                };
+                for (int n = 0; n < 8; n++) {
+                    if (enemy_can_occupy(map, sx + nudges[n][0], sy + nudges[n][1])) {
+                        sx += nudges[n][0];
+                        sy += nudges[n][1];
+                        break;
+                    }
+                }
+            }
+            Enemy spawned = enemy_create(type, sx, sy);
+            spawned.optional_for_exit = is_optional_enemy_symbol(tile);
+            mgr->enemies[mgr->count++] = spawned;
         }
     }
+    map_set_enemies_alive(enemies_required_alive(mgr));
 }
 
 static void damage_enemy(Enemy *e, Player *p, int damage) {
@@ -251,7 +328,7 @@ static void enemy_projectiles_update(const GameMap *map, Player *player, float d
             projectile->y += projectile->dy * projectile->speed * step_dt;
             projectile->age += step_dt;
 
-            if (map_is_wall(map, (int)floorf(projectile->x), (int)floorf(projectile->y)) ||
+            if (projectile_hits_wall(map, projectile->x, projectile->y, projectile->dx, projectile->dy) ||
                 projectile->age >= 12.0f) {
                 projectile->active = 0;
                 break;
@@ -278,7 +355,7 @@ void enemies_update_fireball(EnemyManager *mgr, const GameMap *map, Player *p, f
     for (int n = 0; n < steps && s->fireball_active; n++) {
         s->fireball_x += s->fireball_dx * step;
         s->fireball_y += s->fireball_dy * step;
-        if (map_is_wall(map, (int)floorf(s->fireball_x), (int)floorf(s->fireball_y))) {
+        if (projectile_hits_wall(map, s->fireball_x, s->fireball_y, s->fireball_dx, s->fireball_dy)) {
             s->fireball_active = 0;
             break;
         }
@@ -325,7 +402,7 @@ static void update_map_fire_hazards(const GameMap *map, Player *player, float dt
     }
 
     if (in_fire) {
-        g_fire_burn_timer = 1.0f;
+        g_fire_burn_timer = 0.5f;
     } else if (g_fire_burn_timer > 0.0f) {
         g_fire_burn_timer -= dt;
         if (g_fire_burn_timer < 0.0f) {
@@ -377,6 +454,31 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
                                     e->attack_kind == ENEMY_ATTACK_PROJECTILE)
             ? attack_range * 0.8f : attack_range;
 
+        float sep_x = 0.0f;
+        float sep_y = 0.0f;
+        for (int j = 0; j < mgr->count; j++) {
+            if (j == i || !mgr->enemies[j].active) {
+                continue;
+            }
+            float odx = e->x - mgr->enemies[j].x;
+            float ody = e->y - mgr->enemies[j].y;
+            float d2 = odx * odx + ody * ody;
+            if (d2 < ENEMY_SEPARATION_DIST * ENEMY_SEPARATION_DIST) {
+                if (d2 < 0.0001f) {
+                    float ang = (float)(i * 2.39996f);
+                    sep_x += cosf(ang) * 0.6f;
+                    sep_y += sinf(ang) * 0.6f;
+                } else {
+                    float d = sqrtf(d2);
+                    float push = (ENEMY_SEPARATION_DIST - d) / ENEMY_SEPARATION_DIST;
+                    sep_x += (odx / d) * push;
+                    sep_y += (ody / d) * push;
+                }
+            }
+        }
+
+        float vx = sep_x * 1.6f * dt;
+        float vy = sep_y * 1.6f * dt;
         if (dist > preferred_distance && dist < aggro_range) {
             float move_speed = e->speed;
             if ((e->type == ENEMY_DOOM_PINKY || e->type == ENEMY_BERSERK_APOSTLE) &&
@@ -384,14 +486,41 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
                 move_speed *= e->type == ENEMY_DOOM_PINKY ? 2.2f : 1.9f;
             }
             float step = fminf(move_speed * dt, dist - preferred_distance);
-            float nx = e->x + (dx / dist) * step;
-            float ny = e->y + (dy / dist) * step;
+            vx += (dx / dist) * step;
+            vy += (dy / dist) * step;
+        }
 
-            if (!map_is_wall(map, (int)floorf(nx), (int)floorf(e->y))) {
+        if (vx != 0.0f || vy != 0.0f) {
+            float nx = e->x + vx;
+            float ny = e->y + vy;
+            int moved_x = 0;
+            int moved_y = 0;
+            if (enemy_can_occupy(map, nx, e->y)) {
                 e->x = nx;
+                moved_x = 1;
             }
-            if (!map_is_wall(map, (int)floorf(e->x), (int)floorf(ny))) {
+            if (enemy_can_occupy(map, e->x, ny)) {
                 e->y = ny;
+                moved_y = 1;
+            }
+            /* Deslizamento em quinas: se travar em um eixo, contorna pela direcao livre. */
+            float mag = sqrtf(vx * vx + vy * vy);
+            if (!moved_x && fabsf(vx) > 0.0001f && fabsf(vy) < mag * 0.45f) {
+                float dir_y = (dy >= 0.0f) ? 1.0f : -1.0f;
+                float slide = mag * 0.85f;
+                if (enemy_can_occupy(map, e->x, e->y + dir_y * slide)) {
+                    e->y += dir_y * slide;
+                } else if (enemy_can_occupy(map, e->x, e->y - dir_y * slide)) {
+                    e->y -= dir_y * slide;
+                }
+            } else if (!moved_y && fabsf(vy) > 0.0001f && fabsf(vx) < mag * 0.45f) {
+                float dir_x = (dx >= 0.0f) ? 1.0f : -1.0f;
+                float slide = mag * 0.85f;
+                if (enemy_can_occupy(map, e->x + dir_x * slide, e->y)) {
+                    e->x += dir_x * slide;
+                } else if (enemy_can_occupy(map, e->x - dir_x * slide, e->y)) {
+                    e->x -= dir_x * slide;
+                }
             }
         }
 
@@ -412,6 +541,7 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
             e->attack_timer = attack_cooldown;
         }
     }
+    map_set_enemies_alive(enemies_required_alive(mgr));
 }
 
 int enemies_check_hit(EnemyManager *mgr, const GameMap *map,

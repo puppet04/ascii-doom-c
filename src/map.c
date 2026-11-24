@@ -254,6 +254,10 @@ int map_is_enemy_spawn_char(char tile) {
         case 'T':
         case 'A':
         case 'Q':
+        case 'U':
+        case 'V':
+        case 'W':
+        case 'X':
             return 1;
         default:
             return 0;

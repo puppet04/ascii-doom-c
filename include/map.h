@@ -143,12 +143,13 @@ static int side __attribute__((unused));
 #ifdef MAX_ENEMIES
 #ifndef MAP_ENTITIES_HOOKED
 #define MAP_ENTITIES_HOOKED
-#define enemies_alive(mgr) map_set_enemies_alive(enemies_alive(mgr))
+#define enemies_alive(mgr) (map_set_enemies_alive(enemies_required_alive(mgr)), enemies_alive(mgr))
 #define enemies_spawn_wave(mgr, map, player) \
-    (map_begin_enemy_spawn(), enemies_spawn_wave((mgr), (map), (player)), map_end_enemy_spawn(), (void)enemies_alive(mgr))
+    (map_begin_enemy_spawn(), enemies_spawn_wave((mgr), (map), (player)), map_end_enemy_spawn(), (void)map_set_enemies_alive(enemies_required_alive(mgr)))
 #define enemies_update(mgr, map_ptr, player_ptr, dt) \
     do { \
         enemies_update((mgr), (map_ptr), (player_ptr), (dt)); \
+        (void)map_set_enemies_alive(enemies_required_alive(mgr)); \
         if (map_has_exit_tile(map_ptr) && !map_are_enemies_alive()) { \
             wave_timer = 3.0f; \
         } \
