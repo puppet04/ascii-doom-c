@@ -33,10 +33,10 @@ if not exist "C:\msys64\ucrt64\include\raylib.h" (
 set "CC=C:\msys64\ucrt64\bin\gcc.exe"
 set "WINDRES=C:\msys64\ucrt64\bin\windres.exe"
 set CFLAGS=-Wall -Wextra -std=c11 -O2 -Iinclude
-set LDFLAGS=-static-libgcc -Wl,-Bstatic -lraylib -lglfw3 -lwinpthread -Wl,-Bdynamic -lopengl32 -lgdi32 -lwinmm -lshell32 -lws2_32 -lm
+set LDFLAGS=-static-libgcc -Wl,-Bstatic -lraylib -lglfw3 -lwinpthread -Wl,-Bdynamic -lopengl32 -lgdi32 -lwinmm -lshell32 -lws2_32 -lwinhttp -lm
 
-set SRCS=src\map.c src\player.c src\entities.c src\renderer.c src\network.c src\main.c src\glfw_static_shim.c
-set TEST_SRCS=src\map.c src\player.c src\entities.c src\network.c src\glfw_static_shim.c tests\test_main.c
+set SRCS=src\map.c src\player.c src\entities.c src\renderer.c src\network.c src\main.c src\embedded_assets.c src\glfw_static_shim.c
+set TEST_SRCS=src\map.c src\player.c src\entities.c src\network.c src\embedded_assets.c src\glfw_static_shim.c tests\test_main.c
 
 set TARGET=bin\sector404.exe
 set TEST_TARGET=bin\test_runner.exe

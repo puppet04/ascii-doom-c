@@ -1,4 +1,5 @@
 #include "map.h"
+#include "embedded_assets.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -93,9 +94,10 @@ int map_load_from_file(GameMap *map, const char *filename) {
         char parent_path[256];
         snprintf(parent_path, sizeof(parent_path), "../%s", filename);
         fp = fopen(parent_path, "r");
-        if (!fp) {
-            return 0;
-        }
+    }
+    const char *emb = (!fp) ? embedded_map_lookup(filename) : NULL;
+    if (!fp && !emb) {
+        return 0;
     }
 
     g_enemies_alive = 0;
@@ -119,7 +121,23 @@ int map_load_from_file(GameMap *map, const char *filename) {
     char line[128];
     int row = 0;
 
-    while (row < MAP_HEIGHT && fgets(line, sizeof(line), fp) != NULL) {
+    while (row < MAP_HEIGHT) {
+        if (fp) {
+            if (fgets(line, sizeof(line), fp) == NULL) {
+                break;
+            }
+        } else {
+            if (!emb || *emb == '\0') {
+                break;
+            }
+            const char *nl = strchr(emb, '\n');
+            size_t seg = nl ? (size_t)(nl - emb) : strlen(emb);
+            size_t copy_n = (seg < sizeof(line) - 1) ? seg : (sizeof(line) - 1);
+            memcpy(line, emb, copy_n);
+            line[copy_n] = '\0';
+            emb = nl ? (nl + 1) : (emb + seg);
+        }
+
         size_t len = strlen(line);
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
             line[len - 1] = '\0';
@@ -149,7 +167,9 @@ int map_load_from_file(GameMap *map, const char *filename) {
         row++;
     }
 
-    fclose(fp);
+    if (fp) {
+        fclose(fp);
+    }
 
     if (row == 0) {
         return 0;

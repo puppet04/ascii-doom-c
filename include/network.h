@@ -14,6 +14,8 @@
  */
 
 #define NET_MAX_PLAYERS 4
+#define DEFAULT_PORT 5000
+#define NET_DEFAULT_RELAY_URL "wss://sector404-relay.onrender.com"
 
 typedef enum {
     NET_MODE_OFFLINE = 0,
@@ -25,6 +27,21 @@ typedef enum {
     NET_GAME_COOP = 0,
     NET_GAME_PVP  = 1
 } NetGameMode;
+
+/* Transporte de rede usado pela sessao (UDP local/LAN ou WebSocket Relay na nuvem). */
+typedef enum {
+    NET_TRANSPORT_UDP = 0,
+    NET_TRANSPORT_RELAY = 1
+} NetTransport;
+
+/* Estado da conexao ao servidor Relay online. */
+typedef enum {
+    NET_RELAY_IDLE = 0,
+    NET_RELAY_CONNECTING = 1,
+    NET_RELAY_READY = 2,
+    NET_RELAY_FAILED = 3,
+    NET_RELAY_CLOSED = 4
+} NetRelayStatus;
 
 typedef struct {
     int player_id;
@@ -252,6 +269,12 @@ typedef struct {
     NetSavedPlayerState restore_state;
     NetSavedPlayerState saved_players[NET_MAX_SAVED_PLAYERS];
     NetLeftPeerGuard left_guards[NET_MAX_SAVED_PLAYERS];
+
+    /* Transporte Online via WebSocket Relay (porta 443) */
+    NetTransport transport;
+    unsigned long long relay_handle;
+    char room_code[16];
+    char relay_url[160];
 } NetContext;
 
 /* Inicializa o subsistema de rede no modo escolhido. Retorna 1 em sucesso, 0 em erro. */
@@ -262,6 +285,9 @@ unsigned int net_get_local_client_id(void);
 
 /* Descobre o IPv4 local ativo da maquina (fallback para "127.0.0.1"). */
 void net_get_local_ipv4(char *out_ip, int out_size);
+
+/* Lista todos os IPs IPv4 ativos da maquina (Wi-Fi/LAN + VPN/Radmin) separados por " | ". */
+void net_get_all_local_ipv4s(char *out_buf, int out_size);
 
 /* Marca a partida como iniciada na sessao de rede e renova timestamps dos peers. */
 void net_begin_match(NetContext *net, int level_idx, const char *map_name);
@@ -304,5 +330,11 @@ int net_receive_match_state(NetContext *net);
 
 /* Fecha o socket e limpa recursos de rede. */
 void net_close(NetContext *net);
+
+/* Utilitarios e inicializacao do modo Online (Relay WebSocket via WinHTTP). */
+void net_generate_room_code(char *out_code, int out_size);
+void net_get_relay_url(char *out_url, int out_size);
+int net_init_relay(NetContext *net, NetMode mode, const char *relay_url, const char *room_code);
+NetRelayStatus net_relay_get_status(const NetContext *net, char *err_out, int err_size);
 
 #endif /* NETWORK_H */
