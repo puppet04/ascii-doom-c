@@ -1,4 +1,5 @@
 #include "renderer.h"
+#include "embedded_assets.h"
 #include "raylib.h"
 #include <math.h>
 #include <stdio.h>
@@ -514,6 +515,16 @@ void renderer_init(void) {
         if (win_icon.data != NULL) {
             SetWindowIcon(win_icon);
             UnloadImage(win_icon);
+        }
+    } else {
+        int icon_len = 0;
+        const unsigned char *icon_data = embedded_icon_png_data(&icon_len);
+        if (icon_data && icon_len > 0) {
+            Image win_icon = LoadImageFromMemory(".png", icon_data, icon_len);
+            if (win_icon.data != NULL) {
+                SetWindowIcon(win_icon);
+                UnloadImage(win_icon);
+            }
         }
     }
     SetWindowMinSize(640, 480);

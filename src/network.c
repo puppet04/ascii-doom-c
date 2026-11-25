@@ -1,5 +1,7 @@
 #include "network.h"
+#include <ctype.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifdef _WIN32
@@ -7,6 +9,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <winhttp.h>
 #endif
 
 /*
@@ -73,6 +76,434 @@ unsigned int net_get_local_client_id(void) {
 static int net_should_continue_recv_err(void) {
     int err = WSAGetLastError();
     return (err == WSAECONNRESET || err == WSAEMSGSIZE);
+}
+
+/* ============================================================================
+ * TRANSPORTE ONLINE VIA WEBSOCKET RELAY (WINHTTP NATIVO DO WINDOWS, ZERO DLL EXTRA)
+ * ============================================================================ */
+
+#define RELAY_QUEUE_CAP  64
+#define RELAY_MAX_FRAME  2048
+
+typedef struct {
+    unsigned int peer_id;
+    int len;
+    unsigned char data[RELAY_MAX_FRAME];
+} RelayQueuedPkt;
+
+typedef struct {
+    NetMode mode;
+    char url[160];
+    char room_code[16];
+    char error_msg[128];
+    volatile LONG status;
+    volatile LONG stop_flag;
+
+    CRITICAL_SECTION cs;
+    HANDLE tx_event;
+    HANDLE worker_thread;
+    HANDLE tx_thread;
+
+    HINTERNET h_session;
+    HINTERNET h_connect;
+    HINTERNET h_ws;
+
+    RelayQueuedPkt rx_q[RELAY_QUEUE_CAP];
+    int rx_head;
+    int rx_tail;
+    int rx_count;
+
+    RelayQueuedPkt tx_q[RELAY_QUEUE_CAP];
+    int tx_head;
+    int tx_tail;
+    int tx_count;
+} NetRelayState;
+
+static unsigned int relay_peer_to_ip(unsigned int peer_id) {
+    return htonl(0x0A000000u | (peer_id & 0x00FFFFFFu));
+}
+
+static unsigned short relay_peer_to_port(unsigned int peer_id) {
+    return htons((u_short)(40400u + (peer_id & 0x0FFFu)));
+}
+
+static unsigned int relay_ip_to_peer(unsigned int ip) {
+    if (ip == 0u) return 0u;
+    return ntohl(ip) & 0x00FFFFFFu;
+}
+
+static int relay_enqueue_rx(NetRelayState *st, unsigned int peer_id, const void *data, int len) {
+    if (!st || !data || len <= 0 || len > RELAY_MAX_FRAME) {
+        return 0;
+    }
+    EnterCriticalSection(&st->cs);
+    if (st->rx_count >= RELAY_QUEUE_CAP) {
+        /* Descarta o pacote mais antigo para priorizar estado mais recente */
+        st->rx_head = (st->rx_head + 1) % RELAY_QUEUE_CAP;
+        st->rx_count--;
+    }
+    RelayQueuedPkt *dst = &st->rx_q[st->rx_tail];
+    dst->peer_id = peer_id;
+    dst->len = len;
+    memcpy(dst->data, data, (size_t)len);
+    st->rx_tail = (st->rx_tail + 1) % RELAY_QUEUE_CAP;
+    st->rx_count++;
+    LeaveCriticalSection(&st->cs);
+    return 1;
+}
+
+static int relay_dequeue_rx(NetRelayState *st, void *buf, int max_len,
+                            unsigned int *out_ip, unsigned short *out_port) {
+    if (!st || !buf || max_len <= 0) {
+        return -1;
+    }
+    int len = -1;
+    EnterCriticalSection(&st->cs);
+    if (st->rx_count > 0) {
+        RelayQueuedPkt *src = &st->rx_q[st->rx_head];
+        len = (src->len <= max_len) ? src->len : max_len;
+        memcpy(buf, src->data, (size_t)len);
+        if (out_ip) *out_ip = relay_peer_to_ip(src->peer_id);
+        if (out_port) *out_port = relay_peer_to_port(src->peer_id);
+        st->rx_head = (st->rx_head + 1) % RELAY_QUEUE_CAP;
+        st->rx_count--;
+    }
+    LeaveCriticalSection(&st->cs);
+    return len;
+}
+
+static int relay_enqueue_tx(NetRelayState *st, unsigned int target_peer, const void *data, int len) {
+    if (!st || !data || len <= 0 || len > RELAY_MAX_FRAME) {
+        return 0;
+    }
+    if (InterlockedCompareExchange(&st->status, 0, 0) != NET_RELAY_READY) {
+        return 0;
+    }
+    EnterCriticalSection(&st->cs);
+    if (st->tx_count >= RELAY_QUEUE_CAP) {
+        st->tx_head = (st->tx_head + 1) % RELAY_QUEUE_CAP;
+        st->tx_count--;
+    }
+    RelayQueuedPkt *dst = &st->tx_q[st->tx_tail];
+    dst->peer_id = target_peer;
+    dst->len = len;
+    memcpy(dst->data, data, (size_t)len);
+    st->tx_tail = (st->tx_tail + 1) % RELAY_QUEUE_CAP;
+    st->tx_count++;
+    LeaveCriticalSection(&st->cs);
+    if (st->tx_event) {
+        SetEvent(st->tx_event);
+    }
+    return len;
+}
+
+static int relay_parse_url(const char *url, char *out_host, int host_sz,
+                           int *out_port, char *out_prefix, int prefix_sz, int *out_tls) {
+    if (!url || !out_host || !out_port || !out_prefix || !out_tls) {
+        return 0;
+    }
+    const char *p = url;
+    *out_tls = 1;
+    if (strncmp(p, "wss://", 6) == 0) {
+        *out_tls = 1;
+        p += 6;
+    } else if (strncmp(p, "https://", 8) == 0) {
+        *out_tls = 1;
+        p += 8;
+    } else if (strncmp(p, "ws://", 5) == 0) {
+        *out_tls = 0;
+        p += 5;
+    } else if (strncmp(p, "http://", 7) == 0) {
+        *out_tls = 0;
+        p += 7;
+    }
+    if (*p == '\0') {
+        return 0;
+    }
+    const char *slash = strchr(p, '/');
+    size_t hostport_len = slash ? (size_t)(slash - p) : strlen(p);
+    if (hostport_len == 0 || hostport_len >= (size_t)host_sz) {
+        return 0;
+    }
+    char hostport[160];
+    memcpy(hostport, p, hostport_len);
+    hostport[hostport_len] = '\0';
+
+    char *colon = strchr(hostport, ':');
+    if (colon) {
+        *colon = '\0';
+        *out_port = atoi(colon + 1);
+    } else {
+        *out_port = *out_tls ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT;
+    }
+    if (hostport[0] == '\0' || *out_port <= 0 || *out_port > 65535) {
+        return 0;
+    }
+    snprintf(out_host, (size_t)host_sz, "%s", hostport);
+
+    if (slash && slash[0] != '\0') {
+        snprintf(out_prefix, (size_t)prefix_sz, "%s", slash);
+        size_t plen = strlen(out_prefix);
+        while (plen > 0 && out_prefix[plen - 1] == '/') {
+            out_prefix[--plen] = '\0';
+        }
+    } else {
+        out_prefix[0] = '\0';
+    }
+    return 1;
+}
+
+static void relay_set_error(NetRelayState *st, NetRelayStatus status, const char *msg) {
+    if (!st) return;
+    EnterCriticalSection(&st->cs);
+    if (msg) {
+        snprintf(st->error_msg, sizeof(st->error_msg), "%s", msg);
+    }
+    LeaveCriticalSection(&st->cs);
+    InterlockedExchange(&st->status, (LONG)status);
+}
+
+static DWORD WINAPI relay_tx_thread_proc(LPVOID param) {
+    NetRelayState *st = (NetRelayState *)param;
+    unsigned char wire_buf[4 + RELAY_MAX_FRAME];
+
+    while (InterlockedCompareExchange(&st->stop_flag, 0, 0) == 0) {
+        WaitForSingleObject(st->tx_event, 200);
+        for (;;) {
+            unsigned int peer_id = 0;
+            int plen = 0;
+            EnterCriticalSection(&st->cs);
+            if (st->tx_count > 0) {
+                RelayQueuedPkt *src = &st->tx_q[st->tx_head];
+                peer_id = src->peer_id;
+                plen = src->len;
+                memcpy(wire_buf + 4, src->data, (size_t)plen);
+                st->tx_head = (st->tx_head + 1) % RELAY_QUEUE_CAP;
+                st->tx_count--;
+            }
+            LeaveCriticalSection(&st->cs);
+
+            if (plen <= 0) {
+                break;
+            }
+            wire_buf[0] = (unsigned char)(peer_id & 0xFFu);
+            wire_buf[1] = (unsigned char)((peer_id >> 8) & 0xFFu);
+            wire_buf[2] = (unsigned char)((peer_id >> 16) & 0xFFu);
+            wire_buf[3] = (unsigned char)((peer_id >> 24) & 0xFFu);
+
+            if (!st->h_ws || InterlockedCompareExchange(&st->stop_flag, 0, 0) != 0) {
+                break;
+            }
+            DWORD err = WinHttpWebSocketSend(st->h_ws,
+                                             WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE,
+                                             wire_buf, (DWORD)(4 + plen));
+            if (err != NO_ERROR) {
+                relay_set_error(st, NET_RELAY_CLOSED, "Conexao online encerrada.");
+                return 0;
+            }
+        }
+    }
+    return 0;
+}
+
+static DWORD WINAPI relay_worker_thread_proc(LPVOID param) {
+    NetRelayState *st = (NetRelayState *)param;
+    char host[160] = "";
+    char prefix[128] = "";
+    int port = 443;
+    int use_tls = 1;
+
+    if (!relay_parse_url(st->url, host, (int)sizeof(host), &port, prefix, (int)sizeof(prefix), &use_tls)) {
+        relay_set_error(st, NET_RELAY_FAILED, "Endereco do servidor online invalido.");
+        return 0;
+    }
+
+    char full_path[256];
+    snprintf(full_path, sizeof(full_path), "%s/ws?room=%s&role=%s",
+             prefix, st->room_code, (st->mode == NET_MODE_HOST) ? "host" : "client");
+
+    WCHAR whost[160];
+    WCHAR wpath[256];
+    if (MultiByteToWideChar(CP_UTF8, 0, host, -1, whost, 160) == 0 ||
+        MultiByteToWideChar(CP_UTF8, 0, full_path, -1, wpath, 256) == 0) {
+        relay_set_error(st, NET_RELAY_FAILED, "Erro ao preparar endereco do servidor.");
+        return 0;
+    }
+
+    HINTERNET hSession = WinHttpOpen(L"SECTOR404/1.0",
+                                     WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                                     WINHTTP_NO_PROXY_NAME,
+                                     WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hSession) {
+        hSession = WinHttpOpen(L"SECTOR404/1.0",
+                               WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                               WINHTTP_NO_PROXY_NAME,
+                               WINHTTP_NO_PROXY_BYPASS, 0);
+    }
+    if (!hSession) {
+        relay_set_error(st, NET_RELAY_FAILED, "Falha ao iniciar WinHTTP do Windows.");
+        return 0;
+    }
+    st->h_session = hSession;
+
+    /* Timeout generoso para suportar eventual cold start (~25s) no Render gratuito */
+    WinHttpSetTimeouts(hSession, 15000, 15000, 15000, 45000);
+
+    HINTERNET hConnect = WinHttpConnect(hSession, whost, (INTERNET_PORT)port, 0);
+    if (!hConnect) {
+        relay_set_error(st, NET_RELAY_FAILED, "Nao foi possivel conectar ao servidor online.");
+        return 0;
+    }
+    st->h_connect = hConnect;
+
+    DWORD req_flags = use_tls ? WINHTTP_FLAG_SECURE : 0;
+    HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"GET", wpath, NULL,
+                                            WINHTTP_NO_REFERER,
+                                            WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                            req_flags);
+    if (!hRequest) {
+        relay_set_error(st, NET_RELAY_FAILED, "Falha ao abrir requisicao WebSocket.");
+        return 0;
+    }
+
+    if (!WinHttpSetOption(hRequest, WINHTTP_OPTION_UPGRADE_TO_WEB_SOCKET, NULL, 0) ||
+        !WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, NULL, 0, 0, 0) ||
+        !WinHttpReceiveResponse(hRequest, NULL)) {
+        WinHttpCloseHandle(hRequest);
+        relay_set_error(st, NET_RELAY_FAILED, "Servidor online inacessivel ou sem internet.");
+        return 0;
+    }
+
+    DWORD status_code = 0;
+    DWORD sc_size = sizeof(status_code);
+    WinHttpQueryHeaders(hRequest,
+                        WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                        WINHTTP_HEADER_NAME_BY_INDEX,
+                        &status_code, &sc_size, WINHTTP_NO_HEADER_INDEX);
+
+    if (status_code != 101) {
+        WinHttpCloseHandle(hRequest);
+        if (status_code == 404) {
+            relay_set_error(st, NET_RELAY_FAILED, "Sala nao encontrada (verifique o codigo).");
+        } else if (status_code == 409) {
+            relay_set_error(st, NET_RELAY_FAILED, "Sala online ja esta lotada (4/4).");
+        } else {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "Servidor respondeu HTTP %lu.", (unsigned long)status_code);
+            relay_set_error(st, NET_RELAY_FAILED, msg);
+        }
+        return 0;
+    }
+
+    HINTERNET hWs = WinHttpWebSocketCompleteUpgrade(hRequest, 0);
+    WinHttpCloseHandle(hRequest);
+    if (!hWs) {
+        relay_set_error(st, NET_RELAY_FAILED, "Falha ao concluir tunel WebSocket.");
+        return 0;
+    }
+    st->h_ws = hWs;
+
+    /* Volta ao timeout de recebimento infinito para idle normal no WebSocket */
+    DWORD inf_timeout = 0xFFFFFFFFu;
+    WinHttpSetOption(hWs, WINHTTP_OPTION_RECEIVE_TIMEOUT, &inf_timeout, sizeof(inf_timeout));
+
+    InterlockedExchange(&st->status, (LONG)NET_RELAY_READY);
+    st->tx_thread = CreateThread(NULL, 0, relay_tx_thread_proc, st, 0, NULL);
+
+    unsigned char msg_buf[4 + RELAY_MAX_FRAME];
+    int msg_len = 0;
+    while (InterlockedCompareExchange(&st->stop_flag, 0, 0) == 0) {
+        DWORD bytes_read = 0;
+        WINHTTP_WEB_SOCKET_BUFFER_TYPE buf_type = WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE;
+        DWORD space = (DWORD)(sizeof(msg_buf) - (size_t)msg_len);
+        if (space == 0) {
+            msg_len = 0;
+            space = (DWORD)sizeof(msg_buf);
+        }
+
+        DWORD err = WinHttpWebSocketReceive(hWs, msg_buf + msg_len, space, &bytes_read, &buf_type);
+        if (err != NO_ERROR || buf_type == WINHTTP_WEB_SOCKET_CLOSE_BUFFER_TYPE) {
+            break;
+        }
+        msg_len += (int)bytes_read;
+
+        if (buf_type == WINHTTP_WEB_SOCKET_BINARY_MESSAGE_BUFFER_TYPE) {
+            if (msg_len >= 5) {
+                unsigned int peer_id = ((unsigned int)msg_buf[0]) |
+                                       ((unsigned int)msg_buf[1] << 8) |
+                                       ((unsigned int)msg_buf[2] << 16) |
+                                       ((unsigned int)msg_buf[3] << 24);
+                relay_enqueue_rx(st, peer_id, msg_buf + 4, msg_len - 4);
+            }
+            msg_len = 0;
+        } else if (buf_type == WINHTTP_WEB_SOCKET_UTF8_MESSAGE_BUFFER_TYPE) {
+            msg_len = 0;
+        }
+    }
+
+    if (InterlockedCompareExchange(&st->stop_flag, 0, 0) == 0) {
+        if (st->mode == NET_MODE_CLIENT) {
+            NetCtrlPacket leave_pkt;
+            memset(&leave_pkt, 0, sizeof(leave_pkt));
+            leave_pkt.magic = NET_CTRL_MAGIC;
+            leave_pkt.msg_type = NET_MSG_LOBBY_LEAVE;
+            relay_enqueue_rx(st, 0u, &leave_pkt, (int)sizeof(leave_pkt));
+        }
+        relay_set_error(st, NET_RELAY_CLOSED, "Anfitriao encerrou a sala online.");
+    }
+    return 0;
+}
+
+static int net_transport_send(NetContext *net, unsigned int ip, unsigned short port,
+                              const void *data, int len) {
+    if (!net || !net->initialized || !data || len <= 0) {
+        return 0;
+    }
+    if (net->transport == NET_TRANSPORT_RELAY) {
+        NetRelayState *st = (NetRelayState *)(uintptr_t)net->relay_handle;
+        if (!st) return 0;
+        unsigned int target_peer = (net->mode == NET_MODE_HOST) ? relay_ip_to_peer(ip) : 0u;
+        return (relay_enqueue_tx(st, target_peer, data, len) == len) ? 1 : 0;
+    }
+
+    SOCKET s = (SOCKET)net->sock_handle;
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = (ULONG)ip;
+    addr.sin_port = (USHORT)port;
+    int sent = sendto(s, (const char *)data, len, 0,
+                      (const struct sockaddr *)&addr, (int)sizeof(addr));
+    return (sent == len) ? 1 : 0;
+}
+
+static int net_transport_recv(NetContext *net, void *buf, int max_len,
+                              unsigned int *out_ip, unsigned short *out_port) {
+    if (!net || !net->initialized || !buf || max_len <= 0) {
+        return -1;
+    }
+    if (net->transport == NET_TRANSPORT_RELAY) {
+        NetRelayState *st = (NetRelayState *)(uintptr_t)net->relay_handle;
+        return relay_dequeue_rx(st, buf, max_len, out_ip, out_port);
+    }
+
+    SOCKET s = (SOCKET)net->sock_handle;
+    for (int tries = 0; tries < 8; tries++) {
+        struct sockaddr_in sender;
+        int sender_len = (int)sizeof(sender);
+        int bytes = recvfrom(s, (char *)buf, max_len, 0,
+                             (struct sockaddr *)&sender, &sender_len);
+        if (bytes < 0) {
+            if (net_should_continue_recv_err()) {
+                continue;
+            }
+            return -1;
+        }
+        if (out_ip) *out_ip = (unsigned int)sender.sin_addr.s_addr;
+        if (out_port) *out_port = (unsigned short)sender.sin_port;
+        return bytes;
+    }
+    return -1;
 }
 #endif
 
@@ -374,15 +805,7 @@ static void host_send_roster_to_slot(NetContext *net, int s, int level_idx,
         pkt.slots[i] = net->slots[i];
     }
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = (ULONG)net->peer_addrs[s].ip;
-    addr.sin_port = (USHORT)net->peer_addrs[s].port;
-
-    SOCKET sock = (SOCKET)net->sock_handle;
-    sendto(sock, (const char *)&pkt, (int)sizeof(pkt), 0,
-           (const struct sockaddr *)&addr, (int)sizeof(addr));
+    net_transport_send(net, net->peer_addrs[s].ip, net->peer_addrs[s].port, &pkt, (int)sizeof(pkt));
 }
 #endif
 
@@ -431,7 +854,6 @@ static int host_broadcast_match_snapshot(NetContext *net) {
     if (!net || net->mode != NET_MODE_HOST || !net->initialized) {
         return 0;
     }
-    SOCKET s = (SOCKET)net->sock_handle;
     host_recompute_pvp_totals(net);
     net_recompute_host_summary(net);
 
@@ -454,14 +876,8 @@ static int host_broadcast_match_snapshot(NetContext *net) {
             continue;
         }
         snap.your_slot = peer;
-        struct sockaddr_in addr;
-        memset(&addr, 0, sizeof(addr));
-        addr.sin_family = AF_INET;
-        addr.sin_addr.s_addr = (ULONG)net->peer_addrs[peer].ip;
-        addr.sin_port = (USHORT)net->peer_addrs[peer].port;
-        int sent = sendto(s, (const char *)&snap, (int)sizeof(snap), 0,
-                          (const struct sockaddr *)&addr, (int)sizeof(addr));
-        if (sent == (int)sizeof(snap)) {
+        if (net_transport_send(net, net->peer_addrs[peer].ip, net->peer_addrs[peer].port,
+                               &snap, (int)sizeof(snap))) {
             sent_count++;
         }
     }
@@ -487,15 +903,9 @@ static void host_send_restore_to_addr(NetContext *net, unsigned int ip, unsigned
         pkt.saved = *saved;
     }
 
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = (ULONG)ip;
-    addr.sin_port = (USHORT)port;
-    SOCKET s = (SOCKET)net->sock_handle;
-    for (int k = 0; k < 3; k++) {
-        sendto(s, (const char *)&pkt, (int)sizeof(pkt), 0,
-               (const struct sockaddr *)&addr, (int)sizeof(addr));
+    int count = (net->transport == NET_TRANSPORT_RELAY) ? 1 : 3;
+    for (int k = 0; k < count; k++) {
+        net_transport_send(net, ip, port, &pkt, (int)sizeof(pkt));
     }
 }
 #endif
@@ -707,8 +1117,6 @@ int net_send_match_state(NetContext *net, const Player *local_player, int shooti
     }
 
 #ifdef _WIN32
-    SOCKET s = (SOCKET)net->sock_handle;
-
     if (net->mode == NET_MODE_HOST) {
         NetPlayerSlot *self = &net->slots[0];
         self->active = 1;
@@ -789,15 +1197,7 @@ int net_send_match_state(NetContext *net, const Player *local_player, int shooti
     pkt.ability_state = local_player->ability_state;
     pkt.applied_pvp_dmg = net->applied_pvp_dmg;
 
-    struct sockaddr_in target_addr;
-    memset(&target_addr, 0, sizeof(target_addr));
-    target_addr.sin_family = AF_INET;
-    target_addr.sin_addr.s_addr = (ULONG)net->peer_ip;
-    target_addr.sin_port = (USHORT)net->peer_port;
-
-    int sent = sendto(s, (const char *)&pkt, (int)sizeof(pkt), 0,
-                      (const struct sockaddr *)&target_addr, (int)sizeof(target_addr));
-    return (sent == (int)sizeof(pkt)) ? 1 : 0;
+    return net_transport_send(net, net->peer_ip, net->peer_port, &pkt, (int)sizeof(pkt));
 #else
     (void)local_player;
     (void)shooting;
@@ -815,7 +1215,6 @@ int net_receive_match_state(NetContext *net) {
 
 #ifdef _WIN32
     int received_any = 0;
-    SOCKET s = (SOCKET)net->sock_handle;
     double now = net_monotonic_sec();
 
     for (int iter = 0; iter < 64; iter++) {
@@ -826,20 +1225,13 @@ int net_receive_match_state(NetContext *net) {
             NetMatchSnapshotPacket snap;
             char raw[2048];
         } rx;
-        struct sockaddr_in sender;
-        int sender_len = (int)sizeof(sender);
+        unsigned int sip = 0;
+        unsigned short sport = 0;
 
-        int bytes = recvfrom(s, rx.raw, (int)sizeof(rx.raw), 0,
-                             (struct sockaddr *)&sender, &sender_len);
+        int bytes = net_transport_recv(net, rx.raw, (int)sizeof(rx.raw), &sip, &sport);
         if (bytes < 0) {
-            if (net_should_continue_recv_err()) {
-                continue;
-            }
             break;
         }
-
-        unsigned int sip = (unsigned int)sender.sin_addr.s_addr;
-        unsigned short sport = (unsigned short)sender.sin_port;
 
         if (bytes == (int)sizeof(NetMatchInputPacket) && rx.input.magic == NET_INPUT_MAGIC) {
             if (net->mode == NET_MODE_HOST) {
@@ -962,8 +1354,7 @@ int net_receive_match_state(NetContext *net) {
                              net->slots[0].name[0] ? net->slots[0].name : "Anfitriao");
                     snprintf(reply.map_name, sizeof(reply.map_name), "%s",
                              net->remote_map_name[0] ? net->remote_map_name : "PARTIDA");
-                    sendto(s, (const char *)&reply, (int)sizeof(reply), 0,
-                           (const struct sockaddr *)&sender, sender_len);
+                    net_transport_send(net, sip, sport, &reply, (int)sizeof(reply));
                 } else if (rx.ctrl.msg_type == NET_MSG_LOBBY_STATE) {
                     int existing = net_find_client_slot_by_addr(net, sip, sport);
                     if (existing >= 1 && net->slots[existing].has_pos) {
@@ -1051,10 +1442,11 @@ int net_receive_match_state(NetContext *net) {
         }
     }
 
+    double match_timeout = (net->transport == NET_TRANSPORT_RELAY) ? 6.0 : 3.0;
     if (net->mode == NET_MODE_HOST) {
         int pruned = 0;
         for (int s = 1; s < NET_MAX_PLAYERS; s++) {
-            if (net->slots[s].active && (now - net->peer_addrs[s].last_seen) > 3.0) {
+            if (net->slots[s].active && (now - net->peer_addrs[s].last_seen) > match_timeout) {
                 net_clear_slot(net, s);
                 pruned = 1;
             }
@@ -1065,7 +1457,7 @@ int net_receive_match_state(NetContext *net) {
             host_broadcast_match_snapshot(net);
         }
     } else if (net->mode == NET_MODE_CLIENT && net->connected) {
-        if ((now - net->last_host_rx) > 3.0) {
+        if ((now - net->last_host_rx) > match_timeout) {
             net->connected = 0;
             net->host_disconnected = 1;
         }
@@ -1136,6 +1528,89 @@ void net_get_local_ipv4(char *out_ip, int out_size) {
         }
     }
 
+    WSACleanup();
+#endif
+}
+
+/* Prioriza rotas de rede ao listar/deduplicar um mesmo Host com multiplas interfaces
+ * (127.0.0.1 > LAN privada 192.168/10/172.16-31 > VPN/Radmin ex.: 26.x.x.x). */
+static int ip_route_priority(const char *ip) {
+    if (!ip) return 0;
+    if (strcmp(ip, "127.0.0.1") == 0) return 3;
+    if (strncmp(ip, "192.168.", 8) == 0 || strncmp(ip, "10.", 3) == 0) return 2;
+    if (strncmp(ip, "172.", 4) == 0) {
+        int second = atoi(ip + 4);
+        if (second >= 16 && second <= 31) return 2;
+    }
+    return 1;
+}
+
+void net_get_all_local_ipv4s(char *out_buf, int out_size) {
+    if (!out_buf || out_size <= 0) {
+        return;
+    }
+    net_get_local_ipv4(out_buf, out_size);
+
+#ifdef _WIN32
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
+        return;
+    }
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s != INVALID_SOCKET) {
+        INTERFACE_INFO ifaces[16];
+        DWORD bytes_ret = 0;
+        if (WSAIoctl(s, SIO_GET_INTERFACE_LIST, NULL, 0,
+                     ifaces, sizeof(ifaces), &bytes_ret, NULL, NULL) == 0) {
+            int count = (int)(bytes_ret / sizeof(INTERFACE_INFO));
+            char ips[16][64];
+            int prios[16];
+            int n = 0;
+            for (int i = 0; i < count && n < 16; i++) {
+                u_long flags = ifaces[i].iiFlags;
+                if (!(flags & IFF_UP) || (flags & IFF_LOOPBACK)) {
+                    continue;
+                }
+                const struct sockaddr_in *sa = &ifaces[i].iiAddress.AddressIn;
+                if (sa->sin_family != AF_INET) {
+                    continue;
+                }
+                char ip_s[64] = "";
+                if (inet_ntop(AF_INET, &sa->sin_addr, ip_s, (socklen_t)sizeof(ip_s)) == NULL) {
+                    continue;
+                }
+                if (strncmp(ip_s, "127.", 4) == 0 || strncmp(ip_s, "169.254.", 8) == 0) {
+                    continue;
+                }
+                int dup = 0;
+                for (int k = 0; k < n; k++) {
+                    if (strcmp(ips[k], ip_s) == 0) {
+                        dup = 1;
+                        break;
+                    }
+                }
+                if (!dup) {
+                    snprintf(ips[n], sizeof(ips[n]), "%s", ip_s);
+                    prios[n] = ip_route_priority(ip_s);
+                    n++;
+                }
+            }
+            if (n > 0) {
+                /* Ordena LAN privada (prio 2) antes de VPN/Radmin (prio 1) */
+                out_buf[0] = '\0';
+                for (int pass = 2; pass >= 1; pass--) {
+                    for (int i = 0; i < n; i++) {
+                        if (prios[i] != pass) continue;
+                        if (out_buf[0] != '\0') {
+                            strncat(out_buf, " | ", (size_t)out_size - strlen(out_buf) - 1);
+                        }
+                        strncat(out_buf, ips[i], (size_t)out_size - strlen(out_buf) - 1);
+                    }
+                }
+            }
+        }
+        closesocket(s);
+    }
     WSACleanup();
 #endif
 }
@@ -1222,16 +1697,7 @@ int net_send_lobby_state(NetContext *net, const NetCtrlPacket *pkt) {
     out.slot_id = net->local_slot;
     out.client_id = net->local_client_id;
 
-    struct sockaddr_in target_addr;
-    memset(&target_addr, 0, sizeof(target_addr));
-    target_addr.sin_family = AF_INET;
-    target_addr.sin_addr.s_addr = (ULONG)net->peer_ip;
-    target_addr.sin_port = (USHORT)net->peer_port;
-
-    SOCKET s = (SOCKET)net->sock_handle;
-    int sent = sendto(s, (const char *)&out, (int)sizeof(out), 0,
-                      (const struct sockaddr *)&target_addr, (int)sizeof(target_addr));
-    return (sent == (int)sizeof(out)) ? 1 : 0;
+    return net_transport_send(net, net->peer_ip, net->peer_port, &out, (int)sizeof(out));
 #else
     return 0;
 #endif
@@ -1251,7 +1717,7 @@ int net_send_lobby_leave(NetContext *net) {
     out.client_id = net->local_client_id;
     out.host_session_id = net->host_session_id;
 
-    SOCKET s = (SOCKET)net->sock_handle;
+    int repeat = (net->transport == NET_TRANSPORT_RELAY) ? 1 : 3;
 
     if (net->mode == NET_MODE_HOST) {
         int sent_any = 0;
@@ -1259,14 +1725,9 @@ int net_send_lobby_leave(NetContext *net) {
             if (!net->slots[p].active || !net->peer_addrs[p].has_addr) {
                 continue;
             }
-            struct sockaddr_in addr;
-            memset(&addr, 0, sizeof(addr));
-            addr.sin_family = AF_INET;
-            addr.sin_addr.s_addr = (ULONG)net->peer_addrs[p].ip;
-            addr.sin_port = (USHORT)net->peer_addrs[p].port;
-            for (int k = 0; k < 3; k++) {
-                if (sendto(s, (const char *)&out, (int)sizeof(out), 0,
-                           (const struct sockaddr *)&addr, (int)sizeof(addr)) == (int)sizeof(out)) {
+            for (int k = 0; k < repeat; k++) {
+                if (net_transport_send(net, net->peer_addrs[p].ip, net->peer_addrs[p].port,
+                                       &out, (int)sizeof(out))) {
                     sent_any = 1;
                 }
             }
@@ -1278,16 +1739,9 @@ int net_send_lobby_leave(NetContext *net) {
         return 0;
     }
 
-    struct sockaddr_in target_addr;
-    memset(&target_addr, 0, sizeof(target_addr));
-    target_addr.sin_family = AF_INET;
-    target_addr.sin_addr.s_addr = (ULONG)net->peer_ip;
-    target_addr.sin_port = (USHORT)net->peer_port;
-
     int sent_ok = 0;
-    for (int k = 0; k < 3; k++) {
-        if (sendto(s, (const char *)&out, (int)sizeof(out), 0,
-                   (const struct sockaddr *)&target_addr, (int)sizeof(target_addr)) == (int)sizeof(out)) {
+    for (int k = 0; k < repeat; k++) {
+        if (net_transport_send(net, net->peer_ip, net->peer_port, &out, (int)sizeof(out))) {
             sent_ok = 1;
         }
     }
@@ -1311,7 +1765,6 @@ int net_poll_lobby(NetContext *net, const NetCtrlPacket *host_offer, int *peer_l
 
 #ifdef _WIN32
     int received_any = 0;
-    SOCKET s = (SOCKET)net->sock_handle;
     double now = net_monotonic_sec();
 
     for (int iter = 0; iter < 64; iter++) {
@@ -1323,20 +1776,13 @@ int net_poll_lobby(NetContext *net, const NetCtrlPacket *host_offer, int *peer_l
             NetRestoreStatePacket restore;
             char raw[2048];
         } rx;
-        struct sockaddr_in sender;
-        int sender_len = (int)sizeof(sender);
+        unsigned int sip = 0;
+        unsigned short sport = 0;
 
-        int bytes = recvfrom(s, rx.raw, (int)sizeof(rx.raw), 0,
-                             (struct sockaddr *)&sender, &sender_len);
+        int bytes = net_transport_recv(net, rx.raw, (int)sizeof(rx.raw), &sip, &sport);
         if (bytes < 0) {
-            if (net_should_continue_recv_err()) {
-                continue;
-            }
             break;
         }
-
-        unsigned int sip = (unsigned int)sender.sin_addr.s_addr;
-        unsigned short sport = (unsigned short)sender.sin_port;
 
         if (bytes == (int)sizeof(NetLobbyRosterPacket) && rx.roster.magic == NET_ROSTER_MAGIC) {
             if (net->mode == NET_MODE_CLIENT) {
@@ -1420,8 +1866,7 @@ int net_poll_lobby(NetContext *net, const NetCtrlPacket *host_offer, int *peer_l
                     reply.player_count = net->active_player_count;
                     reply.host_session_id = net->host_session_id;
                     reply.in_game = net->in_game;
-                    sendto(s, (const char *)&reply, (int)sizeof(reply), 0,
-                           (const struct sockaddr *)&sender, sender_len);
+                    net_transport_send(net, sip, sport, &reply, (int)sizeof(reply));
                 }
             } else if (rx.ctrl.msg_type == NET_MSG_LOBBY_STATE) {
                 if (net->mode == NET_MODE_HOST) {
@@ -1558,7 +2003,8 @@ static void send_probe_to_ip(unsigned long long sock_handle, const char *ip_str,
 }
 
 /* Envia sondas UDP DISCOVER_REQ para loopback (127.0.0.1), broadcast global
- * (255.255.255.255) e broadcast da sub-rede local (ex.: 192.168.X.255). */
+ * (255.255.255.255) e broadcast dirigido com a mascara real de cada interface ativa
+ * (incluindo sub-redes /21 como 255.255.248.0 e Radmin VPN 26.255.255.255). */
 void net_discovery_send_probe(unsigned long long sock_handle, int port) {
     if (sock_handle == 0 || port <= 0) {
         return;
@@ -1567,32 +2013,58 @@ void net_discovery_send_probe(unsigned long long sock_handle, int port) {
     send_probe_to_ip(sock_handle, "127.0.0.1", port);
     send_probe_to_ip(sock_handle, "255.255.255.255", port);
 
-    char local_ip[64] = "";
-    net_get_local_ipv4(local_ip, (int)sizeof(local_ip));
-    if (strncmp(local_ip, "127.", 4) != 0) {
-        char *last_dot = strrchr(local_ip, '.');
-        if (last_dot) {
-            snprintf(last_dot, (size_t)(local_ip + sizeof(local_ip) - last_dot), ".255");
-            send_probe_to_ip(sock_handle, local_ip, port);
+    SOCKET s = (SOCKET)sock_handle;
+    INTERFACE_INFO ifaces[16];
+    DWORD bytes_ret = 0;
+    int probed_via_ioctl = 0;
+    if (WSAIoctl(s, SIO_GET_INTERFACE_LIST, NULL, 0,
+                 ifaces, sizeof(ifaces), &bytes_ret, NULL, NULL) == 0) {
+        int count = (int)(bytes_ret / sizeof(INTERFACE_INFO));
+        for (int i = 0; i < count; i++) {
+            u_long flags = ifaces[i].iiFlags;
+            if (!(flags & IFF_UP) || (flags & IFF_LOOPBACK)) {
+                continue;
+            }
+            const struct sockaddr_in *sa = &ifaces[i].iiAddress.AddressIn;
+            const struct sockaddr_in *nm = &ifaces[i].iiNetmask.AddressIn;
+            if (sa->sin_family != AF_INET) {
+                continue;
+            }
+            ULONG ip_n = sa->sin_addr.s_addr;
+            ULONG mask_n = nm->sin_addr.s_addr;
+            if (ip_n == 0u || mask_n == 0u) {
+                continue;
+            }
+            ULONG bcast_n = (ip_n & mask_n) | (~mask_n);
+            if (bcast_n == 0u || bcast_n == 0xFFFFFFFFu) {
+                continue;
+            }
+            struct in_addr ba;
+            ba.s_addr = bcast_n;
+            char bcast_str[64] = "";
+            if (inet_ntop(AF_INET, &ba, bcast_str, (socklen_t)sizeof(bcast_str)) != NULL &&
+                strncmp(bcast_str, "127.", 4) != 0) {
+                send_probe_to_ip(sock_handle, bcast_str, port);
+                probed_via_ioctl = 1;
+            }
+        }
+    }
+
+    if (!probed_via_ioctl) {
+        char local_ip[64] = "";
+        net_get_local_ipv4(local_ip, (int)sizeof(local_ip));
+        if (strncmp(local_ip, "127.", 4) != 0) {
+            char *last_dot = strrchr(local_ip, '.');
+            if (last_dot) {
+                snprintf(last_dot, (size_t)(local_ip + sizeof(local_ip) - last_dot), ".255");
+                send_probe_to_ip(sock_handle, local_ip, port);
+            }
         }
     }
 #else
     (void)sock_handle;
     (void)port;
 #endif
-}
-
-/* Prioriza rotas de rede ao deduplicar um mesmo Host com multiplas interfaces
- * (127.0.0.1 > LAN privada 192.168/10/172.16-31 > VPN/Radmin ex.: 26.x.x.x). */
-static int ip_route_priority(const char *ip) {
-    if (!ip) return 0;
-    if (strcmp(ip, "127.0.0.1") == 0) return 3;
-    if (strncmp(ip, "192.168.", 8) == 0 || strncmp(ip, "10.", 3) == 0) return 2;
-    if (strncmp(ip, "172.", 4) == 0) {
-        int second = atoi(ip + 4);
-        if (second >= 16 && second <= 31) return 2;
-    }
-    return 1;
 }
 
 /* Coleta respostas DISCOVER_OFFER na LAN, deduplica hosts por sessao e expira apos 3s. */
@@ -1704,7 +2176,52 @@ void net_close(NetContext *net) {
     }
 
 #ifdef _WIN32
-    if (net->initialized) {
+    if (net->transport == NET_TRANSPORT_RELAY) {
+        NetRelayState *st = (NetRelayState *)(uintptr_t)net->relay_handle;
+        if (st) {
+            /* Aguarda brevemente para enviar um eventual LOBBY_LEAVE antes de encerrar */
+            for (int w = 0; w < 6; w++) {
+                int pending = 0;
+                EnterCriticalSection(&st->cs);
+                pending = st->tx_count;
+                LeaveCriticalSection(&st->cs);
+                if (pending == 0 || InterlockedCompareExchange(&st->status, 0, 0) != NET_RELAY_READY) {
+                    break;
+                }
+                Sleep(10);
+            }
+            InterlockedExchange(&st->stop_flag, 1);
+            if (st->tx_event) {
+                SetEvent(st->tx_event);
+            }
+            if (st->h_ws) {
+                WinHttpCloseHandle(st->h_ws);
+                st->h_ws = NULL;
+            }
+            if (st->h_connect) {
+                WinHttpCloseHandle(st->h_connect);
+                st->h_connect = NULL;
+            }
+            if (st->h_session) {
+                WinHttpCloseHandle(st->h_session);
+                st->h_session = NULL;
+            }
+            if (st->tx_thread) {
+                WaitForSingleObject(st->tx_thread, 1500);
+                CloseHandle(st->tx_thread);
+            }
+            if (st->worker_thread) {
+                WaitForSingleObject(st->worker_thread, 1500);
+                CloseHandle(st->worker_thread);
+            }
+            if (st->tx_event) {
+                CloseHandle(st->tx_event);
+            }
+            DeleteCriticalSection(&st->cs);
+            free(st);
+        }
+        net->relay_handle = 0;
+    } else if (net->initialized) {
         SOCKET s = (SOCKET)net->sock_handle;
         closesocket(s);
         WSACleanup();
@@ -1717,4 +2234,150 @@ void net_close(NetContext *net) {
     net->initialized = 0;
     net->connected = 0;
     net->has_peer_addr = 0;
+}
+
+void net_generate_room_code(char *out_code, int out_size) {
+    if (!out_code || out_size <= 1) {
+        return;
+    }
+    static const char ALPH[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    unsigned int seed = net_next_unique_id();
+    int len = (out_size >= 5) ? 4 : (out_size - 1);
+    for (int i = 0; i < len; i++) {
+        seed = seed * 1664525u + 1013904223u;
+        out_code[i] = ALPH[(seed >> 16) % (sizeof(ALPH) - 1)];
+    }
+    out_code[len] = '\0';
+}
+
+void net_get_relay_url(char *out_url, int out_size) {
+    if (!out_url || out_size <= 0) {
+        return;
+    }
+    const char *env = getenv("SECTOR404_RELAY_URL");
+    if (env && env[0] != '\0') {
+        snprintf(out_url, (size_t)out_size, "%s", env);
+        return;
+    }
+    const char *cfg_paths[2] = {"relay_url.txt", "../relay_url.txt"};
+    for (int i = 0; i < 2; i++) {
+        FILE *fp = fopen(cfg_paths[i], "r");
+        if (fp) {
+            char buf[160] = "";
+            if (fgets(buf, (int)sizeof(buf), fp) != NULL) {
+                size_t l = strlen(buf);
+                while (l > 0 && (buf[l - 1] == '\n' || buf[l - 1] == '\r' ||
+                                 buf[l - 1] == ' ' || buf[l - 1] == '\t')) {
+                    buf[--l] = '\0';
+                }
+                if (buf[0] != '\0') {
+                    snprintf(out_url, (size_t)out_size, "%s", buf);
+                    fclose(fp);
+                    return;
+                }
+            }
+            fclose(fp);
+        }
+    }
+    snprintf(out_url, (size_t)out_size, "%s", NET_DEFAULT_RELAY_URL);
+}
+
+int net_init_relay(NetContext *net, NetMode mode, const char *relay_url, const char *room_code) {
+    if (!net || mode == NET_MODE_OFFLINE) {
+        return 0;
+    }
+
+    char clean_code[16] = "";
+    if (room_code) {
+        int out_i = 0;
+        for (int i = 0; room_code[i] != '\0' && out_i < 8; i++) {
+            unsigned char ch = (unsigned char)room_code[i];
+            if (isalnum(ch)) {
+                clean_code[out_i++] = (char)toupper(ch);
+            }
+        }
+        clean_code[out_i] = '\0';
+    }
+    if (strlen(clean_code) < 3) {
+        return 0;
+    }
+
+    memset(net, 0, sizeof(*net));
+    net->mode = mode;
+    net->transport = NET_TRANSPORT_RELAY;
+    net->port = 443;
+    net->local_slot = (mode == NET_MODE_HOST) ? 0 : -1;
+    net->active_player_count = 1;
+    net->local_client_id = net_get_local_client_id();
+    for (int i = 0; i < NET_MAX_PLAYERS; i++) {
+        net->last_attacker_of_slot[i] = -1;
+    }
+    snprintf(net->room_code, sizeof(net->room_code), "%s", clean_code);
+    if (relay_url && relay_url[0] != '\0') {
+        snprintf(net->relay_url, sizeof(net->relay_url), "%s", relay_url);
+    } else {
+        net_get_relay_url(net->relay_url, (int)sizeof(net->relay_url));
+    }
+
+    if (mode == NET_MODE_HOST) {
+        net->host_session_id = net_next_unique_id();
+        net->slots[0].active = 1;
+        net->slots[0].player_id = 1;
+        net->slots[0].ready = 1;
+        net->slots[0].client_id = net->local_client_id;
+    } else {
+        net->has_peer_addr = 1;
+        net->peer_ip = relay_peer_to_ip(0u);
+        net->peer_port = relay_peer_to_port(0u);
+        net->last_host_rx = net_monotonic_sec();
+    }
+
+#ifdef _WIN32
+    NetRelayState *st = (NetRelayState *)calloc(1, sizeof(NetRelayState));
+    if (!st) {
+        return 0;
+    }
+    st->mode = mode;
+    snprintf(st->url, sizeof(st->url), "%s", net->relay_url);
+    snprintf(st->room_code, sizeof(st->room_code), "%s", clean_code);
+    st->status = (LONG)NET_RELAY_CONNECTING;
+    InitializeCriticalSection(&st->cs);
+    st->tx_event = CreateEvent(NULL, FALSE, FALSE, NULL);
+    st->worker_thread = CreateThread(NULL, 0, relay_worker_thread_proc, st, 0, NULL);
+    if (!st->tx_event || !st->worker_thread) {
+        if (st->tx_event) CloseHandle(st->tx_event);
+        DeleteCriticalSection(&st->cs);
+        free(st);
+        return 0;
+    }
+    net->relay_handle = (unsigned long long)(uintptr_t)st;
+    net->initialized = 1;
+    return 1;
+#else
+    return 0;
+#endif
+}
+
+NetRelayStatus net_relay_get_status(const NetContext *net, char *err_out, int err_size) {
+    if (err_out && err_size > 0) {
+        err_out[0] = '\0';
+    }
+    if (!net || net->transport != NET_TRANSPORT_RELAY) {
+        return NET_RELAY_IDLE;
+    }
+#ifdef _WIN32
+    NetRelayState *st = (NetRelayState *)(uintptr_t)net->relay_handle;
+    if (!st) {
+        return NET_RELAY_CLOSED;
+    }
+    NetRelayStatus s = (NetRelayStatus)InterlockedCompareExchange(&st->status, 0, 0);
+    if (err_out && err_size > 0) {
+        EnterCriticalSection(&st->cs);
+        snprintf(err_out, (size_t)err_size, "%s", st->error_msg);
+        LeaveCriticalSection(&st->cs);
+    }
+    return s;
+#else
+    return NET_RELAY_IDLE;
+#endif
 }
