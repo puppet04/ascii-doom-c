@@ -1,0 +1,12 @@
+{
+  "name": "sector404-relay",
+  "version": "1.0.0",
+  "description": "Relay WebSocket zero-dependencias para Multiplayer Online do SECTOR 404 (404 NF)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

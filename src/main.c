@@ -1667,6 +1667,85 @@ static void draw_dense_character_showcase(Font font, int sw, int sh, float sc, f
  * SISTEMA DE MENU COM SUB-TELAS (PRINCIPAL, MULTIPLAYER, PERSONALIZAR, CONFIG)
  * ============================================================================ */
 
+static int fit_menu_font(const char *text, int base_sz, int min_sz, int max_w) {
+    int sz = base_sz;
+    if (!text || max_w <= 0) return min_sz;
+    while (sz > min_sz && MeasureText(text, sz) > max_w) {
+        sz--;
+    }
+    return sz;
+}
+
+static int draw_wrapped_text(const char *text, int x, int y, int max_w,
+                             int font_sz, int line_gap, int max_lines, Color col) {
+    if (!text || text[0] == '\0' || max_lines <= 0 || max_w <= 0) {
+        return 0;
+    }
+    const char *p = text;
+    int row = 0;
+    while (*p && row < max_lines) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+
+        char line[192];
+        line[0] = '\0';
+        size_t line_len = 0;
+        const char *cursor = p;
+
+        while (*cursor) {
+            while (*cursor == ' ') cursor++;
+            if (!*cursor) break;
+
+            const char *word_end = cursor;
+            while (*word_end && *word_end != ' ') word_end++;
+            size_t wlen = (size_t)(word_end - cursor);
+
+            char cand[192];
+            if (line_len == 0) {
+                size_t copy_len = (wlen < sizeof(cand) - 1) ? wlen : (sizeof(cand) - 1);
+                memcpy(cand, cursor, copy_len);
+                cand[copy_len] = '\0';
+            } else {
+                if (line_len + 1 + wlen >= sizeof(cand)) break;
+                memcpy(cand, line, line_len);
+                cand[line_len] = ' ';
+                memcpy(cand + line_len + 1, cursor, wlen);
+                cand[line_len + 1 + wlen] = '\0';
+            }
+
+            if (line_len > 0 && MeasureText(cand, font_sz) > max_w) {
+                break;
+            }
+            snprintf(line, sizeof(line), "%s", cand);
+            line_len = strlen(line);
+            cursor = word_end;
+            if (MeasureText(line, font_sz) > max_w) {
+                break;
+            }
+        }
+
+        /* Se e a ultima linha permitida e ainda restou texto, anexa ou garante caber */
+        if (row == max_lines - 1 && *cursor) {
+            char full[192];
+            snprintf(full, sizeof(full), "%s", p);
+            int fit_sz = fit_menu_font(full, font_sz, 9, max_w);
+            if (MeasureText(full, fit_sz) <= max_w) {
+                DrawText(full, x, y + row * (font_sz + line_gap), fit_sz, col);
+                row++;
+                break;
+            }
+        }
+
+        int line_fs = fit_menu_font(line, font_sz, 9, max_w);
+        DrawText(line, x, y + row * (font_sz + line_gap), line_fs, col);
+        row++;
+        p = cursor;
+    }
+
+    if (row <= 0) return 0;
+    return row * font_sz + (row - 1) * line_gap;
+}
+
 static void update_bind_capture(AppConfig *cfg, int *listening_bind) {
     if (!cfg || !listening_bind || *listening_bind < 0) {
         return;
@@ -2124,6 +2203,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
     const char *creator_error = "";
     int main_sel = 0;
     int mp_editing_ip = 0;
+    int mp_editing_code = 0;
     int settings_tab = 0; /* 0 = Geral/Video, 1 = Controles/Binds */
     int listening_bind = -1;
     *port_out = DEFAULT_PORT;
@@ -2142,7 +2222,9 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
     int lobby_started_burst = 0;
     double last_lobby_tx_t = 0.0;
     double last_lobby_rx_t = 0.0;
-    char local_ip_str[64] = "127.0.0.1";
+    double lobby_join_start_t = 0.0;
+    char local_ip_str[128] = "127.0.0.1";
+    char room_code_buf[16] = "";
     char mp_err_msg[128] = "";
 
     GameMap level_preview_map;
@@ -2222,22 +2304,39 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             snprintf(my_pkt.player_name, sizeof(my_pkt.player_name), "%s", my_cls.name);
             snprintf(my_pkt.map_name, sizeof(my_pkt.map_name), "%s", cur_lvl->name);
 
+            int is_relay = (lobby_net.transport == NET_TRANSPORT_RELAY);
+            char relay_err[128] = "";
+            NetRelayStatus relay_st = is_relay
+                ? net_relay_get_status(&lobby_net, relay_err, (int)sizeof(relay_err))
+                : NET_RELAY_READY;
+            if (is_relay && relay_st == NET_RELAY_CONNECTING) {
+                lobby_join_start_t = now_d;
+            }
+            if (is_relay && (relay_st == NET_RELAY_FAILED || relay_st == NET_RELAY_CLOSED)) {
+                leave_mp_lobby(&lobby_active, &lobby_net);
+                snprintf(mp_err_msg, sizeof(mp_err_msg), "%s",
+                         relay_err[0] ? relay_err : "Conexao online encerrada.");
+                page = MENU_PAGE_MULTIPLAYER;
+                continue;
+            }
+
             int peer_left = 0;
-            int got_lobby = net_poll_lobby(&lobby_net, is_host ? &my_pkt : NULL, &peer_left);
+            int got_lobby = net_poll_lobby(&lobby_net, (is_host && !is_relay) ? &my_pkt : NULL, &peer_left);
             if (got_lobby) {
                 last_lobby_rx_t = now_d;
                 mp_err_msg[0] = '\0';
             }
             if (is_host) {
-                net_lobby_prune_stale(&lobby_net, 3.0);
+                net_lobby_prune_stale(&lobby_net, is_relay ? 5.0 : 3.0);
                 if (peer_left) {
                     net_broadcast_lobby_roster(&lobby_net, cfg->selected_level, cur_lvl->name, 0);
-                } else if (lobby_net.connected && (now_d - last_lobby_tx_t) >= 0.08) {
+                } else if (lobby_net.connected && (!is_relay || relay_st == NET_RELAY_READY) &&
+                           (now_d - last_lobby_tx_t) >= 0.08) {
                     net_broadcast_lobby_roster(&lobby_net, cfg->selected_level, cur_lvl->name, 0);
                     last_lobby_tx_t = now_d;
                 }
             } else {
-                if (peer_left || (lobby_net.connected && (now_d - last_lobby_rx_t) > 3.5)) {
+                if (peer_left || (lobby_net.connected && (now_d - last_lobby_rx_t) > (is_relay ? 5.5 : 3.5))) {
                     leave_mp_lobby(&lobby_active, &lobby_net);
                     snprintf(mp_err_msg, sizeof(mp_err_msg),
                              peer_left ? "O Anfitriao fechou a sala."
@@ -2245,7 +2344,8 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                     page = MENU_PAGE_MULTIPLAYER;
                     continue;
                 }
-                if (lobby_net.has_peer_addr && (now_d - last_lobby_tx_t) >= 0.08) {
+                if (lobby_net.has_peer_addr && (!is_relay || relay_st == NET_RELAY_READY) &&
+                    (now_d - last_lobby_tx_t) >= 0.08) {
                     net_send_lobby_state(&lobby_net, &my_pkt);
                     last_lobby_tx_t = now_d;
                 }
@@ -2292,6 +2392,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                 page = MENU_PAGE_MULTIPLAYER;
             } else {
                 mp_editing_ip = 0;
+                mp_editing_code = 0;
                 listening_bind = -1;
                 page = (page == MENU_PAGE_CREATE) ? MENU_PAGE_CUSTOMIZE : MENU_PAGE_MAIN;
             }
@@ -2351,6 +2452,27 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             if (IsKeyPressed(KEY_ENTER)) {
                 if (ip_buf[0] == '\0') snprintf(ip_buf, ip_size, "127.0.0.1");
                 mp_editing_ip = 0;
+            }
+        } else if (page == MENU_PAGE_MULTIPLAYER && mp_editing_code) {
+            int ch = GetCharPressed();
+            while (ch > 0) {
+                size_t len = strlen(room_code_buf);
+                int is_alnum = (ch >= '0' && ch <= '9') ||
+                               (ch >= 'a' && ch <= 'z') ||
+                               (ch >= 'A' && ch <= 'Z');
+                if (is_alnum && len < 8 && len + 1 < sizeof(room_code_buf)) {
+                    if (ch >= 'a' && ch <= 'z') ch -= 32;
+                    room_code_buf[len] = (char)ch;
+                    room_code_buf[len + 1] = '\0';
+                }
+                ch = GetCharPressed();
+            }
+            if (IsKeyPressed(KEY_BACKSPACE)) {
+                size_t len = strlen(room_code_buf);
+                if (len > 0) room_code_buf[len - 1] = '\0';
+            }
+            if (IsKeyPressed(KEY_ENTER)) {
+                mp_editing_code = 0;
             }
         }
 
@@ -2426,8 +2548,9 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             DrawRectangleLinesEx((Rectangle){(float)left_x, (float)content_y, (float)pw, (float)ph},
                                  2.0f, (Color){230, 108, 38, 255});
 
+            int sp_title_fs = fit_menu_font("SELECIONAR NIVEL (SINGLEPLAYER)", btn_font, 12, pw - pad_x * 2);
             DrawText("SELECIONAR NIVEL (SINGLEPLAYER)", left_x + pad_x,
-                     content_y + (int)(16.0f * sc), btn_font, (Color){255, 200, 90, 255});
+                     content_y + (int)(16.0f * sc), sp_title_fs, (Color){255, 200, 90, 255});
 
             /* Barra seletora de fase (< FASE >) */
             int sel_y = content_y + (int)(52.0f * sc);
@@ -2451,9 +2574,10 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                                  1.5f, (Color){95, 130, 165, 255});
             const MapLevelInfo *lvl = map_level_get(cfg->selected_level);
             const char *lvl_hdr = TextFormat("%s  (%d/%d)", lvl->name, cfg->selected_level + 1, total_lvls);
-            int lhw = MeasureText(lvl_hdr, b_fnt);
-            DrawText(lvl_hdr, box_x + (box_w - lhw) / 2, sel_y + (sel_h - b_fnt) / 2,
-                     b_fnt, (Color){120, 225, 255, 255});
+            int hdr_fnt = fit_menu_font(lvl_hdr, b_fnt, 10, box_w - 14);
+            int lhw = MeasureText(lvl_hdr, hdr_fnt);
+            DrawText(lvl_hdr, box_x + (box_w - lhw) / 2, sel_y + (sel_h - hdr_fnt) / 2,
+                     hdr_fnt, (Color){120, 225, 255, 255});
             if (draw_small_button(box_x + box_w + 8, sel_y, arrow_w, sel_h, ">", b_fnt,
                                   (Color){38, 46, 60, 255}, (Color){215, 90, 35, 255})) {
                 cfg->selected_level = (cfg->selected_level + 1) % total_lvls;
@@ -2464,7 +2588,8 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             }
             lvl = map_level_get(cfg->selected_level);
 
-            /* Preview ASCII do mapa + ficha rapida da fase */
+            /* Preview ASCII do mapa + ficha rapida da fase (com quebra e ajuste dentro do painel) */
+            int act_y = content_y + ph - btn_h - (int)(14.0f * sc);
             int prev_y = sel_y + sel_h + (int)(16.0f * sc);
             int prev_sz = (int)(168.0f * sc);
             int avail_prev = ph - (prev_y - content_y) - btn_h - (int)(32.0f * sc);
@@ -2474,21 +2599,46 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             draw_level_minimap_preview(left_x + pad_x, prev_y, prev_sz,
                                        &level_preview_map, lvl->spawn1_x, lvl->spawn1_y);
 
-            int info_x = left_x + pad_x + prev_sz + (int)(16.0f * sc);
+            int info_x = left_x + pad_x + prev_sz + (int)(14.0f * sc);
+            int info_w = (left_x + pw - pad_x) - info_x;
+            if (info_w < 80) info_w = 80;
             int info_sz = (int)(15.0f * sc);
             if (info_sz < 11) info_sz = 11;
-            DrawText(lvl->subtitle, info_x, prev_y + 4, info_sz, (Color){225, 232, 245, 255});
-            DrawText(TextFormat("Personagem: %s", preview.name),
-                     info_x, prev_y + (int)(32.0f * sc), info_sz, (Color){255, 200, 100, 255});
-            DrawText(TextFormat("Vida: %d  |  Vel: %.1f", preview.max_health, preview.move_speed),
-                     info_x, prev_y + (int)(56.0f * sc), info_sz - 1, (Color){160, 180, 205, 255});
-            DrawText("Ondas de inimigos: 6 por onda",
-                     info_x, prev_y + (int)(84.0f * sc), info_sz - 1, (Color){145, 215, 155, 255});
-            DrawText("Pronto para adicionar novos mapas!",
-                     info_x, prev_y + (int)(110.0f * sc), info_sz - 2, (Color){130, 145, 168, 255});
+            int info_max_y = act_y - (int)(8.0f * sc);
+
+            int cur_y = prev_y + 2;
+            int desc_h = draw_wrapped_text(lvl->subtitle, info_x, cur_y, info_w,
+                                           info_sz, (int)(3.0f * sc), 3, (Color){225, 232, 245, 255});
+            cur_y += desc_h + (int)(10.0f * sc);
+
+            const char *p_line = TextFormat("Personagem: %s", preview.name);
+            int p_fs = fit_menu_font(p_line, info_sz, 10, info_w);
+            if (cur_y + p_fs <= info_max_y) {
+                DrawText(p_line, info_x, cur_y, p_fs, (Color){255, 200, 100, 255});
+                cur_y += p_fs + (int)(8.0f * sc);
+            }
+
+            const char *s_line = TextFormat("Vida: %d  |  Vel: %.1f", preview.max_health, preview.move_speed);
+            int s_fs = fit_menu_font(s_line, info_sz - 1, 9, info_w);
+            if (cur_y + s_fs <= info_max_y) {
+                DrawText(s_line, info_x, cur_y, s_fs, (Color){160, 180, 205, 255});
+                cur_y += s_fs + (int)(10.0f * sc);
+            }
+
+            const char *w_line = "Ondas de inimigos: 6 por onda";
+            int w_fs = fit_menu_font(w_line, info_sz - 1, 9, info_w);
+            if (cur_y + w_fs <= info_max_y) {
+                DrawText(w_line, info_x, cur_y, w_fs, (Color){145, 215, 155, 255});
+                cur_y += w_fs + (int)(8.0f * sc);
+            }
+
+            const char *n_line = "Pronto para adicionar novos mapas!";
+            int n_fs = fit_menu_font(n_line, info_sz - 2, 9, info_w);
+            if (cur_y + n_fs <= info_max_y) {
+                DrawText(n_line, info_x, cur_y, n_fs, (Color){130, 145, 168, 255});
+            }
 
             /* Acoes: VOLTAR e INICIAR PARTIDA */
-            int act_y = content_y + ph - btn_h - (int)(14.0f * sc);
             int back_w = (int)(135.0f * sc);
             if (back_w < 100) back_w = 100;
             if (draw_small_button(left_x + pad_x, act_y, back_w, btn_h, "VOLTAR",
@@ -2503,27 +2653,38 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                 return 1;
             }
         } else if (page == MENU_PAGE_MULTIPLAYER) {
-            int pw = (int)(545.0f * sc);
-            if (pw < 360) pw = 360;
-            int ph = (int)(450.0f * sc);
+            int pw = (int)(575.0f * sc);
+            if (pw < 380) pw = 380;
+            int ph = (int)(455.0f * sc);
             if (content_y + ph > footer_top) ph = footer_top - content_y;
 
             DrawRectangle(left_x, content_y, pw, ph, (Color){14, 18, 25, 238});
             DrawRectangleLinesEx((Rectangle){(float)left_x, (float)content_y, (float)pw, (float)ph},
                                  2.0f, (Color){225, 105, 35, 255});
 
-            DrawText("MULTIPLAYER LAN (ATE 4 JOGADORES - CO-OP / PVP)", left_x + pad_x,
-                     content_y + (int)(14.0f * sc), btn_font - 2, (Color){255, 200, 90, 255});
+            const char *mp_hdr = "MULTIPLAYER (ATE 4 JOGADORES - LAN OU ONLINE)";
+            int mp_hdr_fs = fit_menu_font(mp_hdr, btn_font - 2, 11, pw - pad_x * 2);
+            DrawText(mp_hdr, left_x + pad_x,
+                     content_y + (int)(14.0f * sc), mp_hdr_fs, (Color){255, 200, 90, 255});
             int sub_sz = (int)(13.5f * sc);
             if (sub_sz < 10) sub_sz = 10;
-            DrawText("Crie uma sala para ate 4 amigos em Co-op ou PvP, ou entre abaixo.",
-                     left_x + pad_x, content_y + (int)(42.0f * sc), sub_sz, (Color){165, 185, 210, 255});
+            const char *mp_sub = "Use LAN/Hotspot na mesma rede, ou Sala Online por codigo em qualquer Wi-Fi.";
+            int mp_sub_fs = fit_menu_font(mp_sub, sub_sz, 9, pw - pad_x * 2);
+            DrawText(mp_sub, left_x + pad_x, content_y + (int)(42.0f * sc), mp_sub_fs,
+                     (Color){165, 185, 210, 255});
 
-            int host_btn_y = content_y + (int)(68.0f * sc);
-            int host_btn_h = (int)(48.0f * sc);
-            if (host_btn_h < 34) host_btn_h = 34;
-            if (draw_chamfer_button(left_x + pad_x, host_btn_y, pw - pad_x * 2, host_btn_h, bevel,
-                                    "CRIAR SALA (SER O ANFITRIAO)", btn_font - 2, 1, NULL)) {
+            int host_btn_y = content_y + (int)(66.0f * sc);
+            int host_btn_h = (int)(44.0f * sc);
+            if (host_btn_h < 32) host_btn_h = 32;
+            int cgap = 10;
+            int half_bw = (pw - pad_x * 2 - cgap) / 2;
+            int cbf = fit_menu_font("CRIAR SALA ONLINE", btn_font - 3, 10, half_bw - 18);
+
+            if (draw_small_button(left_x + pad_x, host_btn_y, half_bw, host_btn_h,
+                                  "CRIAR SALA LAN", cbf,
+                                  (Color){175, 76, 26, 255}, (Color){228, 104, 38, 255})) {
+                mp_editing_ip = 0;
+                mp_editing_code = 0;
                 stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
                 mp_err_msg[0] = '\0';
                 if (net_init(&lobby_net, NET_MODE_HOST, NULL, *port_out)) {
@@ -2532,7 +2693,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                     lobby_started_burst = 0;
                     last_lobby_tx_t = 0.0;
                     last_lobby_rx_t = now_d;
-                    net_get_local_ipv4(local_ip_str, (int)sizeof(local_ip_str));
+                    net_get_all_local_ipv4s(local_ip_str, (int)sizeof(local_ip_str));
                     page = MENU_PAGE_LOBBY;
                 } else {
                     snprintf(mp_err_msg, sizeof(mp_err_msg),
@@ -2540,26 +2701,52 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                 }
             }
 
+            if (draw_small_button(left_x + pad_x + half_bw + cgap, host_btn_y, half_bw, host_btn_h,
+                                  "CRIAR SALA ONLINE", cbf,
+                                  (Color){28, 92, 138, 255}, (Color){48, 138, 198, 255})) {
+                mp_editing_ip = 0;
+                mp_editing_code = 0;
+                stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
+                mp_err_msg[0] = '\0';
+                char gen_code[16] = "";
+                char r_url[160] = "";
+                net_generate_room_code(gen_code, (int)sizeof(gen_code));
+                net_get_relay_url(r_url, (int)sizeof(r_url));
+                if (net_init_relay(&lobby_net, NET_MODE_HOST, r_url, gen_code)) {
+                    snprintf(room_code_buf, sizeof(room_code_buf), "%s", gen_code);
+                    lobby_active = 1;
+                    lobby_ready = 1;
+                    lobby_started_burst = 0;
+                    last_lobby_tx_t = 0.0;
+                    last_lobby_rx_t = now_d;
+                    lobby_join_start_t = now_d;
+                    page = MENU_PAGE_LOBBY;
+                } else {
+                    snprintf(mp_err_msg, sizeof(mp_err_msg),
+                             "Erro ao iniciar sala online (%s).", gen_code);
+                }
+            }
+
             /* Secao de busca automatica de salas abertas na LAN / localhost */
-            int list_hdr_y = host_btn_y + host_btn_h + (int)(14.0f * sc);
+            int list_hdr_y = host_btn_y + host_btn_h + (int)(12.0f * sc);
             int dots = ((int)(now * 3.0f)) % 4;
             const char *dots_str = (dots == 0) ? "" : (dots == 1 ? "." : (dots == 2 ? ".." : "..."));
-            DrawText(TextFormat("SALAS ENCONTRADAS NA REDE%s", dots_str),
+            DrawText(TextFormat("SALAS ENCONTRADAS NA LAN%s", dots_str),
                      left_x + pad_x, list_hdr_y, sub_sz + 1, (Color){115, 220, 255, 255});
 
-            int room_y0 = list_hdr_y + (int)(24.0f * sc);
+            int room_y0 = list_hdr_y + (int)(22.0f * sc);
             int foot_h = (int)(36.0f * sc);
             if (foot_h < 28) foot_h = 28;
-            int man_h = (int)(36.0f * sc);
+            int man_h = (int)(34.0f * sc);
             if (man_h < 26) man_h = 26;
-            int man_y = content_y + ph - foot_h - (int)(14.0f * sc) - man_h - (int)(26.0f * sc);
+            int man_y = content_y + ph - foot_h - (int)(12.0f * sc) - man_h - (int)(24.0f * sc);
             int room_area_h = man_y - room_y0 - (int)(8.0f * sc);
 
             int b_fnt = (int)(14.5f * sc);
             if (b_fnt < 11) b_fnt = 11;
 
             if (disc_count > 0) {
-                int r_step = (int)(44.0f * sc);
+                int r_step = (int)(42.0f * sc);
                 if (r_step * disc_count > room_area_h && disc_count > 0) {
                     r_step = room_area_h / disc_count;
                 }
@@ -2596,6 +2783,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                             lobby_started_burst = 0;
                             last_lobby_tx_t = 0.0;
                             last_lobby_rx_t = now_d;
+                            lobby_join_start_t = now_d;
                             page = MENU_PAGE_LOBBY;
                         } else {
                             snprintf(mp_err_msg, sizeof(mp_err_msg),
@@ -2604,21 +2792,23 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                     }
                 }
             } else {
-                int empty_h = (int)(70.0f * sc);
+                int empty_h = (int)(66.0f * sc);
                 if (empty_h > room_area_h) empty_h = room_area_h;
-                if (empty_h < 42) empty_h = 42;
+                if (empty_h < 40) empty_h = 40;
                 DrawRectangle(left_x + pad_x, room_y0, pw - pad_x * 2, empty_h, (Color){20, 25, 34, 255});
                 DrawRectangleLinesEx((Rectangle){(float)(left_x + pad_x), (float)room_y0,
                                                  (float)(pw - pad_x * 2), (float)empty_h},
                                      1.0f, (Color){56, 70, 92, 255});
-                DrawText("Nenhuma sala aberta encontrada ainda no Wi-Fi ou neste PC.",
+                const char *empty_msg = "Nenhuma sala LAN detectada aqui ainda (use Sala Online em Wi-Fi bloqueado).";
+                int emp_fs = fit_menu_font(empty_msg, sub_sz, 9, pw - pad_x * 2 - 24);
+                DrawText(empty_msg,
                          left_x + pad_x + 12, room_y0 + (int)(10.0f * sc),
-                         sub_sz, (Color){165, 178, 198, 255});
+                         emp_fs, (Color){165, 178, 198, 255});
                 int lh_w = (int)(225.0f * sc);
                 if (lh_w < 170) lh_w = 170;
-                int lh_bh = (int)(28.0f * sc);
+                int lh_bh = (int)(26.0f * sc);
                 if (lh_bh < 20) lh_bh = 20;
-                if (empty_h >= lh_bh + (int)(32.0f * sc) &&
+                if (empty_h >= lh_bh + (int)(30.0f * sc) &&
                     draw_small_button(left_x + pad_x + 12, room_y0 + empty_h - lh_bh - 6,
                                       lh_w, lh_bh, "TESTAR MESMO PC (127.0.0.1)", sub_sz - 1,
                                       (Color){36, 52, 74, 255}, (Color){68, 125, 200, 255})) {
@@ -2631,36 +2821,84 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                         lobby_started_burst = 0;
                         last_lobby_tx_t = 0.0;
                         last_lobby_rx_t = now_d;
+                        lobby_join_start_t = now_d;
                         page = MENU_PAGE_LOBBY;
                     }
                 }
             }
 
-            /* Campo opcional de IP manual (para firewall/VPN) */
-            DrawText("Ou digite o IP manualmente (opcional):", left_x + pad_x,
-                     man_y - (int)(20.0f * sc), sub_sz, (Color){155, 170, 192, 255});
-            int con_bw = (int)(145.0f * sc);
-            if (con_bw < 105) con_bw = 105;
-            Rectangle ip_box = {(float)(left_x + pad_x), (float)man_y,
-                                (float)(pw - pad_x * 2 - con_bw - 10), (float)man_h};
-            if (CheckCollisionPointRec(GetMousePosition(), ip_box) &&
-                IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
-                mp_editing_ip = 1;
-            }
-            DrawRectangleRec(ip_box, mp_editing_ip ? (Color){32, 42, 58, 255}
-                                                   : (Color){22, 26, 34, 255});
-            DrawRectangleLinesEx(ip_box, 1.5f,
-                                 mp_editing_ip ? (Color){100, 205, 255, 255}
-                                               : (Color){80, 92, 112, 255});
-            DrawText(TextFormat("%s%s", ip_buf, mp_editing_ip ? "_" : ""),
-                     (int)ip_box.x + 10, (int)ip_box.y + (man_h - b_fnt) / 2,
-                     b_fnt, (Color){255, 232, 120, 255});
+            /* Duas entradas manuais lado a lado: Codigo Online | IP LAN */
+            int col_gap = 12;
+            int col_w = (pw - pad_x * 2 - col_gap) / 2;
+            int col1_x = left_x + pad_x;
+            int col2_x = col1_x + col_w + col_gap;
+            int lbl_y = man_y - (int)(18.0f * sc);
 
-            if (draw_small_button((int)ip_box.x + (int)ip_box.width + 10, man_y, con_bw, man_h,
-                                  "CONECTAR IP", b_fnt - 1,
+            DrawText("Entrar Online (Codigo):", col1_x, lbl_y, sub_sz - 1, (Color){125, 215, 255, 255});
+            DrawText("Ou IP LAN (opcional):", col2_x, lbl_y, sub_sz - 1, (Color){155, 170, 192, 255});
+
+            int join_bw = (int)(92.0f * sc);
+            if (join_bw < 72) join_bw = 72;
+            Rectangle code_box = {(float)col1_x, (float)man_y, (float)(col_w - join_bw - 6), (float)man_h};
+            Rectangle ip_box   = {(float)col2_x, (float)man_y, (float)(col_w - join_bw - 6), (float)man_h};
+
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                Vector2 mpos = GetMousePosition();
+                if (CheckCollisionPointRec(mpos, code_box)) {
+                    mp_editing_code = 1;
+                    mp_editing_ip = 0;
+                } else if (CheckCollisionPointRec(mpos, ip_box)) {
+                    mp_editing_ip = 1;
+                    mp_editing_code = 0;
+                }
+            }
+
+            DrawRectangleRec(code_box, mp_editing_code ? (Color){26, 46, 68, 255} : (Color){20, 26, 36, 255});
+            DrawRectangleLinesEx(code_box, 1.5f,
+                                 mp_editing_code ? (Color){100, 215, 255, 255} : (Color){72, 102, 132, 255});
+            const char *code_disp = (room_code_buf[0] != '\0' || mp_editing_code)
+                ? TextFormat("%s%s", room_code_buf, mp_editing_code ? "_" : "")
+                : "EX: K7B2";
+            DrawText(code_disp, (int)code_box.x + 8, (int)code_box.y + (man_h - b_fnt) / 2, b_fnt,
+                     (room_code_buf[0] != '\0' || mp_editing_code) ? (Color){135, 240, 255, 255}
+                                                                   : (Color){95, 115, 140, 255});
+
+            if (draw_small_button((int)code_box.x + (int)code_box.width + 6, man_y, join_bw, man_h,
+                                  "ENTRAR", b_fnt - 1,
+                                  (Color){28, 92, 138, 255}, (Color){48, 138, 198, 255})) {
+                mp_editing_code = 0;
+                mp_editing_ip = 0;
+                stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
+                mp_err_msg[0] = '\0';
+                char r_url[160] = "";
+                net_get_relay_url(r_url, (int)sizeof(r_url));
+                if (net_init_relay(&lobby_net, NET_MODE_CLIENT, r_url, room_code_buf)) {
+                    lobby_active = 1;
+                    lobby_ready = 0;
+                    lobby_started_burst = 0;
+                    last_lobby_tx_t = 0.0;
+                    last_lobby_rx_t = now_d;
+                    lobby_join_start_t = now_d;
+                    page = MENU_PAGE_LOBBY;
+                } else {
+                    snprintf(mp_err_msg, sizeof(mp_err_msg),
+                             "Digite um codigo valido (3 a 8 letras/numeros).");
+                }
+            }
+
+            DrawRectangleRec(ip_box, mp_editing_ip ? (Color){32, 42, 58, 255} : (Color){22, 26, 34, 255});
+            DrawRectangleLinesEx(ip_box, 1.5f,
+                                 mp_editing_ip ? (Color){100, 205, 255, 255} : (Color){80, 92, 112, 255});
+            DrawText(TextFormat("%s%s", ip_buf, mp_editing_ip ? "_" : ""),
+                     (int)ip_box.x + 8, (int)ip_box.y + (man_h - b_fnt) / 2,
+                     b_fnt - 1, (Color){255, 232, 120, 255});
+
+            if (draw_small_button((int)ip_box.x + (int)ip_box.width + 6, man_y, join_bw, man_h,
+                                  "IP LAN", b_fnt - 1,
                                   (Color){42, 72, 108, 255}, (Color){68, 125, 195, 255})) {
                 if (ip_buf[0] == '\0') snprintf(ip_buf, ip_size, "127.0.0.1");
                 mp_editing_ip = 0;
+                mp_editing_code = 0;
                 stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
                 mp_err_msg[0] = '\0';
                 if (net_init(&lobby_net, NET_MODE_CLIENT, ip_buf, *port_out)) {
@@ -2669,6 +2907,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                     lobby_started_burst = 0;
                     last_lobby_tx_t = 0.0;
                     last_lobby_rx_t = now_d;
+                    lobby_join_start_t = now_d;
                     page = MENU_PAGE_LOBBY;
                 } else {
                     snprintf(mp_err_msg, sizeof(mp_err_msg),
@@ -2676,17 +2915,21 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                 }
             }
 
+            int vw = calc_fit_w("VOLTAR", b_fnt, (int)(115.0f * sc), sc);
             if (mp_err_msg[0] != '\0') {
-                DrawText(mp_err_msg, left_x + pad_x + (int)(135.0f * sc),
-                         content_y + ph - foot_h - (int)(4.0f * sc),
-                         sub_sz, (Color){255, 105, 95, 255});
+                int err_x = left_x + pad_x + vw + 12;
+                int err_w = (left_x + pw - pad_x) - err_x;
+                int err_fs = fit_menu_font(mp_err_msg, sub_sz, 9, err_w);
+                DrawText(mp_err_msg, err_x,
+                         content_y + ph - foot_h + (foot_h - err_fs) / 2 - (int)(10.0f * sc),
+                         err_fs, (Color){255, 105, 95, 255});
             }
 
-            int vw = calc_fit_w("VOLTAR", b_fnt, (int)(115.0f * sc), sc);
             if (draw_small_button(left_x + pad_x, content_y + ph - foot_h - (int)(10.0f * sc),
                                   vw, foot_h, "VOLTAR", b_fnt,
                                   (Color){38, 42, 52, 255}, (Color){195, 75, 30, 255})) {
                 mp_editing_ip = 0;
+                mp_editing_code = 0;
                 stop_lan_discovery(&disc_active, &disc_sock, &disc_count);
                 page = MENU_PAGE_MAIN;
             }
@@ -2714,9 +2957,19 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             if (sub_sz < 9) sub_sz = 9;
 
             /* Cabecalho do Lobby + Pill com lotacao e modo */
-            const char *role_title = is_host
-                ? TextFormat("SALA DE ESPERA (ANFITRIAO) - %d/4 JOGADORES", lobby_net.active_player_count)
-                : "SALA DE ESPERA (CONVIDADO - ATE 4 JOGADORES)";
+            int is_relay = (lobby_net.transport == NET_TRANSPORT_RELAY);
+            char relay_err[128] = "";
+            NetRelayStatus relay_st = is_relay
+                ? net_relay_get_status(&lobby_net, relay_err, (int)sizeof(relay_err))
+                : NET_RELAY_READY;
+
+            const char *role_title = is_relay
+                ? (is_host
+                    ? TextFormat("SALA ONLINE [%s] (ANFITRIAO) - %d/4", lobby_net.room_code, lobby_net.active_player_count)
+                    : TextFormat("SALA ONLINE [%s] (CONVIDADO)", lobby_net.room_code))
+                : (is_host
+                    ? TextFormat("SALA LAN (ANFITRIAO) - %d/4 JOGADORES", lobby_net.active_player_count)
+                    : "SALA LAN (CONVIDADO - ATE 4 JOGADORES)");
             DrawText(role_title, left_x + pad_x, content_y + (int)(12.0f * sc),
                      btn_font - 2, (Color){255, 205, 95, 255});
 
@@ -2724,9 +2977,17 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                 ? TextFormat("CONECTADO (%d/4) | %s",
                              lobby_net.active_player_count > 1 ? lobby_net.active_player_count : 2,
                              is_pvp ? "PVP" : "CO-OP")
-                : (is_host ? "AGUARDANDO JOGADORES..." : "CONECTANDO NA SALA...");
-            Color conn_bg = lobby_net.connected ? (Color){32, 108, 56, 255} : (Color){135, 78, 22, 255};
-            Color conn_fg = lobby_net.connected ? (Color){135, 255, 165, 255} : (Color){255, 220, 130, 255};
+                : (is_relay
+                    ? ((relay_st == NET_RELAY_CONNECTING)
+                        ? "LIGANDO AO SERVIDOR..."
+                        : (is_host ? TextFormat("CODIGO: %s", lobby_net.room_code) : "CHAMANDO HOST..."))
+                    : (is_host ? "AGUARDANDO JOGADORES..." : "CONECTANDO NA SALA..."));
+            Color conn_bg = lobby_net.connected ? (Color){32, 108, 56, 255}
+                          : (is_relay && relay_st == NET_RELAY_READY ? (Color){28, 92, 138, 255}
+                                                                     : (Color){135, 78, 22, 255});
+            Color conn_fg = lobby_net.connected ? (Color){135, 255, 165, 255}
+                          : (is_relay && relay_st == NET_RELAY_READY ? (Color){155, 235, 255, 255}
+                                                                     : (Color){255, 220, 130, 255});
             int cw = MeasureText(conn_lbl, b_fnt) + 22;
             int cx = left_x + pw - pad_x - cw;
             int cy = content_y + (int)(10.0f * sc);
@@ -2737,23 +2998,44 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
 
             /* Faixa de status/IP da sala */
             int tip_y = content_y + (int)(44.0f * sc);
+            int guest_no_reply = (!is_host && !lobby_net.connected &&
+                                  (!is_relay || relay_st == NET_RELAY_READY) &&
+                                  (now_d - lobby_join_start_t) > 3.5);
             const char *tip_str = (mp_err_msg[0] != '\0')
                 ? mp_err_msg
-                : (is_host
-                    ? (lobby_net.connected
-                        ? TextFormat("Porta %d aberta | Ate 4 jogadores na sala | Modo %s ativo.",
-                                     *port_out, is_pvp ? "PvP (Todos contra Todos)" : "Co-op (Equipe)")
-                        : TextFormat("Amigos na LAN acham sozinhos! IP local: %s (ou 127.0.0.1 no mesmo PC)", local_ip_str))
-                    : (lobby_net.connected
-                        ? TextFormat("Conectado ao Anfitriao (%s)! Voce e o Jogador %d.",
-                                     ip_buf,
-                                     (lobby_net.local_slot >= 1 ? lobby_net.local_slot + 1 : 2))
-                        : TextFormat("Chamando sala em %s (porta %d)...", ip_buf, *port_out)));
+                : (is_relay
+                    ? ((relay_st == NET_RELAY_CONNECTING)
+                        ? "Conectando ao servidor online (porta 443)... aguarde ate ~25s se estiver acordando."
+                        : (is_host
+                            ? TextFormat("Sala online [%s] ativa! Seus amigos entram digitando o codigo: %s (Modo %s).",
+                                         lobby_net.room_code, lobby_net.room_code, is_pvp ? "PvP" : "Co-op")
+                            : (lobby_net.connected
+                                ? TextFormat("Conectado a sala online [%s]! Voce e o Jogador %d.",
+                                             lobby_net.room_code,
+                                             (lobby_net.local_slot >= 1 ? lobby_net.local_slot + 1 : 2))
+                                : (guest_no_reply
+                                    ? TextFormat("Sala %s conectada no servidor, aguardando o Anfitriao responder...",
+                                                 lobby_net.room_code)
+                                    : TextFormat("Chamando Anfitriao da sala online [%s]...", lobby_net.room_code)))))
+                    : (is_host
+                        ? (lobby_net.connected
+                            ? TextFormat("IPs LAN: %s (porta %d) | Ate 4 jogadores | Modo %s ativo.",
+                                         local_ip_str, *port_out, is_pvp ? "PvP" : "Co-op")
+                            : TextFormat("IP LAN: %s (porta %d) | Mesma rede local ou Hotspot do celular.",
+                                         local_ip_str, *port_out))
+                        : (lobby_net.connected
+                            ? TextFormat("Conectado ao Anfitriao (%s)! Voce e o Jogador %d.",
+                                         ip_buf,
+                                         (lobby_net.local_slot >= 1 ? lobby_net.local_slot + 1 : 2))
+                            : (guest_no_reply
+                                ? TextFormat("Sem resposta de %s:%d! Se o Wi-Fi bloquear LAN, use Sala Online ou Hotspot.",
+                                             ip_buf, *port_out)
+                                : TextFormat("Chamando sala LAN em %s (porta %d)...", ip_buf, *port_out)))));
             int tip_sz = sub_sz;
             while (tip_sz > 9 && MeasureText(tip_str, tip_sz) > pw - pad_x * 2) {
                 tip_sz--;
             }
-            Color tip_col = (mp_err_msg[0] != '\0')
+            Color tip_col = (mp_err_msg[0] != '\0' || guest_no_reply)
                 ? (Color){255, 115, 100, 255}
                 : (Color){180, 200, 225, 255};
             DrawText(tip_str, left_x + pad_x, tip_y, tip_sz, tip_col);
@@ -2969,6 +3251,10 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                                       "AGUARDANDO CONEXAO...", b_fnt,
                                       (Color){34, 38, 48, 255}, (Color){40, 46, 56, 255});
                 }
+            } else if (!lobby_net.connected) {
+                draw_small_button(go_x, foot_y, go_w, foot_h,
+                                  "AGUARDANDO RESPOSTA DO HOST...", b_fnt,
+                                  (Color){34, 38, 48, 255}, (Color){40, 46, 56, 255});
             } else {
                 const char *r_lbl = lobby_ready
                     ? "PRONTO! (AGUARDANDO ANFITRIAO)"
@@ -3499,6 +3785,8 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
 
     if (existing_net && existing_net->initialized && mode != NET_MODE_OFFLINE) {
         net = *existing_net;
+        existing_net->relay_handle = 0;
+        existing_net->initialized = 0;
     } else if (!net_init(&net, mode, host_ip, port)) {
         snprintf(err_buf, err_size,
                  "Erro ao iniciar rede UDP na porta %d (IP: %s).", port, host_ip);

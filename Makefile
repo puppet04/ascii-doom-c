@@ -1,15 +1,15 @@
 CC = gcc
 WINDRES = windres
 CFLAGS = -Wall -Wextra -std=c11 -O2 -Iinclude
-LDFLAGS = -static-libgcc -Wl,-Bstatic -lraylib -lglfw3 -lwinpthread -Wl,-Bdynamic -lopengl32 -lgdi32 -lwinmm -lshell32 -lws2_32 -lm
+LDFLAGS = -static-libgcc -Wl,-Bstatic -lraylib -lglfw3 -lwinpthread -Wl,-Bdynamic -lopengl32 -lgdi32 -lwinmm -lshell32 -lws2_32 -lwinhttp -lm
 
 BIN_DIR = bin
 TARGET = $(BIN_DIR)/sector404.exe
 TEST_TARGET = $(BIN_DIR)/test_runner.exe
 ICON_RES = $(BIN_DIR)/app_icon.o
 
-GAME_SRCS = src/map.c src/player.c src/entities.c src/renderer.c src/network.c src/main.c src/glfw_static_shim.c
-TEST_SRCS = src/map.c src/player.c src/entities.c src/network.c src/glfw_static_shim.c tests/test_main.c
+GAME_SRCS = src/map.c src/player.c src/entities.c src/renderer.c src/network.c src/main.c src/embedded_assets.c src/glfw_static_shim.c
+TEST_SRCS = src/map.c src/player.c src/entities.c src/network.c src/embedded_assets.c src/glfw_static_shim.c tests/test_main.c
 
 .PHONY: all run test clean
 
