@@ -616,13 +616,19 @@ static void eval_showcase_point_for(int visual_id, const CharacterAppearance *ap
                                     float gx, float gy, float breath,
                                     int *mat_out, float *nx_out, float *ny_out) {
     if (player_appearance_visual(visual_id, app).custom_sprite) {
-        if (gy < 74.0f) {
-            *mat_out = player_appearance_material(visual_id, app, gx / 28.0f, (gy - breath) / 74.0f, 0);
+        /* Alinha a sola (y ~= 0.99) com as botas do Fuzileiro em gy = 78.2.
+           A respiracao diminui ate a cintura para manter os pes no chao. */
+        float sprite_y = (gy - (78.2f - 0.99f * 74.0f)) / 74.0f;
+        float upper_body = fmaxf(0.0f, 1.0f - sprite_y / 0.60f);
+        int sprite_mat = player_appearance_material(visual_id, app, gx / 28.0f,
+                                                   sprite_y - breath * upper_body / 74.0f, 0);
+        if (sprite_mat != 0) {
+            *mat_out = sprite_mat;
             *nx_out = gx / 40.0f;
             *ny_out = 0.0f;
             return;
         }
-        /* Na base (>= 74.0), desenha apenas o pedestal holografico para nao vazar botas do Fuzileiro */
+        /* Desenha o pedestal atras da skin, inclusive entre os pes. */
         int pmat = 0;
         float pnx = 0.0f, pny = 0.0f;
         float ped_dx = gx / 27.5f;
@@ -1585,7 +1591,7 @@ static void draw_lobby_character_preview(int box_x, int box_y, int box_w, int bo
 
     if (dirty) {
         build_character_ascii_quad(visual_id, eff_app, LB_GW, LB_GH,
-                                   t, 74.0f, 0.38f, lb_bufs[slot]);
+                                   t, 86.0f, 0.38f, lb_bufs[slot]);
         lb_box_x[slot] = box_x;
         lb_vid[slot] = visual_id;
         lb_app[slot] = *eff_app;

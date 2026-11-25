@@ -294,6 +294,7 @@ int player_teto_material(float x, float y, int back_view) {
 
 static int player_guts_material(float x, float y, int back_view) {
     if (y < 0 || y > 1 || fabsf(x) > 1) return 0;
+    const int skin = 20, skin_shadow = 24;
     float ax = fabsf(x);
     int mat = 0;
     /* Dragonslayer como parte da silhueta: lamina larga atras do ombro. */
@@ -332,24 +333,24 @@ static int player_guts_material(float x, float y, int back_view) {
         if (fabsf(y - 0.31f) < 0.006f && fabsf(ax - 0.43f) < 0.014f) mat = 23;
     }
     if (y > 0.38f && y < 0.64f && ax > 0.34f && ax < 0.48f) {
-        mat = x > 0 ? 24 : 22;
+        mat = x > 0 ? skin : 22;
         if (y > 0.46f) mat = x > 0 ? 21 : 22;
         if (fmodf(y * 50, 1) < 0.12f) mat = 12;
         if (x < 0 && ax > 0.44f) mat = 23;
     }
-    if (y > 0.63f && y < 0.69f && ax > 0.35f && ax < 0.47f) mat = x > 0 ? 24 : 21;
-    if (y > 0.21f && y < 0.29f && ax < 0.13f) mat = back_view ? 25 : 24;
+    if (y > 0.63f && y < 0.69f && ax > 0.35f && ax < 0.47f) mat = x > 0 ? skin : 21;
+    if (y > 0.21f && y < 0.29f && ax < 0.13f) mat = back_view ? skin_shadow : skin;
     /* Rosto angular, olho direito fechado e cicatriz. */
     float face_w = y < 0.18f ? 0.20f : 0.20f - (y - 0.18f) * 1.2f;
     if (y > 0.07f && y < 0.245f && ax < face_w) {
-        mat = back_view ? 12 : (x > 0.11f ? 25 : 24);
+        mat = back_view ? 12 : (x > 0.11f ? skin_shadow : skin);
         if (!back_view) {
             if (y > 0.143f && y < 0.159f && x > 0.045f && x < 0.15f) mat = 7;
             if (y > 0.143f && y < 0.159f && x > 0.087f && x < 0.113f) mat = 12;
             if (fabsf(y - (0.132f + ax * 0.05f)) < 0.006f && ax > 0.04f && ax < 0.16f) mat = 12;
             if (x < -0.04f && x > -0.15f && fabsf(y - (0.155f + x * 0.06f)) < 0.004f) mat = 12;
-            if (fabsf(x + 0.10f + (y - 0.15f) * 0.20f) < 0.006f && y > 0.12f && y < 0.20f) mat = 25;
-            if (x > -0.012f && x < 0.015f && y > 0.16f && y < 0.193f) mat = 25;
+            if (fabsf(x + 0.10f + (y - 0.15f) * 0.20f) < 0.006f && y > 0.12f && y < 0.20f) mat = skin_shadow;
+            if (x > -0.012f && x < 0.015f && y > 0.16f && y < 0.193f) mat = skin_shadow;
             if (ax < 0.08f && fabsf(y - (0.216f - x * 0.03f)) < 0.004f) mat = 12;
         }
     }
@@ -368,6 +369,7 @@ static int player_guts_material(float x, float y, int back_view) {
 
 static int player_rambo_material(float x, float y, int back) {
     if (fabsf(x) > 1 || y < 0 || y > 1) return 0;
+    const int skin = 20, skin_shadow = 24;
     float ax = fabsf(x);
     int mat = 0;
     /* Calca cargo camuflada, joelheiras e botas de combate. */
@@ -381,20 +383,20 @@ static int player_rambo_material(float x, float y, int back) {
     /* Tronco forte sem camisa e bracos com volume. */
     float chest = 0.38f - (y-0.28f)*0.33f;
     if (y > 0.26f && y < 0.59f && ax < chest) {
-        mat = ax > chest-0.035f ? 25 : 24;
-        if (!back && y > 0.31f && y < 0.38f && ax > 0.03f && ax < 0.29f && fabsf(y-(0.365f-ax*0.07f))<0.005f) mat=25;
-        if (!back && y > 0.40f && y < 0.54f && ax < 0.15f && (ax < 0.009f || fmodf(y*50,2)<0.19f)) mat=25;
-        if (back && ax > 0.09f && ax < 0.105f && y < 0.47f) mat=25;
+        mat = ax > chest-0.035f ? skin_shadow : skin;
+        if (!back && y > 0.31f && y < 0.38f && ax > 0.03f && ax < 0.29f && fabsf(y-(0.365f-ax*0.07f))<0.005f) mat=skin_shadow;
+        if (!back && y > 0.40f && y < 0.54f && ax < 0.15f && (ax < 0.009f || fmodf(y*50,2)<0.19f)) mat=skin_shadow;
+        if (back && ax > 0.09f && ax < 0.105f && y < 0.47f) mat=skin_shadow;
     }
     if (y > 0.28f && y < 0.65f) {
         float arm = 0.40f + 0.025f*sinf(y*12);
         float width = 0.07f + 0.025f*sinf((y-0.28f)*10);
         if (fabsf(ax-arm)<width) {
-            mat = ax > arm+width*0.5f ? 25 : 24;
+            mat = ax > arm+width*0.5f ? skin_shadow : skin;
             if (y > 0.565f && y < 0.61f) mat=12;
         }
     }
-    if (y > 0.235f && y < 0.28f && ax < 0.12f) mat=24;
+    if (y > 0.235f && y < 0.28f && ax < 0.12f) mat=skin;
     /* Cinto, coldre de faca e faixa de cartuchos cruzando o peito. */
     if (y > 0.55f && y < 0.59f && ax < 0.30f) mat = ax < 0.055f ? 15 : 12;
     if (x > 0.27f && x < 0.33f && y > 0.57f && y < 0.72f) mat = y < 0.61f ? 23 : 4;
@@ -406,11 +408,11 @@ static int player_rambo_material(float x, float y, int back) {
     if (y > 0.05f && y < 0.29f && ax < 0.25f) mat=12;
     float face_w= y<0.18f ? 0.185f : 0.185f-(y-0.18f)*1.0f;
     if (!back && y > 0.10f && y < 0.25f && ax < face_w) {
-        mat = x>0.10f ? 25 : 24;
+        mat = x>0.10f ? skin_shadow : skin;
         if (y > 0.149f && y < 0.163f && ax > 0.045f && ax < 0.139f) mat=7;
         if (y > 0.149f && y < 0.163f && ax > 0.08f && ax < 0.105f) mat=12;
         if (fabsf(y-(0.14f+ax*0.04f))<0.005f && ax>0.04f && ax<0.15f) mat=12;
-        if (ax<0.012f && y>0.166f && y<0.195f) mat=25;
+        if (ax<0.012f && y>0.166f && y<0.195f) mat=skin_shadow;
         if (ax<0.07f && fabsf(y-0.22f)<0.0035f) mat=12;
     }
     if (inside_oval(x,y,0,0.087f,0.25f,0.063f) && y<0.095f)
