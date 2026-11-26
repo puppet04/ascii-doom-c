@@ -723,6 +723,107 @@ static void test_medkit_and_traps(void) {
                 "Inimigo obrigatorio 'Z' continua bloqueando a saida 'E'");
 }
 
+static void clear_test_arena(GameMap *map) {
+    map_init_default(map);
+    for (int y = 1; y < map->height - 1; y++) {
+        for (int x = 1; x < map->width - 1; x++) {
+            map->tiles[y][x] = '.';
+        }
+    }
+}
+
+static void test_weapons_inventory_and_drops(void) {
+    printf("\n[Teste 18] Arsenal, inventario, drops de inimigos e pickups de mapa\n");
+    GameMap map;
+    Player p;
+    EnemyManager mgr;
+    Weapon weapons[MAX_WEAPONS];
+    weapons_init_defaults(weapons);
+    clear_test_arena(&map);
+    player_init(&p, 2.5f, 5.5f, 0.0f);
+
+    /* Jogador comeca apenas com a Pistola (carregador 10, recarga infinita) */
+    ASSERT_TRUE(p.weapon_owned[WEAPON_PISTOL] == 1 &&
+                p.weapon_owned[WEAPON_SHOTGUN] == 0 &&
+                p.weapon_owned[WEAPON_SNIPER] == 0 &&
+                p.weapon_owned[WEAPON_MACHINEGUN] == 0 &&
+                p.weapon_owned[WEAPON_FUTURISTIC] == 0,
+                "Jogador inicia apenas com a Pistola no inventario");
+    ASSERT_TRUE(p.weapon_mag[WEAPON_PISTOL] == 10 &&
+                weapons[WEAPON_PISTOL].mag_size == 10 &&
+                weapons[WEAPON_SHOTGUN].mag_size == 6 &&
+                weapons[WEAPON_SNIPER].mag_size == 5 &&
+                weapons[WEAPON_MACHINEGUN].mag_size == 30 &&
+                weapons[WEAPON_FUTURISTIC].mag_size == 4,
+                "Carregadores ajustados para cada arma (10/6/5/30/4)");
+
+    /* Recarga infinita da Pistola */
+    ASSERT_TRUE(player_begin_attack(&p) && p.weapon_mag[WEAPON_PISTOL] == 9,
+                "Disparo da Pistola consome 1 bala do carregador de 10");
+    ASSERT_TRUE(player_reload(&p) && p.weapon_mag[WEAPON_PISTOL] == 10,
+                "Pistola recarrega com municao infinita para 10");
+
+    /* Drop de inimigo a distancia ao morrer (0.5x a 3x carregador) */
+    map.tiles[5][5] = 'K'; /* Soldado Kushan -> Sniper (mag 5, drop 3..15) */
+    enemies_spawn_wave(&mgr, &map, &p);
+    ASSERT_TRUE(mgr.count == 1 && mgr.enemies[0].type == ENEMY_BERSERK_KUSHAN,
+                "Kushan (Sniper) spawnado no mapa de teste");
+    p.shoot_timer = 0.0f;
+    ASSERT_TRUE(enemies_check_hit(&mgr, &map, &p, &weapons[WEAPON_SNIPER]) == 1 &&
+                mgr.enemies[0].active == 0,
+                "Sniper elimina Kushan com tiro reto");
+    const WeaponDrop *drops = enemies_weapon_drop_pool();
+    ASSERT_TRUE(drops[0].active == 1 && drops[0].weapon == WEAPON_SNIPER &&
+                drops[0].ammo >= 3 && drops[0].ammo <= 15,
+                "Kushan morto derruba Sniper no chao com 0.5x a 3x carregador");
+
+    /* Coletar drop no chao adiciona ao inventario; pegar repetida so da municao */
+    int drop_ammo = drops[0].ammo;
+    p.x = drops[0].x;
+    p.y = drops[0].y;
+    enemies_update(&mgr, &map, &p, 0.05f);
+    ASSERT_TRUE(drops[0].active == 0 && p.weapon_owned[WEAPON_SNIPER] == 1 &&
+                (p.weapon_mag[WEAPON_SNIPER] + p.weapon_reserve[WEAPON_SNIPER]) == drop_ammo,
+                "Passar sobre a arma derrubada adiciona Sniper ao inventario");
+    ASSERT_TRUE(player_cycle_weapon(&p, 1) == 1 && p.active_weapon == WEAPON_SNIPER,
+                "Troca de arma alterna para a Sniper no inventario");
+
+    /* Pickup de mapa ('G' = Shotgun com 10x carregador = 60 balas) */
+    map.tiles[5][7] = 'G';
+    map_reset_weapon_pickups();
+    ASSERT_TRUE(map_is_wall(&map, 7, 5) == 0 && map_is_weapon_pickup_active_at(&map, 7, 5) == 1,
+                "Caractere de arma no mapa ('G') e atravessavel e ativo");
+    p.x = 7.5f;
+    p.y = 5.5f;
+    enemies_update(&mgr, &map, &p, 0.05f);
+    ASSERT_TRUE(map_is_weapon_pickup_active_at(&map, 7, 5) == 0 &&
+                p.weapon_owned[WEAPON_SHOTGUN] == 1 &&
+                (p.weapon_mag[WEAPON_SHOTGUN] + p.weapon_reserve[WEAPON_SHOTGUN]) == 60,
+                "Pickup 'G' no mapa concede Shotgun com 10x o carregador (60 balas)");
+
+    /* Coletar arma que ja possui apenas adiciona municao na reserva */
+    int res_before = p.weapon_reserve[WEAPON_SHOTGUN];
+    ASSERT_TRUE(player_pickup_weapon(&p, WEAPON_SHOTGUN, 12) == 2 &&
+                p.weapon_reserve[WEAPON_SHOTGUN] == res_before + 12,
+                "Pegar arma ja presente no inventario apenas adiciona municao");
+
+    /* Arma Futurista dispara orbe teleguiado que acerta inimigo */
+    clear_test_arena(&map);
+    map.tiles[5][7] = 'Z';
+    enemies_spawn_wave(&mgr, &map, &p);
+    player_init(&p, 2.5f, 5.5f, 0.0f);
+    player_pickup_weapon(&p, WEAPON_FUTURISTIC, 40);
+    player_switch_weapon(&p, WEAPON_FUTURISTIC);
+    ASSERT_TRUE(enemies_check_hit(&mgr, &map, &p, &weapons[WEAPON_FUTURISTIC]) == 1 &&
+                enemies_player_orb_pool()[0].active == 1,
+                "Arma Futurista dispara orbe teleguiado");
+    for (int step = 0; step < 30; step++) {
+        enemies_update(&mgr, &map, &p, 0.05f);
+    }
+    ASSERT_TRUE(mgr.enemies[0].active == 0,
+                "Orbe teleguiado da Arma Futurista alcanca e elimina o inimigo");
+}
+
 int main(void) {
     printf("============================================================\n");
     printf("          SUITE DE TESTES - SECTOR 404 (404 NF)            \n");
@@ -745,6 +846,7 @@ int main(void) {
     test_guerrilla();
     test_teto_damage_bonus();
     test_medkit_and_traps();
+    test_weapons_inventory_and_drops();
     test_network_udp_loopback();
 
     printf("\n------------------------------------------------------------\n");

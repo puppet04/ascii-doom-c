@@ -1715,7 +1715,11 @@ void renderer_draw_weapon(const Player *player) {
     if (w_cols & 1) w_cols++;
     if (w_rows < 22) w_rows = 22;
 
-    int firing = (player->shoot_timer > 0.12f);
+    int wtype = player->active_weapon;
+    if (wtype < 0 || wtype >= PLAYER_MAX_WEAPONS) wtype = 0;
+    float wep_cd = player_weapon_cooldown(wtype);
+    float shot_elapsed = wep_cd - player->shoot_timer;
+    int firing = (player->shoot_timer > 0.0f && shot_elapsed >= 0.0f && shot_elapsed < 0.11f);
     float bob_sx = (float)r_width / 360.0f;
     float bob_sy = (float)r_height / 180.0f;
     int bob_x = (int)roundf(sinf(player->bob_phase) * 7.5f * walk_amp * bob_sx);
@@ -1727,17 +1731,36 @@ void renderer_draw_weapon(const Player *player) {
 
     AsciiColor bg_black = make_color(0, 0, 0);
 
+    /* Reticulo tatico da Sniper: linhas de mira fina no centro da tela */
+    if (wtype == 2) {
+        int cx = r_width / 2;
+        int cy = r_height / 2;
+        AsciiColor scope_col = make_color(120, 255, 140);
+        for (int d = 3; d <= 9; d++) {
+            set_cell(cx - d, cy, '-', scope_col, bg_black);
+            set_cell(cx + d, cy, '-', scope_col, bg_black);
+        }
+        for (int d = 2; d <= 5; d++) {
+            set_cell(cx, cy - d, '|', scope_col, bg_black);
+            set_cell(cx, cy + d, '|', scope_col, bg_black);
+        }
+        set_cell(cx, cy, '+', make_color(220, 255, 160), bg_black);
+    }
+
     if (firing) {
-        int flash_off = (int)roundf(0.085f * (float)w_cols);
-        int mcx_l = base_x + (w_cols / 2) - 1 - flash_off;
-        int mcx_r = base_x + (w_cols / 2) + flash_off;
-        int mcy = base_y + 2;
-        int rad_x = (w_cols * 18) / 100;
-        int rad_y = (w_rows * 21) / 100;
-        if (rad_x < 6) rad_x = 6;
+        int flash_off = (wtype == 1) ? (int)roundf(0.14f * (float)w_cols)
+                      : (wtype == 4 ? (int)roundf(0.085f * (float)w_cols) : 0);
+        int mcx_c = base_x + (w_cols / 2);
+        int mcy = base_y + (wtype == 0 ? (w_rows * 24) / 100 : 2);
+        int rad_x = (w_cols * (wtype == 1 ? 26 : (wtype == 2 ? 12 : 16))) / 100;
+        int rad_y = (w_rows * (wtype == 1 ? 24 : (wtype == 2 ? 22 : 17))) / 100;
+        if (rad_x < 5) rad_x = 5;
         if (rad_y < 4) rad_y = 4;
-        for (int b = 0; b < 2; b++) {
-            int mcx = (b == 0) ? mcx_l : mcx_r;
+        int barrels = (wtype == 1) ? 3 : (flash_off > 0 ? 2 : 1);
+        for (int b = 0; b < barrels; b++) {
+            int mcx = (wtype == 1)
+                ? (b == 0 ? mcx_c - flash_off : (b == 1 ? mcx_c : mcx_c + flash_off))
+                : (flash_off > 0 ? (b == 0 ? mcx_c - 1 - flash_off : mcx_c + flash_off) : mcx_c);
             for (int dy = -rad_y; dy <= rad_y; dy++) {
                 for (int dx = -rad_x; dx <= rad_x; dx++) {
                     float ex = (float)dx / (float)rad_x;
@@ -1747,9 +1770,14 @@ void renderer_draw_weapon(const Player *player) {
                     if (d < rays * 0.92f) {
                         float f_lum = clamp_f01(1.15f - d);
                         char fch = sample_dense_ramp(f_lum, mcx + dx, mcy + dy);
-                        AsciiColor fcol = (d < 0.42f)
-                            ? scale_rgb(255.0f, 245.0f, 150.0f, 1.0f)
-                            : scale_rgb(255.0f, 130.0f, 38.0f, f_lum + 0.2f);
+                        AsciiColor fcol = (wtype == 4)
+                            ? ((d < 0.42f) ? scale_rgb(200.0f, 255.0f, 255.0f, 1.0f)
+                                           : scale_rgb(130.0f, 95.0f, 255.0f, f_lum + 0.2f))
+                            : (wtype == 2
+                                ? ((d < 0.45f) ? scale_rgb(245.0f, 255.0f, 180.0f, 1.0f)
+                                               : scale_rgb(140.0f, 245.0f, 95.0f, f_lum + 0.2f))
+                                : ((d < 0.42f) ? scale_rgb(255.0f, 245.0f, 150.0f, 1.0f)
+                                               : scale_rgb(255.0f, 130.0f, 38.0f, f_lum + 0.2f)));
                         set_cell(mcx + dx, mcy + dy, fch, fcol, bg_black);
                     }
                 }
@@ -1759,10 +1787,11 @@ void renderer_draw_weapon(const Player *player) {
 
     enum { MAX_WEP_W = 160, MAX_WEP_H = 128 };
     static AsciiCell wep_cache[MAX_WEP_H][MAX_WEP_W];
-    static int wep_c_cols = -1, wep_c_rows = -1, wep_c_firing = -1;
+    static int wep_c_cols = -1, wep_c_rows = -1, wep_c_firing = -1, wep_c_type = -1;
 
     if (w_cols <= MAX_WEP_W && w_rows <= MAX_WEP_H) {
-        if (wep_c_cols != w_cols || wep_c_rows != w_rows || wep_c_firing != firing) {
+        if (wep_c_cols != w_cols || wep_c_rows != w_rows ||
+            wep_c_firing != firing || wep_c_type != wtype) {
             for (int r = 0; r < w_rows; r++) {
                 float v = ((float)r + 0.5f) / (float)w_rows;
                 for (int c = 0; c < w_cols; c++) {
@@ -1771,46 +1800,85 @@ void renderer_draw_weapon(const Player *player) {
                     int part = 0;
                     float nx = 0.0f;
 
-                    if (v >= 0.02f && v < 0.36f) {
-                        float d_left = fabsf(u - 0.415f);
-                        float d_right = fabsf(u - 0.585f);
-                        float b_rad = 0.064f + v * 0.03f;
-                        if (d_left <= b_rad || d_right <= b_rad) {
-                            float d_min = (d_left < d_right) ? (u - 0.415f) : (u - 0.585f);
-                            nx = clamp_f01(fabsf(d_min) / b_rad) * (d_min >= 0.0f ? 1.0f : -1.0f);
-                            part = (v < 0.07f || (v > 0.14f && v < 0.18f)) ? 3 : 1;
-                        } else if (fabsf(u - 0.50f) < 0.026f && v >= 0.11f) {
-                            part = (v < 0.16f) ? 4 : 2;
-                            nx = (u - 0.50f) / 0.026f;
+                    if (wtype == 0) {
+                        /* Pistola: cano unico compacto */
+                        if (v >= 0.24f && v < 0.62f && ax <= 0.17f) {
+                            nx = (u >= 0.5f ? 1.0f : -1.0f) * (ax / 0.17f);
+                            part = (v < 0.30f || ax < 0.05f) ? 3 : 1;
+                        } else if (v >= 0.62f && ax <= 0.22f + (v - 0.62f) * 0.22f) {
+                            nx = (u >= 0.5f ? 1.0f : -1.0f) * (ax / 0.30f);
+                            part = (ax > 0.18f || v > 0.86f) ? 2 : 1;
                         }
-                    } else if (v >= 0.36f && v < 0.62f) {
-                        float hw = 0.23f + (v - 0.36f) * 0.26f;
-                        if (ax <= hw) {
-                            nx = (u >= 0.50f ? 1.0f : -1.0f) * (ax / hw);
-                            if (ax < 0.16f && v >= 0.39f && v <= 0.59f &&
-                                fmodf(v * 24.0f, 1.0f) < 0.55f) {
-                                part = 4;
-                            } else if (ax > hw * 0.55f && ((r % 3) == 0)) {
-                                part = 2;
-                            } else if (ax < 0.24f) {
-                                part = 3;
-                            } else {
-                                part = 1;
+                    } else if (wtype == 2) {
+                        /* Sniper: cano longo e estreito com luneta */
+                        if (v >= 0.01f && v < 0.52f && ax <= 0.08f) {
+                            nx = (u >= 0.5f ? 1.0f : -1.0f) * (ax / 0.08f);
+                            part = (v < 0.06f) ? 3 : 1;
+                        } else if (v >= 0.26f && v < 0.50f && ax > 0.08f && ax <= 0.20f) {
+                            nx = (u >= 0.5f ? 1.0f : -1.0f) * ((ax - 0.08f) / 0.12f);
+                            part = (v > 0.34f && v < 0.42f) ? 4 : 2;
+                        } else if (v >= 0.52f && ax <= 0.22f + (v - 0.52f) * 0.25f) {
+                            nx = (u >= 0.5f ? 1.0f : -1.0f) * (ax / 0.34f);
+                            part = (ax < 0.10f) ? 3 : 1;
+                        }
+                    } else if (wtype == 3) {
+                        /* Metralhadora: chassi largo com tres canos */
+                        if (v >= 0.04f && v < 0.42f) {
+                            float d0 = fabsf(u - 0.40f);
+                            float d1 = fabsf(u - 0.50f);
+                            float d2 = fabsf(u - 0.60f);
+                            float rad = 0.045f;
+                            if (d0 <= rad || d1 <= rad || d2 <= rad) {
+                                part = (v < 0.10f || (r % 5 == 0)) ? 3 : 1;
+                                nx = (d1 <= rad) ? (u - 0.50f) / rad : 0.4f;
                             }
+                        } else if (v >= 0.42f && ax <= 0.34f + (v - 0.42f) * 0.34f) {
+                            nx = (u >= 0.5f ? 1.0f : -1.0f) * (ax / 0.52f);
+                            part = (ax < 0.14f && v < 0.62f) ? 4 : ((ax > 0.32f) ? 2 : 1);
                         }
-                    } else if (v >= 0.62f) {
-                        float hw = 0.30f + (v - 0.62f) * 0.42f;
-                        if (hw > 0.58f) hw = 0.58f;
-                        if (ax <= hw) {
-                            nx = (u >= 0.50f ? 1.0f : -1.0f) * (ax / hw);
-                            if (v < 0.70f && ax > 0.18f && ax < 0.29f) {
-                                part = 3;
-                            } else if (v >= 0.68f && v <= 0.77f && ax < 0.20f) {
-                                part = 4;
-                            } else if (ax > hw * 0.84f || v > 0.88f) {
-                                part = 2;
-                            } else {
-                                part = 1;
+                    } else {
+                        /* Shotgun (cano duplo) e Arma Futurista (canos paralelos + nucleo) */
+                        if (v >= 0.02f && v < 0.36f) {
+                            float d_left = fabsf(u - 0.415f);
+                            float d_right = fabsf(u - 0.585f);
+                            float b_rad = 0.064f + v * 0.03f;
+                            if (d_left <= b_rad || d_right <= b_rad) {
+                                float d_min = (d_left < d_right) ? (u - 0.415f) : (u - 0.585f);
+                                nx = clamp_f01(fabsf(d_min) / b_rad) * (d_min >= 0.0f ? 1.0f : -1.0f);
+                                part = (v < 0.07f || (v > 0.14f && v < 0.18f)) ? 3 : 1;
+                            } else if (fabsf(u - 0.50f) < 0.026f && v >= 0.11f) {
+                                part = (v < 0.16f || wtype == 4) ? 4 : 2;
+                                nx = (u - 0.50f) / 0.026f;
+                            }
+                        } else if (v >= 0.36f && v < 0.62f) {
+                            float hw = 0.23f + (v - 0.36f) * 0.26f;
+                            if (ax <= hw) {
+                                nx = (u >= 0.50f ? 1.0f : -1.0f) * (ax / hw);
+                                if (ax < 0.16f && v >= 0.39f && v <= 0.59f &&
+                                    fmodf(v * 24.0f, 1.0f) < 0.55f) {
+                                    part = 4;
+                                } else if (ax > hw * 0.55f && ((r % 3) == 0)) {
+                                    part = 2;
+                                } else if (ax < 0.24f) {
+                                    part = 3;
+                                } else {
+                                    part = 1;
+                                }
+                            }
+                        } else if (v >= 0.62f) {
+                            float hw = 0.30f + (v - 0.62f) * 0.42f;
+                            if (hw > 0.58f) hw = 0.58f;
+                            if (ax <= hw) {
+                                nx = (u >= 0.50f ? 1.0f : -1.0f) * (ax / hw);
+                                if (v < 0.70f && ax > 0.18f && ax < 0.29f) {
+                                    part = 3;
+                                } else if (v >= 0.68f && v <= 0.77f && ax < 0.20f) {
+                                    part = 4;
+                                } else if (ax > hw * 0.84f || v > 0.88f) {
+                                    part = 2;
+                                } else {
+                                    part = 1;
+                                }
                             }
                         }
                     }
@@ -1823,22 +1891,37 @@ void renderer_draw_weapon(const Player *player) {
                     float cyl = sqrtf(fmaxf(0.14f, 1.0f - nx * nx * 0.85f));
                     char wch;
                     AsciiColor wcol;
+                    float br = 142.0f, bg = 156.0f, bb = 180.0f;
+                    float gr = 95.0f,  gg = 225.0f, gb = 255.0f;
+                    if (wtype == 1) {
+                        br = 185.0f; bg = 128.0f; bb = 88.0f;
+                        gr = 255.0f; gg = 165.0f; gb = 55.0f;
+                    } else if (wtype == 2) {
+                        br = 155.0f; bg = 168.0f; bb = 145.0f;
+                        gr = 185.0f; gg = 255.0f; gb = 95.0f;
+                    } else if (wtype == 3) {
+                        br = 118.0f; bg = 142.0f; bb = 108.0f;
+                        gr = 255.0f; gg = 215.0f; gb = 75.0f;
+                    } else if (wtype == 4) {
+                        br = 115.0f; bg = 148.0f; bb = 215.0f;
+                        gr = 110.0f; gg = 245.0f; gb = 255.0f;
+                    }
                     if (part == 4) {
                         float glow = firing ? 1.25f : 0.96f;
                         wch = '@';
                         wcol = firing ? scale_rgb(255.0f, 195.0f, 65.0f, glow)
-                                      : scale_rgb(95.0f, 225.0f, 255.0f, glow);
+                                      : scale_rgb(gr, gg, gb, glow);
                     } else if (part == 2) {
                         wch = (r % 2 == 0) ? '=' : '+';
-                        wcol = scale_rgb(76.0f, 88.0f, 108.0f, 0.82f);
+                        wcol = scale_rgb(br * 0.55f, bg * 0.55f, bb * 0.58f, 0.82f);
                     } else if (part == 3) {
                         float lum = 0.74f + 0.26f * cyl;
                         wch = sample_dense_ramp(lum, c, r);
-                        wcol = scale_rgb(225.0f, 232.0f, 245.0f, lum);
+                        wcol = scale_rgb(fminf(255.0f, br * 1.45f), fminf(255.0f, bg * 1.45f), fminf(255.0f, bb * 1.38f), lum);
                     } else {
                         float lum = 0.36f + 0.56f * cyl;
                         wch = sample_dense_ramp(lum, c, r);
-                        wcol = scale_rgb(142.0f, 156.0f, 180.0f, lum + 0.16f);
+                        wcol = scale_rgb(br, bg, bb, lum + 0.16f);
                     }
                     wep_cache[r][c] = (AsciiCell){wch, wcol, bg_black};
                 }
@@ -1846,6 +1929,7 @@ void renderer_draw_weapon(const Player *player) {
             wep_c_cols = w_cols;
             wep_c_rows = w_rows;
             wep_c_firing = firing;
+            wep_c_type = wtype;
         }
 
         int r_lo = (base_y < 0) ? -base_y : 0;

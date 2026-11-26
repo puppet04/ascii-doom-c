@@ -74,10 +74,11 @@ void weapons_init_defaults(Weapon out_weapons[MAX_WEAPONS]) {
     }
 
     Weapon list[MAX_WEAPONS] = {
-        {WEAPON_PISTOL,  "Pistola",      25,  0.25f, 1, 10.0f},
-        {WEAPON_SHOTGUN, "Escopeta",     60,  0.65f, 2, 6.5f},
-        {WEAPON_PLASMA,  "Rifle Plasma", 35,  0.14f, 1, 12.0f},
-        {WEAPON_BFG,     "Canhao DOOM",  120, 1.10f, 5, 14.0f}
+        {WEAPON_PISTOL,     "Pistola",        25, 0.28f, 1, 11.0f, 10, 1},
+        {WEAPON_SHOTGUN,    "Shotgun",        70, 0.72f, 1,  7.0f,  6, 0},
+        {WEAPON_SNIPER,     "Sniper",        140, 1.15f, 1, 22.0f,  5, 0},
+        {WEAPON_MACHINEGUN, "Metralhadora",   16, 0.075f,1, 12.5f, 30, 0},
+        {WEAPON_FUTURISTIC, "Arma Futurista", 85, 0.90f, 1, 16.0f,  4, 0}
     };
 
     for (int i = 0; i < MAX_WEAPONS; i++) {
@@ -105,34 +106,44 @@ typedef struct {
 /* Projeteis: flecha 6, bola 3.1 e orbe 2.2; cerca de 40% mais lentos. */
 /* Precision is retained for compatibility with manually configured hitscan enemies. */
 static const EnemyStats ENEMY_STATS[ENEMY_TYPE_COUNT] = {
-    {"Z legado",       'Z',  45, 1.00f,  6, ENEMY_ATTACK_MELEE,      0.85f, 1.80f,  7.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
-    /* Hitscan de medio alcance para diferenciar dos atacantes corpo a corpo. */
-    {"D legado",       'D',  95, 1.50f,  9, ENEMY_ATTACK_HITSCAN,    6.50f, 2.10f, 10.0f, 0.78f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
-    {"I legado",       'I',  65, 2.10f,  7, ENEMY_ATTACK_MELEE,      0.95f, 1.40f,  9.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
-    /* Arma: bola de fogo oscilante de medio alcance e dano moderado. */
-    {"Imp",            'M',  70, 1.20f,  8, ENEMY_ATTACK_PROJECTILE, 8.00f, 1.75f, 10.0f, 0.95f, ENEMY_PROJECTILE_FIREBALL,   ENEMY_PROJECTILE_WAVERING,  3.1f, 0.9f},
+    {"Z legado",       'Z',  40, 1.00f,  5, ENEMY_ATTACK_MELEE,      0.85f, 1.90f,  7.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Metralhadora: hitscan com alta cadencia de tiro, dano leve por disparo. */
+    {"D legado",       'D',  80, 1.45f,  2, ENEMY_ATTACK_HITSCAN,    7.00f, 0.36f, 10.0f, 0.58f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"I legado",       'I',  55, 2.00f,  5, ENEMY_ATTACK_MELEE,      0.95f, 1.50f,  9.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Shotgun: tiro em cone com 3 projeteis. */
+    {"Imp",            'M',  60, 1.15f,  5, ENEMY_ATTACK_PROJECTILE, 7.50f, 2.15f, 10.0f, 0.90f, ENEMY_PROJECTILE_FIREBALL,   ENEMY_PROJECTILE_WAVERING,  3.1f, 0.9f},
     /* Ataque: investida veloz de curta distancia. */
-    {"Pinky",          'Y',  85, 2.40f, 10, ENEMY_ATTACK_MELEE,      1.20f, 1.50f, 10.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"Pinky",          'Y',  75, 2.30f,  8, ENEMY_ATTACK_MELEE,      1.20f, 1.65f, 10.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
     /* Arma: orbe de energia teleguiado, tanque lento de longo alcance. */
-    {"Cacodemon",      'C', 220, 0.90f, 14, ENEMY_ATTACK_PROJECTILE,10.50f, 3.60f, 12.5f, 0.75f, ENEMY_PROJECTILE_ENERGY_ORB, ENEMY_PROJECTILE_HOMING,    2.2f, 1.1f},
+    {"Cacodemon",      'C', 175, 0.85f, 10, ENEMY_ATTACK_PROJECTILE,10.00f, 3.90f, 12.0f, 0.75f, ENEMY_PROJECTILE_ENERGY_ORB, ENEMY_PROJECTILE_HOMING,    2.2f, 1.1f},
     /* Ataque: golpe brutal de maos nuas, muito lento e devastador. */
-    {"Baron of Hell",  'B', 340, 0.75f, 24, ENEMY_ATTACK_MELEE,      1.60f, 4.50f,  9.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"Baron of Hell",  'B', 260, 0.75f, 18, ENEMY_ATTACK_MELEE,      1.60f, 4.50f,  9.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
     /* Arma: sniper fragil com flecha reta veloz e dano alto. */
-    {"Soldado Kushan", 'K',  40, 1.10f, 11, ENEMY_ATTACK_PROJECTILE, 9.50f, 2.40f, 11.5f, 0.90f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  6.0f, 0.0f},
+    {"Soldado Kushan", 'K',  35, 1.10f,  8, ENEMY_ATTACK_PROJECTILE, 9.50f, 2.80f, 11.5f, 0.90f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  6.0f, 0.0f},
     /* Arma: clava pesada; alcance estendido compensa a lentidao extrema. */
-    {"Troll",          'T', 290, 0.70f, 18, ENEMY_ATTACK_MELEE,      2.05f, 4.00f,  8.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"Troll",          'T', 220, 0.70f, 14, ENEMY_ATTACK_MELEE,      2.05f, 4.00f,  8.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
     /* Ataque: sequencia frenetica de garras, dano baixo por golpe e recarga minima. */
-    {"Apostolo",       'A', 120, 2.60f,  5, ENEMY_ATTACK_MELEE,      1.05f, 0.85f,  9.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"Apostolo",       'A',  95, 2.50f,  4, ENEMY_ATTACK_MELEE,      1.05f, 0.95f,  9.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
     /* Ataque: garra de mini-chefe implacavel. */
-    {"Zodd",           'Q', 600, 1.50f, 28, ENEMY_ATTACK_MELEE,      1.90f, 4.80f, 12.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f}
+    {"Zodd",           'Q', 460, 1.45f, 22, ENEMY_ATTACK_MELEE,      1.90f, 4.80f, 12.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f}
 };
 
 static EnemyProjectile enemy_projectiles[MAX_ENEMY_PROJECTILES];
+static WeaponDrop weapon_drops[MAX_WEAPON_DROPS];
+static PlayerOrb player_orbs[MAX_PLAYER_ORBS];
 static float g_fire_damage_acc = 0.0f;
 static float g_fire_burn_timer = 0.0f;
 
 const EnemyProjectile *enemies_projectile_pool(void) {
     return enemy_projectiles;
+}
+
+const WeaponDrop *enemies_weapon_drop_pool(void) {
+    return weapon_drops;
+}
+
+const PlayerOrb *enemies_player_orb_pool(void) {
+    return player_orbs;
 }
 
 int enemies_player_is_burning(void) {
@@ -172,6 +183,8 @@ void enemies_init_defaults(EnemyManager *mgr) {
 
     memset(mgr, 0, sizeof(*mgr));
     memset(enemy_projectiles, 0, sizeof(enemy_projectiles));
+    memset(weapon_drops, 0, sizeof(weapon_drops));
+    memset(player_orbs, 0, sizeof(player_orbs));
     g_fire_damage_acc = 0.0f;
     g_fire_burn_timer = 0.0f;
 }
@@ -255,6 +268,43 @@ void enemies_spawn_wave(EnemyManager *mgr, const GameMap *map, const Player *p) 
     map_set_enemies_alive(enemies_required_alive(mgr));
 }
 
+static int enemy_weapon_drop_type(EnemyType type) {
+    switch (type) {
+        case ENEMY_DOOM_IMP:       return WEAPON_SHOTGUN;
+        case ENEMY_BERSERK_KUSHAN: return WEAPON_SNIPER;
+        case ENEMY_LEGACY_D:       return WEAPON_MACHINEGUN;
+        case ENEMY_DOOM_CACODEMON: return WEAPON_FUTURISTIC;
+        default:                   return -1;
+    }
+}
+
+static void spawn_weapon_drop(int weapon_type, float x, float y) {
+    if (weapon_type <= WEAPON_PISTOL || weapon_type >= MAX_WEAPONS) {
+        return;
+    }
+    int slot = -1;
+    for (int i = 0; i < MAX_WEAPON_DROPS; i++) {
+        if (!weapon_drops[i].active) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        slot = 0;
+    }
+    int mag = player_weapon_mag_size(weapon_type);
+    int min_ammo = (mag + 1) / 2; /* 0.5x carregador (arredondado para cima) */
+    int max_ammo = mag * 3;       /* 3.0x carregador */
+    int span = max_ammo - min_ammo + 1;
+    int ammo = min_ammo + (span > 1 ? (rand() % span) : 0);
+
+    weapon_drops[slot].active = 1;
+    weapon_drops[slot].weapon = (WeaponType)weapon_type;
+    weapon_drops[slot].ammo = ammo;
+    weapon_drops[slot].x = x;
+    weapon_drops[slot].y = y;
+}
+
 static void damage_enemy(Enemy *e, Player *p, int damage) {
     if (!e->active) return;
     e->health -= damage;
@@ -263,11 +313,15 @@ static void damage_enemy(Enemy *e, Player *p, int damage) {
         e->active = 0;
         player_register_kill(p, e->x, e->y);
         e->burn_time = e->burn_tick = 0;
+        int drop_w = enemy_weapon_drop_type(e->type);
+        if (drop_w >= 0) {
+            spawn_weapon_drop(drop_w, e->x, e->y);
+        }
     }
 }
 
-static int enemy_spawn_projectile(const Enemy *enemy, const Player *player,
-                                  const EnemyStats *stats) {
+static int enemy_spawn_projectile_angled(const Enemy *enemy, const Player *player,
+                                         const EnemyStats *stats, float angle_offset) {
     int slot = -1;
     for (int i = 0; i < MAX_ENEMY_PROJECTILES; i++) {
         if (!enemy_projectiles[i].active) {
@@ -282,18 +336,38 @@ static int enemy_spawn_projectile(const Enemy *enemy, const Player *player,
     float distance = sqrtf(dx * dx + dy * dy);
     if (distance < 0.001f) return 0;
 
+    float base_angle = atan2f(dy, dx) + angle_offset;
+    float dir_x = cosf(base_angle);
+    float dir_y = sinf(base_angle);
+
     EnemyProjectile *projectile = &enemy_projectiles[slot];
     projectile->active = 1;
-    projectile->x = enemy->x + dx / distance * 0.35f;
-    projectile->y = enemy->y + dy / distance * 0.35f;
-    projectile->dx = dx / distance;
-    projectile->dy = dy / distance;
+    projectile->x = enemy->x + dir_x * 0.35f;
+    projectile->y = enemy->y + dir_y * 0.35f;
+    projectile->dx = dir_x;
+    projectile->dy = dir_y;
     projectile->speed = stats->projectile_speed;
     projectile->turn_rate = stats->projectile_turn_rate;
     projectile->damage = enemy->damage;
+    projectile->age = 0.0f;
     projectile->kind = stats->projectile_kind;
     projectile->path = stats->projectile_path;
     return 1;
+}
+
+static int enemy_spawn_projectile(const Enemy *enemy, const Player *player,
+                                  const EnemyStats *stats) {
+    if (enemy->type == ENEMY_DOOM_IMP) {
+        /* Shotgun do Imp: tiro em cone (centro primeiro para manter compatibilidade). */
+        int ok = enemy_spawn_projectile_angled(enemy, player, stats, 0.0f);
+        EnemyStats side_stats = *stats;
+        side_stats.projectile_path = ENEMY_PROJECTILE_STRAIGHT;
+        side_stats.projectile_turn_rate = 0.0f;
+        (void)enemy_spawn_projectile_angled(enemy, player, &side_stats, -0.30f);
+        (void)enemy_spawn_projectile_angled(enemy, player, &side_stats, 0.30f);
+        return ok;
+    }
+    return enemy_spawn_projectile_angled(enemy, player, stats, 0.0f);
 }
 
 static void enemy_projectiles_update(const GameMap *map, Player *player, float dt) {
@@ -405,6 +479,11 @@ static void update_map_fire_hazards(const GameMap *map, Player *player, float dt
                 player->health = max_hp;
             }
         }
+        int map_wtype = -1;
+        if (map_try_collect_weapon_pickup(map, cx, cy, &map_wtype) && map_wtype >= 0) {
+            int ammo = player_weapon_mag_size(map_wtype) * 10;
+            player_pickup_weapon(player, map_wtype, ammo);
+        }
     }
 
     if (in_fire) {
@@ -428,13 +507,120 @@ static void update_map_fire_hazards(const GameMap *map, Player *player, float dt
     }
 }
 
+static void weapon_drops_update(Player *player) {
+    if (!player || player->health <= 0) {
+        return;
+    }
+    const float pickup_r2 = 0.65f * 0.65f;
+    for (int i = 0; i < MAX_WEAPON_DROPS; i++) {
+        WeaponDrop *d = &weapon_drops[i];
+        if (!d->active) continue;
+        float dx = player->x - d->x;
+        float dy = player->y - d->y;
+        if (dx * dx + dy * dy <= pickup_r2) {
+            player_pickup_weapon(player, (int)d->weapon, d->ammo);
+            d->active = 0;
+        }
+    }
+}
+
+static int spawn_player_orb(const Player *player, int damage) {
+    if (!player) return 0;
+    int slot = -1;
+    for (int i = 0; i < MAX_PLAYER_ORBS; i++) {
+        if (!player_orbs[i].active) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) slot = 0;
+
+    float dir_x = cosf(player->angle);
+    float dir_y = sinf(player->angle);
+    PlayerOrb *orb = &player_orbs[slot];
+    orb->active = 1;
+    orb->x = player->x + dir_x * 0.35f;
+    orb->y = player->y + dir_y * 0.35f;
+    orb->dx = dir_x;
+    orb->dy = dir_y;
+    orb->speed = 6.2f;
+    orb->turn_rate = 5.0f;
+    orb->damage = damage;
+    orb->age = 0.0f;
+    return 1;
+}
+
+static void player_orbs_update(EnemyManager *mgr, const GameMap *map, Player *player, float dt) {
+    for (int i = 0; i < MAX_PLAYER_ORBS; i++) {
+        PlayerOrb *orb = &player_orbs[i];
+        if (!orb->active) continue;
+
+        int steps = (int)ceilf(orb->speed * dt / 0.08f);
+        if (steps < 1) steps = 1;
+        if (steps > 128) steps = 128;
+        float step_dt = dt / (float)steps;
+
+        for (int step = 0; step < steps && orb->active; step++) {
+            /* Busca o inimigo vivo mais proximo para teleguiar o orbe. */
+            int target_idx = -1;
+            float best_d2 = 15.0f * 15.0f;
+            for (int e_idx = 0; e_idx < mgr->count; e_idx++) {
+                const Enemy *e = &mgr->enemies[e_idx];
+                if (!e->active) continue;
+                float edx = e->x - orb->x;
+                float edy = e->y - orb->y;
+                float d2 = edx * edx + edy * edy;
+                if (d2 < best_d2 && has_line_of_sight(map, orb->x, orb->y, e->x, e->y)) {
+                    best_d2 = d2;
+                    target_idx = e_idx;
+                }
+            }
+            if (target_idx >= 0) {
+                const Enemy *t = &mgr->enemies[target_idx];
+                float target_angle = atan2f(t->y - orb->y, t->x - orb->x);
+                float cur_angle = atan2f(orb->dy, orb->dx);
+                float delta = wrap_angle(target_angle - cur_angle);
+                float max_turn = orb->turn_rate * step_dt;
+                if (delta > max_turn) delta = max_turn;
+                if (delta < -max_turn) delta = -max_turn;
+                float next_angle = cur_angle + delta;
+                orb->dx = cosf(next_angle);
+                orb->dy = sinf(next_angle);
+            }
+
+            orb->x += orb->dx * orb->speed * step_dt;
+            orb->y += orb->dy * orb->speed * step_dt;
+            orb->age += step_dt;
+
+            if (projectile_hits_wall(map, orb->x, orb->y, orb->dx, orb->dy) || orb->age >= 8.0f) {
+                orb->active = 0;
+                break;
+            }
+
+            for (int e_idx = 0; e_idx < mgr->count; e_idx++) {
+                Enemy *e = &mgr->enemies[e_idx];
+                if (!e->active) continue;
+                float edx = e->x - orb->x;
+                float edy = e->y - orb->y;
+                if (edx * edx + edy * edy <= 0.42f * 0.42f) {
+                    damage_enemy(e, player, orb->damage);
+                    orb->active = 0;
+                    break;
+                }
+            }
+        }
+    }
+}
+
 void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float dt) {
     if (!mgr || !map || !player || dt <= 0.0f || player->health <= 0) {
         return;
     }
 
     enemy_projectiles_update(map, player, dt);
+    player_orbs_update(mgr, map, player, dt);
     update_map_fire_hazards(map, player, dt);
+    weapon_drops_update(player);
 
     for (int i = 0; i < mgr->count; i++) {
         Enemy *e = &mgr->enemies[i];
@@ -567,11 +753,40 @@ int enemies_check_hit(EnemyManager *mgr, const GameMap *map,
         return 0;
     }
 
-    int best_idx = -1;
     int multiplier = player->ability == ABILITY_GUERRILLA && player->ability_state.boosted_shot ? 2 : 1;
     player->ability_state.boosted_shot = 0; /* Consumido mesmo se o tiro errar. */
     int berserk = player->ability_state.berserk_time > 0;
+
+    if (!berserk && weapon->type == WEAPON_FUTURISTIC) {
+        int orb_dmg = player_attack_damage(player, weapon->damage) * multiplier;
+        return spawn_player_orb(player, orb_dmg);
+    }
+
+    if (!berserk && weapon->type == WEAPON_SHOTGUN) {
+        /* Shotgun: tiro em cone que acerta todos os inimigos na area de dispersao. */
+        int hits = 0;
+        int dmg = player_attack_damage(player, weapon->damage) * multiplier;
+        for (int i = 0; i < mgr->count; i++) {
+            Enemy *e = &mgr->enemies[i];
+            if (!e->active) continue;
+            float dx = e->x - player->x;
+            float dy = e->y - player->y;
+            float dist = sqrtf(dx * dx + dy * dy);
+            if (dist > weapon->range) continue;
+            float aim_diff = fabsf(wrap_angle(atan2f(dy, dx) - player->angle));
+            if (aim_diff < 0.42f && has_line_of_sight(map, player->x, player->y, e->x, e->y)) {
+                damage_enemy(e, player, dmg);
+                hits++;
+            }
+        }
+        return hits > 0 ? 1 : 0;
+    }
+
+    int best_idx = -1;
     float best_dist = berserk ? 1.5f : weapon->range;
+    float aim_limit = berserk ? 0.45f
+                    : (weapon->type == WEAPON_SNIPER ? 0.07f
+                    : (weapon->type == WEAPON_MACHINEGUN ? 0.14f : 0.12f));
 
     for (int i = 0; i < mgr->count; i++) {
         Enemy *e = &mgr->enemies[i];
@@ -587,7 +802,7 @@ int enemies_check_hit(EnemyManager *mgr, const GameMap *map,
         }
 
         float aim_diff = fabsf(wrap_angle(atan2f(dy, dx) - player->angle));
-        if (aim_diff < (berserk ? 0.45f : 0.12f) && has_line_of_sight(map, player->x, player->y, e->x, e->y)) {
+        if (aim_diff < aim_limit && has_line_of_sight(map, player->x, player->y, e->x, e->y)) {
             best_dist = dist;
             best_idx = i;
         }
@@ -1431,6 +1646,65 @@ static void entities_draw_shadow_flame(const Player *p, const RendererApi *r,
     }
 }
 
+typedef struct {
+    int weapon_type;
+    const RendererApi *api;
+} DropRenderCtx;
+
+static int weapon_drop_sampler(float u, float v, int sx, int sy,
+                               int sprite_w, int sprite_h,
+                               float dist, float fog, float time_now,
+                               const void *user_data,
+                               char *out_ch, AsciiColor *out_col) {
+    (void)sprite_w;
+    (void)sprite_h;
+    (void)dist;
+    const DropRenderCtx *ctx = (const DropRenderCtx *)user_data;
+    if (!ctx || !ctx->api) return 0;
+    return map_sample_weapon_pickup_sprite(ctx->weapon_type, u, v, sx, sy,
+                                           fog, time_now, ctx->api, out_ch, out_col);
+}
+
+static void entities_render_drops_and_orbs(const Player *player, const RendererApi *r) {
+    /* Orbes teleguiados disparados pela Arma Futurista do jogador (com rastro de plasma) */
+    for (int i = 0; i < MAX_PLAYER_ORBS; i++) {
+        const PlayerOrb *orb = &player_orbs[i];
+        if (!orb->active) continue;
+        for (int t = 3; t >= 1; t--) {
+            float lag = (float)t * 0.14f;
+            r->draw_world_orb(player, orb->x - orb->dx * lag, orb->y - orb->dy * lag, 0.45f,
+                              0.075f - (float)t * 0.015f, 2, 10,
+                              '*', (AsciiColor){120, 215, 255},
+                              '.', (AsciiColor){150, 95, 255},
+                              0.52f);
+        }
+        r->draw_world_orb(player, orb->x, orb->y, 0.45f,
+                          0.115f, 3, 18,
+                          '@', (AsciiColor){210, 255, 255},
+                          '*', (AsciiColor){95, 165, 255},
+                          0.62f);
+    }
+
+    /* Armas derrubadas no chao por inimigos derrotados (mesma textura do mapa) */
+    for (int i = 0; i < MAX_WEAPON_DROPS; i++) {
+        const WeaponDrop *d = &weapon_drops[i];
+        if (!d->active) continue;
+        RenderSpriteSpec spec;
+        spec.world_x = d->x;
+        spec.world_y = d->y;
+        spec.height_scale = 0.34f / 0.78f;
+        spec.width_ratio = 1.95f;
+        spec.min_w = 10;
+        spec.min_h = 5;
+        spec.min_fog = 0.45f;
+
+        DropRenderCtx dctx;
+        dctx.weapon_type = (int)d->weapon;
+        dctx.api = r;
+        r->draw_world_sprite(player, &spec, weapon_drop_sampler, &dctx);
+    }
+}
+
 void entities_render(const EnemyManager *mgr, const Player *player, const RendererApi *r) {
     if (!mgr || !player || !r) {
         return;
@@ -1531,17 +1805,31 @@ void entities_render(const EnemyManager *mgr, const Player *player, const Render
                                                  : (AsciiColor){220, 115, 30},
                                       black);
             }
+        } else if (projectile->kind == ENEMY_PROJECTILE_FIREBALL) {
+            /* Chumbinhos metalicos da Shotgun do Imp (sem aparencia de bola de fogo) */
+            int sx, sy;
+            float depth;
+            if (r->project_point(player, projectile->x, projectile->y, 0.44f,
+                                 &sx, &sy, &depth)) {
+                AsciiColor core = {255, 248, 195};
+                AsciiColor steel = {175, 185, 198};
+                AsciiColor smoke = {115, 122, 132};
+                r->set_cell_if_closer(sx, sy, depth, 'o', core, black);
+                r->set_cell_if_closer(sx - 1, sy, depth, '*', steel, black);
+                r->set_cell_if_closer(sx + 1, sy, depth, '*', steel, black);
+                r->set_cell_if_closer(sx, sy - 1, depth, '.', smoke, black);
+                r->set_cell_if_closer(sx, sy + 1, depth, '.', smoke, black);
+            }
         } else {
-            int is_fb = (projectile->kind == ENEMY_PROJECTILE_FIREBALL);
             r->draw_world_orb(player, projectile->x, projectile->y, 0.46f,
-                              is_fb ? 0.10f : 0.09f, 3, 16,
-                              is_fb ? '@' : 'O',
-                              is_fb ? (AsciiColor){255, 180, 45} : (AsciiColor){155, 255, 255},
-                              '*',
-                              is_fb ? (AsciiColor){255, 55, 10} : (AsciiColor){20, 150, 255},
+                              0.095f, 3, 16,
+                              'O', (AsciiColor){155, 255, 255},
+                              '*', (AsciiColor){20, 150, 255},
                               0.55f);
         }
     }
+
+    entities_render_drops_and_orbs(player, r);
 
     /* Chamas de queimadura (burn DOT do Arauto) renderizadas via RendererApi */
     float burn_now = r->get_time();

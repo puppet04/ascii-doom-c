@@ -520,6 +520,9 @@ void player_tick_ability(Player *p, float dt) {
         s->guerrilla_time = fminf(GUERRILLA_CHARGE_TIME, s->guerrilla_time + dt);
     s->cooldown = fmaxf(0, s->cooldown - dt);
     s->zone_time = fmaxf(0, s->zone_time - dt);
+    if (p->hurt_timer > 0.0f) {
+        p->hurt_timer = fmaxf(0.0f, p->hurt_timer - dt);
+    }
     if (s->berserk_time > 0) {
         s->berserk_time = fmaxf(0, s->berserk_time - dt);
         if (s->berserk_time == 0) {
@@ -587,6 +590,130 @@ void player_take_damage(Player *p, int damage) {
     p->ability_state.guerrilla_time = 0;
     if (p->ability_state.berserk_time > 0) damage *= 2;
     p->health = p->health > damage ? p->health - damage : 0;
+    p->hurt_timer = 0.35f;
+    p->last_damage = damage;
+}
+
+int player_weapon_mag_size(int weapon_type) {
+    switch (weapon_type) {
+        case 0: return 10; /* Pistola */
+        case 1: return 6;  /* Shotgun */
+        case 2: return 5;  /* Sniper */
+        case 3: return 30; /* Metralhadora */
+        case 4: return 4;  /* Arma Futurista */
+        default: return 10;
+    }
+}
+
+float player_weapon_cooldown(int weapon_type) {
+    switch (weapon_type) {
+        case 0: return 0.28f; /* Pistola */
+        case 1: return 0.72f; /* Shotgun */
+        case 2: return 1.15f; /* Sniper */
+        case 3: return 0.075f;/* Metralhadora (altissima cadencia) */
+        case 4: return 0.90f; /* Arma Futurista */
+        default: return FIRE_COOLDOWN;
+    }
+}
+
+const char *player_weapon_name(int weapon_type) {
+    switch (weapon_type) {
+        case 0: return "PISTOLA";
+        case 1: return "SHOTGUN";
+        case 2: return "SNIPER";
+        case 3: return "METRALH";
+        case 4: return "FUTURIST";
+        default: return "PISTOLA";
+    }
+}
+
+int player_weapon_has_infinite_reserve(int weapon_type) {
+    return weapon_type == 0;
+}
+
+int player_pickup_weapon(Player *p, int weapon_type, int ammo_amount) {
+    if (!p || weapon_type < 0 || weapon_type >= PLAYER_MAX_WEAPONS || ammo_amount <= 0) {
+        return 0;
+    }
+    int mag = player_weapon_mag_size(weapon_type);
+    if (!p->weapon_owned[weapon_type]) {
+        p->weapon_owned[weapon_type] = 1;
+        int load = ammo_amount < mag ? ammo_amount : mag;
+        p->weapon_mag[weapon_type] = load;
+        if (!player_weapon_has_infinite_reserve(weapon_type)) {
+            p->weapon_reserve[weapon_type] += ammo_amount - load;
+        }
+        if (p->active_weapon == weapon_type) {
+            p->ammo = p->weapon_mag[weapon_type];
+        }
+        return 1;
+    }
+    if (!player_weapon_has_infinite_reserve(weapon_type)) {
+        p->weapon_reserve[weapon_type] += ammo_amount;
+    }
+    return 2;
+}
+
+int player_reload(Player *p) {
+    if (!p || p->health <= 0 || p->ability_state.berserk_time > 0.0f) {
+        return 0;
+    }
+    int w = p->active_weapon;
+    if (w < 0 || w >= PLAYER_MAX_WEAPONS || !p->weapon_owned[w]) {
+        return 0;
+    }
+    int mag = player_weapon_mag_size(w);
+    if (p->weapon_mag[w] >= mag) {
+        p->ammo = p->weapon_mag[w];
+        return 0;
+    }
+    if (player_weapon_has_infinite_reserve(w)) {
+        p->weapon_mag[w] = mag;
+        p->ammo = mag;
+        return 1;
+    }
+    int need = mag - p->weapon_mag[w];
+    if (p->weapon_reserve[w] <= 0) {
+        return 0;
+    }
+    int take = p->weapon_reserve[w] < need ? p->weapon_reserve[w] : need;
+    p->weapon_mag[w] += take;
+    p->weapon_reserve[w] -= take;
+    p->ammo = p->weapon_mag[w];
+    return 1;
+}
+
+int player_switch_weapon(Player *p, int weapon_type) {
+    if (!p || p->ability_state.berserk_time > 0.0f) {
+        return 0;
+    }
+    if (weapon_type < 0 || weapon_type >= PLAYER_MAX_WEAPONS || !p->weapon_owned[weapon_type]) {
+        return 0;
+    }
+    p->active_weapon = weapon_type;
+    p->ammo = p->weapon_mag[weapon_type];
+    return 1;
+}
+
+int player_cycle_weapon(Player *p, int dir) {
+    if (!p || p->ability_state.berserk_time > 0.0f) {
+        return 0;
+    }
+    int step = (dir < 0) ? -1 : 1;
+    int cur = p->active_weapon;
+    if (cur < 0 || cur >= PLAYER_MAX_WEAPONS) {
+        cur = 0;
+    }
+    for (int i = 1; i < PLAYER_MAX_WEAPONS; i++) {
+        int cand = (cur + step * i) % PLAYER_MAX_WEAPONS;
+        if (cand < 0) cand += PLAYER_MAX_WEAPONS;
+        if (p->weapon_owned[cand]) {
+            p->active_weapon = cand;
+            p->ammo = p->weapon_mag[cand];
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int player_begin_attack(Player *p) {
@@ -596,11 +723,19 @@ int player_begin_attack(Player *p) {
         return 1;
     }
     if (p->ammo <= 0) return 0;
+    int w = p->active_weapon;
+    if (w < 0 || w >= PLAYER_MAX_WEAPONS) w = 0;
+    if (p->weapon_mag[w] <= 0) {
+        int mag = player_weapon_mag_size(w);
+        p->weapon_mag[w] = p->ammo > mag ? mag : p->ammo;
+    }
+    if (p->weapon_mag[w] <= 0) return 0;
     p->ability_state.boosted_shot = p->ability == ABILITY_GUERRILLA &&
         p->ability_state.guerrilla_time >= GUERRILLA_CHARGE_TIME;
     if (p->ability_state.boosted_shot) p->ability_state.guerrilla_time = 0;
-    p->ammo--;
-    p->shoot_timer = FIRE_COOLDOWN;
+    p->weapon_mag[w]--;
+    p->ammo = p->weapon_mag[w];
+    p->shoot_timer = player_weapon_cooldown(w);
     return 1;
 }
 
@@ -672,6 +807,12 @@ void player_apply_class(Player *p, const CharacterClass *cls) {
         ? cls->visual_id : PRESET_FUZILEIRO;
     p->max_health = (cls->max_health > 0) ? cls->max_health : PLAYER_MAX_HEALTH;
     p->health = p->max_health;
+    memset(p->weapon_owned, 0, sizeof(p->weapon_owned));
+    memset(p->weapon_mag, 0, sizeof(p->weapon_mag));
+    memset(p->weapon_reserve, 0, sizeof(p->weapon_reserve));
+    p->weapon_owned[0] = 1;
+    p->weapon_mag[0] = player_weapon_mag_size(0);
+    p->weapon_reserve[0] = 0;
     p->ammo = (cls->start_ammo > 0) ? cls->start_ammo : 30;
     p->move_speed = (cls->move_speed > 0.5f) ? cls->move_speed : MOVE_SPEED;
     p->active_weapon = cls->start_weapon;
@@ -690,6 +831,8 @@ void player_init(Player *p, float x, float y, float angle) {
     p->score = 0;
     p->bob_phase = 0.0f;
     p->shoot_timer = 0.0f;
+    p->hurt_timer = 0.0f;
+    p->last_damage = 0;
 
     CharacterClass base_cls = player_get_preset_class(PRESET_FUZILEIRO);
     player_apply_class(p, &base_cls);
@@ -782,8 +925,8 @@ void player_handle_input(Player *p, const GameMap *map, float dt,
     }
 
     /* Recarregar municao */
-    if (IsKeyPressed(KEY_R) && p->ammo < 30) {
-        p->ammo = 30;
+    if (IsKeyPressed(KEY_R)) {
+        player_reload(p);
     }
 
     /* Disparo com clique esquerdo ou Espaco, limitado por FIRE_COOLDOWN (dt) */
@@ -942,12 +1085,28 @@ void player_get_weapon_hud_info(const Player *p, PlayerWeaponHudInfo *out) {
         return;
     }
     memset(out, 0, sizeof(*out));
-    if (p && p->ability_state.berserk_time > 0.0f) {
+    if (!p) {
+        return;
+    }
+    if (p->ability_state.berserk_time > 0.0f) {
         out->custom = 1;
         snprintf(out->label, sizeof(out->label), "ESPADA");
         snprintf(out->value, sizeof(out->value), "1.5m");
         out->bar_ratio = 1.0f - fminf(1.0f, p->shoot_timer / 0.60f);
+        return;
     }
+    int w = p->active_weapon;
+    if (w < 0 || w >= PLAYER_MAX_WEAPONS) w = 0;
+    int mag = player_weapon_mag_size(w);
+    int cur = p->weapon_mag[w];
+    out->custom = 1;
+    snprintf(out->label, sizeof(out->label), "%s", player_weapon_name(w));
+    if (player_weapon_has_infinite_reserve(w)) {
+        snprintf(out->value, sizeof(out->value), "%02d/INF", cur);
+    } else {
+        snprintf(out->value, sizeof(out->value), "%02d/%03d", cur, p->weapon_reserve[w]);
+    }
+    out->bar_ratio = mag > 0 ? (float)cur / (float)mag : 0.0f;
 }
 
 void player_draw_ability_hud(const Player *p, int screen_w, int screen_h) {
