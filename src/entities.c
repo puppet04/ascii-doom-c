@@ -74,11 +74,11 @@ void weapons_init_defaults(Weapon out_weapons[MAX_WEAPONS]) {
     }
 
     Weapon list[MAX_WEAPONS] = {
-        {WEAPON_PISTOL,     "Pistola",        25, 0.28f, 1, 11.0f, 10, 1},
-        {WEAPON_SHOTGUN,    "Shotgun",        70, 0.72f, 1,  7.0f,  6, 0},
-        {WEAPON_SNIPER,     "Sniper",        140, 1.15f, 1, 22.0f,  5, 0},
-        {WEAPON_MACHINEGUN, "Metralhadora",   16, 0.075f,1, 12.5f, 30, 0},
-        {WEAPON_FUTURISTIC, "Arma Futurista", 85, 0.90f, 1, 16.0f,  4, 0}
+        {WEAPON_PISTOL,     "Pistola",        25, 0.28f, 1,  5.8f, 10, 1},
+        {WEAPON_SHOTGUN,    "Shotgun",        70, 0.72f, 1,  3.8f,  6, 0},
+        {WEAPON_SNIPER,     "Sniper",        140, 1.50f, 1, 22.0f,  5, 0},
+        {WEAPON_MACHINEGUN, "Metralhadora",   16, 0.075f,1,  6.8f, 30, 0},
+        {WEAPON_FUTURISTIC, "Arma Futurista", 85, 0.90f, 1,  7.5f,  4, 0}
     };
 
     for (int i = 0; i < MAX_WEAPONS; i++) {
@@ -107,19 +107,19 @@ typedef struct {
 /* Precision is retained for compatibility with manually configured hitscan enemies. */
 static const EnemyStats ENEMY_STATS[ENEMY_TYPE_COUNT] = {
     {"Z legado",       'Z',  40, 1.00f,  5, ENEMY_ATTACK_MELEE,      0.85f, 1.90f,  7.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
-    /* Metralhadora: hitscan com alta cadencia de tiro, dano leve por disparo. */
-    {"D legado",       'D',  80, 1.45f,  2, ENEMY_ATTACK_HITSCAN,    7.00f, 0.36f, 10.0f, 0.58f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
-    {"I legado",       'I',  55, 2.00f,  5, ENEMY_ATTACK_MELEE,      0.95f, 1.50f,  9.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
-    /* Shotgun: tiro em cone com 3 projeteis. */
-    {"Imp",            'M',  60, 1.15f,  5, ENEMY_ATTACK_PROJECTILE, 7.50f, 2.15f, 10.0f, 0.90f, ENEMY_PROJECTILE_FIREBALL,   ENEMY_PROJECTILE_WAVERING,  3.1f, 0.9f},
+    /* Metralhadora: hitscan com alta cadencia de tiro, dano leve por disparo (alcance 6.8m). */
+    {"D legado",       'D',  80, 1.45f,  2, ENEMY_ATTACK_HITSCAN,    6.80f, 0.36f, 12.0f, 0.58f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"I legado",       'I',  55, 2.00f,  5, ENEMY_ATTACK_MELEE,      0.95f, 1.50f, 10.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Shotgun: aproxima ate o alcance da shotgun (3.8m) e dispara cone de 3 chumbinhos. */
+    {"Imp",            'M',  60, 1.40f,  5, ENEMY_ATTACK_PROJECTILE, 3.80f, 2.15f, 11.0f, 0.90f, ENEMY_PROJECTILE_FIREBALL,   ENEMY_PROJECTILE_WAVERING,  3.1f, 0.9f},
     /* Ataque: investida veloz de curta distancia. */
-    {"Pinky",          'Y',  75, 2.30f,  8, ENEMY_ATTACK_MELEE,      1.20f, 1.65f, 10.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
-    /* Arma: orbe de energia teleguiado, tanque lento de longo alcance. */
-    {"Cacodemon",      'C', 175, 0.85f, 10, ENEMY_ATTACK_PROJECTILE,10.00f, 3.90f, 12.0f, 0.75f, ENEMY_PROJECTILE_ENERGY_ORB, ENEMY_PROJECTILE_HOMING,    2.2f, 1.1f},
+    {"Pinky",          'Y',  75, 2.30f,  8, ENEMY_ATTACK_MELEE,      1.20f, 1.65f, 11.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Arma Futurista: orbe de energia teleguiado (alcance 7.5m). */
+    {"Cacodemon",      'C', 175, 1.00f, 10, ENEMY_ATTACK_PROJECTILE, 7.50f, 3.90f, 13.0f, 0.75f, ENEMY_PROJECTILE_ENERGY_ORB, ENEMY_PROJECTILE_HOMING,    2.2f, 1.1f},
     /* Ataque: golpe brutal de maos nuas, muito lento e devastador. */
-    {"Baron of Hell",  'B', 260, 0.75f, 18, ENEMY_ATTACK_MELEE,      1.60f, 4.50f,  9.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
-    /* Arma: sniper fragil com flecha reta veloz e dano alto. */
-    {"Soldado Kushan", 'K',  35, 1.10f,  8, ENEMY_ATTACK_PROJECTILE, 9.50f, 2.80f, 11.5f, 0.90f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  6.0f, 0.0f},
+    {"Baron of Hell",  'B', 260, 0.75f, 18, ENEMY_ATTACK_MELEE,      1.60f, 4.50f, 10.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Sniper: longo alcance com tiro reto veloz (alcance 14.0m). */
+    {"Soldado Kushan", 'K',  35, 1.10f,  8, ENEMY_ATTACK_PROJECTILE,14.00f, 2.80f, 18.0f, 0.90f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  6.0f, 0.0f},
     /* Arma: clava pesada; alcance estendido compensa a lentidao extrema. */
     {"Troll",          'T', 220, 0.70f, 14, ENEMY_ATTACK_MELEE,      2.05f, 4.00f,  8.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
     /* Ataque: sequencia frenetica de garras, dano baixo por golpe e recarga minima. */
@@ -563,7 +563,7 @@ static void player_orbs_update(EnemyManager *mgr, const GameMap *map, Player *pl
         for (int step = 0; step < steps && orb->active; step++) {
             /* Busca o inimigo vivo mais proximo para teleguiar o orbe. */
             int target_idx = -1;
-            float best_d2 = 15.0f * 15.0f;
+            float best_d2 = 7.5f * 7.5f;
             for (int e_idx = 0; e_idx < mgr->count; e_idx++) {
                 const Enemy *e = &mgr->enemies[e_idx];
                 if (!e->active) continue;
@@ -592,7 +592,7 @@ static void player_orbs_update(EnemyManager *mgr, const GameMap *map, Player *pl
             orb->y += orb->dy * orb->speed * step_dt;
             orb->age += step_dt;
 
-            if (projectile_hits_wall(map, orb->x, orb->y, orb->dx, orb->dy) || orb->age >= 8.0f) {
+            if (projectile_hits_wall(map, orb->x, orb->y, orb->dx, orb->dy) || orb->age >= 1.25f) {
                 orb->active = 0;
                 break;
             }
@@ -612,6 +612,48 @@ static void player_orbs_update(EnemyManager *mgr, const GameMap *map, Player *pl
     }
 }
 
+static void enemy_build_flow_field(const GameMap *map, int goal_x, int goal_y,
+                                   int dist_grid[MAP_HEIGHT][MAP_WIDTH]) {
+    for (int y = 0; y < MAP_HEIGHT; y++) {
+        for (int x = 0; x < MAP_WIDTH; x++) {
+            dist_grid[y][x] = -1;
+        }
+    }
+    if (!map || goal_x < 0 || goal_y < 0 || goal_x >= map->width || goal_y >= map->height) {
+        return;
+    }
+    if (map_is_wall(map, goal_x, goal_y)) {
+        return;
+    }
+
+    int qx[MAP_WIDTH * MAP_HEIGHT];
+    int qy[MAP_WIDTH * MAP_HEIGHT];
+    int head = 0, tail = 0;
+    dist_grid[goal_y][goal_x] = 0;
+    qx[tail] = goal_x;
+    qy[tail] = goal_y;
+    tail++;
+
+    static const int dirs[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    while (head < tail) {
+        int cx = qx[head];
+        int cy = qy[head];
+        head++;
+        int nd = dist_grid[cy][cx] + 1;
+        for (int d = 0; d < 4; d++) {
+            int nx = cx + dirs[d][0];
+            int ny = cy + dirs[d][1];
+            if (nx < 0 || ny < 0 || nx >= map->width || ny >= map->height) continue;
+            if (dist_grid[ny][nx] >= 0) continue;
+            if (map_is_wall(map, nx, ny)) continue;
+            dist_grid[ny][nx] = nd;
+            qx[tail] = nx;
+            qy[tail] = ny;
+            tail++;
+        }
+    }
+}
+
 void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float dt) {
     if (!mgr || !map || !player || dt <= 0.0f || player->health <= 0) {
         return;
@@ -621,6 +663,9 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
     player_orbs_update(mgr, map, player, dt);
     update_map_fire_hazards(map, player, dt);
     weapon_drops_update(player);
+
+    int flow_dist[MAP_HEIGHT][MAP_WIDTH];
+    enemy_build_flow_field(map, (int)floorf(player->x), (int)floorf(player->y), flow_dist);
 
     for (int i = 0; i < mgr->count; i++) {
         Enemy *e = &mgr->enemies[i];
@@ -653,9 +698,10 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
         float dx = player->x - e->x;
         float dy = player->y - e->y;
         float dist = sqrtf(dx * dx + dy * dy);
+        int can_see = has_line_of_sight(map, player->x, player->y, e->x, e->y);
         float preferred_distance = (e->attack_kind == ENEMY_ATTACK_HITSCAN ||
                                     e->attack_kind == ENEMY_ATTACK_PROJECTILE)
-            ? attack_range * 0.8f : attack_range;
+            ? attack_range * 0.75f : attack_range * 0.90f;
 
         float sep_x = 0.0f;
         float sep_y = 0.0f;
@@ -682,15 +728,89 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
 
         float vx = sep_x * 1.6f * dt;
         float vy = sep_y * 1.6f * dt;
-        if (dist > preferred_distance && dist < aggro_range) {
+        float slide_dir_x = dx;
+        float slide_dir_y = dy;
+        if (dist < aggro_range && (dist > preferred_distance || !can_see)) {
             float move_speed = e->speed;
             if ((e->type == ENEMY_DOOM_PINKY || e->type == ENEMY_BERSERK_APOSTLE) &&
                 dist <= 3.2f) {
                 move_speed *= e->type == ENEMY_DOOM_PINKY ? 2.2f : 1.9f;
             }
-            float step = fminf(move_speed * dt, dist - preferred_distance);
-            vx += (dx / dist) * step;
-            vy += (dy / dist) * step;
+
+            float steer_x = dx;
+            float steer_y = dy;
+            int direct_clear = can_see && dist > 0.001f &&
+                enemy_can_occupy(map, e->x + (dx / dist) * 0.32f, e->y + (dy / dist) * 0.32f);
+
+            /* Pathfinding BFS (flow-field): contorna paredes, pilares e portas sem enroscar. */
+            if (!direct_clear) {
+                int ex = (int)floorf(e->x);
+                int ey = (int)floorf(e->y);
+                int best_d = (ex >= 0 && ey >= 0 && ex < map->width && ey < map->height &&
+                              flow_dist[ey][ex] >= 0) ? flow_dist[ey][ex] : 999999;
+                int best_nx = ex;
+                int best_ny = ey;
+                static const int nbrs[8][2] = {
+                    {1, 0}, {-1, 0}, {0, 1}, {0, -1},
+                    {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
+                };
+                for (int k = 0; k < 8; k++) {
+                    int ox = nbrs[k][0];
+                    int oy = nbrs[k][1];
+                    int nx = ex + ox;
+                    int ny = ey + oy;
+                    if (nx < 0 || ny < 0 || nx >= map->width || ny >= map->height) continue;
+                    int dval = flow_dist[ny][nx];
+                    if (dval < 0) continue;
+                    /* Diagonal so e permitida se ambos os lados cardinais estiverem livres (evita quinas). */
+                    if (ox != 0 && oy != 0) {
+                        if (map_is_wall(map, ex + ox, ey) || map_is_wall(map, ex, ey + oy)) {
+                            continue;
+                        }
+                    }
+                    if (dval < best_d) {
+                        best_d = dval;
+                        best_nx = nx;
+                        best_ny = ny;
+                    }
+                }
+                if (best_nx != ex || best_ny != ey) {
+                    float wx = (float)best_nx + 0.5f;
+                    float wy = (float)best_ny + 0.5f;
+                    /* Se for virar uma quina, centraliza no tile atual antes de cruzar para nao raspar. */
+                    if (best_nx != ex && best_ny == ey && fabsf(e->y - ((float)ey + 0.5f)) > 0.24f) {
+                        wx = (float)ex + 0.5f;
+                        wy = (float)ey + 0.5f;
+                    } else if (best_ny != ey && best_nx == ex && fabsf(e->x - ((float)ex + 0.5f)) > 0.24f) {
+                        wx = (float)ex + 0.5f;
+                        wy = (float)ey + 0.5f;
+                    }
+                    steer_x = wx - e->x;
+                    steer_y = wy - e->y;
+                }
+            }
+
+            slide_dir_x = steer_x;
+            slide_dir_y = steer_y;
+
+            float steer_len = sqrtf(steer_x * steer_x + steer_y * steer_y);
+            if (steer_len > 0.001f) {
+                float target_gap = direct_clear ? fmaxf(0.0f, dist - preferred_distance) : steer_len;
+                float step = fminf(move_speed * dt, target_gap);
+                vx += (steer_x / steer_len) * step;
+                vy += (steer_y / steer_len) * step;
+            }
+
+            /* Repulsao suave de paredes proximas para centralizar em corredores/portas. */
+            int tx = (int)floorf(e->x);
+            int ty = (int)floorf(e->y);
+            float fx = e->x - (float)tx;
+            float fy = e->y - (float)ty;
+            const float margin = 0.36f;
+            if (fx < margin && map_is_wall(map, tx - 1, ty)) vx += (margin - fx) * 2.2f * dt;
+            if (fx > 1.0f - margin && map_is_wall(map, tx + 1, ty)) vx -= (fx - (1.0f - margin)) * 2.2f * dt;
+            if (fy < margin && map_is_wall(map, tx, ty - 1)) vy += (margin - fy) * 2.2f * dt;
+            if (fy > 1.0f - margin && map_is_wall(map, tx, ty + 1)) vy -= (fy - (1.0f - margin)) * 2.2f * dt;
         }
 
         if (vx != 0.0f || vy != 0.0f) {
@@ -706,10 +826,10 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
                 e->y = ny;
                 moved_y = 1;
             }
-            /* Deslizamento em quinas: se travar em um eixo, contorna pela direcao livre. */
+            /* Deslizamento em quinas: segue a direcao do pathfinding (nao a linha reta bloqueada). */
             float mag = sqrtf(vx * vx + vy * vy);
             if (!moved_x && fabsf(vx) > 0.0001f && fabsf(vy) < mag * 0.45f) {
-                float dir_y = (dy >= 0.0f) ? 1.0f : -1.0f;
+                float dir_y = (slide_dir_y >= 0.0f) ? 1.0f : -1.0f;
                 float slide = mag * 0.85f;
                 if (enemy_can_occupy(map, e->x, e->y + dir_y * slide)) {
                     e->y += dir_y * slide;
@@ -717,7 +837,7 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
                     e->y -= dir_y * slide;
                 }
             } else if (!moved_y && fabsf(vy) > 0.0001f && fabsf(vx) < mag * 0.45f) {
-                float dir_x = (dx >= 0.0f) ? 1.0f : -1.0f;
+                float dir_x = (slide_dir_x >= 0.0f) ? 1.0f : -1.0f;
                 float slide = mag * 0.85f;
                 if (enemy_can_occupy(map, e->x + dir_x * slide, e->y)) {
                     e->x += dir_x * slide;
@@ -727,8 +847,7 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
             }
         }
 
-        if (dist <= attack_range && e->attack_timer <= 0.0f &&
-            has_line_of_sight(map, player->x, player->y, e->x, e->y)) {
+        if (dist <= attack_range && e->attack_timer <= 0.0f && can_see) {
             if (e->attack_kind == ENEMY_ATTACK_PROJECTILE) {
                 (void)enemy_spawn_projectile(e, player, stats);
             } else if (e->attack_kind == ENEMY_ATTACK_HITSCAN) {
@@ -775,7 +894,13 @@ int enemies_check_hit(EnemyManager *mgr, const GameMap *map,
             if (dist > weapon->range) continue;
             float aim_diff = fabsf(wrap_angle(atan2f(dy, dx) - player->angle));
             if (aim_diff < 0.42f && has_line_of_sight(map, player->x, player->y, e->x, e->y)) {
-                damage_enemy(e, player, dmg);
+                /* Cone da Shotgun: a queima-roupa supera a Sniper (ate 2.40x = 168), caindo ate 0.25x no limite e nas bordas. */
+                float angle_factor = 1.0f - 0.65f * (aim_diff / 0.42f);
+                float t_dist = fmaxf(0.0f, fminf(1.0f, (dist - 0.9f) / fmaxf(0.1f, weapon->range - 0.9f)));
+                float dist_factor = 2.40f - 2.15f * t_dist;
+                int shot_dmg = (int)roundf((float)dmg * angle_factor * dist_factor);
+                if (shot_dmg < 5) shot_dmg = 5;
+                damage_enemy(e, player, shot_dmg);
                 hits++;
             }
         }
@@ -973,162 +1098,348 @@ typedef struct {
 #define ENEMY_STYLE(token, glyph, red, green, blue, body) \
     [token] = {glyph, {red, green, blue}, body}
 
+/* Sprites limpos e definidos com formas solidas (2+ px) otimizadas para Scale2x 4x */
 static const EnemyArtStyle LEGACY_Z_STYLE[128] = {
-    ENEMY_STYLE('S', '#', 120, 150, 120, 1),
-    ENEMY_STYLE('D', '%', 85, 110, 85, 1),
-    ENEMY_STYLE('E', 'o', 200, 40, 40, 0),
-    ENEMY_STYLE('R', '=', 70, 80, 60, 0)
+    ENEMY_STYLE('A', '#', 112, 122, 134, 1), /* armadura aco-cinza */
+    ENEMY_STYLE('D', '%',  56,  62,  72, 1), /* sombra */
+    ENEMY_STYLE('C', '#', 138,  52,  52, 1), /* peitoral/faixas vermelho-escuro */
+    ENEMY_STYLE('S', '#', 162, 168, 158, 1), /* mascara/cranio */
+    ENEMY_STYLE('E', 'o', 255,  55,  45, 0), /* olhos vermelhos */
+    ENEMY_STYLE('R', '=',  42,  44,  50, 0)  /* botas */
 };
 
 static const EnemyArtStyle LEGACY_D_STYLE[128] = {
-    ENEMY_STYLE('S', '#', 110, 130, 160, 1),
-    ENEMY_STYLE('D', '%', 80, 95, 120, 1),
-    ENEMY_STYLE('E', 'o', 200, 40, 40, 0),
-    ENEMY_STYLE('R', '=', 50, 60, 90, 0)
+    ENEMY_STYLE('A', '#',  88,  96, 108, 1), /* exo-armadura pesada aco */
+    ENEMY_STYLE('D', '%',  46,  52,  60, 1), /* sombra */
+    ENEMY_STYLE('C', '#', 165,  56,  48, 1), /* ombreiras vermelhas */
+    ENEMY_STYLE('E', '=', 255, 175,  45, 0), /* visor laranja */
+    ENEMY_STYLE('G', '=', 172, 182, 196, 0), /* cano grosso da metralhadora */
+    ENEMY_STYLE('Y', '#', 228, 188,  62, 0), /* caixa de municao dourada */
+    ENEMY_STYLE('F', '*', 255, 235,  95, 0), /* boca da metralhadora */
+    ENEMY_STYLE('R', '=',  38,  40,  46, 0)  /* botas pesadas */
 };
 
 static const EnemyArtStyle LEGACY_I_STYLE[128] = {
-    ENEMY_STYLE('S', '#', 160, 150, 100, 1),
-    ENEMY_STYLE('D', '%', 120, 110, 70, 1),
-    ENEMY_STYLE('E', 'o', 200, 40, 40, 0),
-    ENEMY_STYLE('R', '=', 95, 85, 55, 0)
+    ENEMY_STYLE('B', '#',  64,  62,  72, 1), /* corpo sombrio agil */
+    ENEMY_STYLE('D', '%',  36,  34,  42, 1), /* sombra */
+    ENEMY_STYLE('C', '#', 148,  46,  52, 1), /* dorso/marcas carmesim */
+    ENEMY_STYLE('E', 'o', 255, 210,  55, 0), /* olhos amarelos */
+    ENEMY_STYLE('K', '/', 215, 222, 232, 0)  /* garras longas */
+};
+
+static const EnemyArtStyle IMP_SHOTGUN_STYLE[128] = {
+    ENEMY_STYLE('A', '#',  96, 110,  84, 1), /* colete tatico oliva */
+    ENEMY_STYLE('D', '%',  50,  58,  46, 1), /* sombra */
+    ENEMY_STYLE('H', '#',  72,  78,  86, 1), /* capacete de aco */
+    ENEMY_STYLE('E', '=', 250,  60,  45, 0), /* visor vermelho */
+    ENEMY_STYLE('W', '#', 165, 102,  52, 0), /* coronha de madeira da shotgun */
+    ENEMY_STYLE('G', '=', 188, 198, 212, 0), /* cano duplo grosso da shotgun */
+    ENEMY_STYLE('F', '*', 255, 225, 120, 0), /* boca da shotgun */
+    ENEMY_STYLE('R', '=',  44,  44,  46, 0)  /* botas */
 };
 
 static const EnemyArtStyle PINKY_STYLE[128] = {
-    ENEMY_STYLE('P', '#', 225, 125, 145, 1),
-    ENEMY_STYLE('R', '%', 170, 85, 105, 1),
-    ENEMY_STYLE('G', 'o', 230, 190, 40, 0),
-    ENEMY_STYLE('M', '=', 120, 20, 30, 0),
-    ENEMY_STYLE('T', 'v', 240, 235, 225, 0),
-    ENEMY_STYLE('H', '^', 235, 230, 205, 0),
-    ENEMY_STYLE('C', 'v', 240, 235, 225, 0)
+    ENEMY_STYLE('A', '#',  98,  76,  72, 1), /* blindagem ferro-ferrugem */
+    ENEMY_STYLE('D', '%',  52,  38,  38, 1), /* sombra */
+    ENEMY_STYLE('C', '#', 162,  58,  52, 1), /* placas carmesim */
+    ENEMY_STYLE('E', 'o', 255, 165,  40, 0), /* olhos laranja */
+    ENEMY_STYLE('T', 'v', 235, 230, 215, 0), /* mandibula de aco/dentes */
+    ENEMY_STYLE('R', '=',  40,  38,  42, 0)  /* patas blindadas */
 };
 
 static const EnemyArtStyle CACODEMON_STYLE[128] = {
-    ENEMY_STYLE('R', '#', 210, 40, 40, 1),
-    ENEMY_STYLE('D', '%', 150, 25, 30, 1),
-    ENEMY_STYLE('E', 'O', 235, 225, 90, 0),
-    ENEMY_STYLE('P', '@', 25, 90, 35, 0),
-    ENEMY_STYLE('H', '^', 235, 230, 205, 0),
-    ENEMY_STYLE('M', '=', 60, 10, 15, 0),
-    ENEMY_STYLE('T', 'v', 240, 235, 225, 0)
+    ENEMY_STYLE('A', '#',  74,  92, 126, 1), /* casco blindado azul-aco */
+    ENEMY_STYLE('D', '%',  38,  48,  70, 1), /* sombra */
+    ENEMY_STYLE('S', '#', 138, 152, 174, 1), /* placas metalicas */
+    ENEMY_STYLE('E', 'O',  95, 245, 255, 0), /* olho/lente ciano */
+    ENEMY_STYLE('P', '@', 230, 255, 255, 0), /* centro da lente */
+    ENEMY_STYLE('G', '=', 165, 198, 232, 0), /* canhoes de plasma laterais */
+    ENEMY_STYLE('F', '*', 115, 248, 255, 0)  /* disparo plasma */
 };
 
 static const EnemyArtStyle BARON_STYLE[128] = {
-    ENEMY_STYLE('P', '#', 215, 120, 130, 1),
-    ENEMY_STYLE('D', '%', 160, 80, 95, 1),
-    ENEMY_STYLE('F', '@', 225, 220, 200, 0),
-    ENEMY_STYLE('E', 'O', 235, 40, 30, 0),
-    ENEMY_STYLE('H', '^', 190, 185, 165, 0),
-    ENEMY_STYLE('L', '#', 120, 75, 40, 0),
-    ENEMY_STYLE('K', '%', 85, 50, 25, 0),
-    ENEMY_STYLE('N', 'v', 240, 140, 40, 0),
-    ENEMY_STYLE('X', '=', 35, 28, 25, 0)
+    ENEMY_STYLE('A', '#',  58,  54,  66, 1), /* armadura negra de cavaleiro infernal */
+    ENEMY_STYLE('D', '%',  32,  28,  38, 1), /* sombra */
+    ENEMY_STYLE('C', '#', 168,  44,  46, 1), /* placas carmesim */
+    ENEMY_STYLE('H', '^', 218, 210, 188, 0), /* chifres grossos */
+    ENEMY_STYLE('E', 'O', 255, 155,  40, 0), /* olhos/nucleo em chamas */
+    ENEMY_STYLE('N', '*', 255, 105,  30, 0), /* manoplas incandescentes */
+    ENEMY_STYLE('R', '=',  38,  34,  42, 0)  /* grevas */
 };
 
 static const EnemyArtStyle KUSHAN_STYLE[128] = {
-    ENEMY_STYLE('M', '#', 150, 155, 165, 1),
-    ENEMY_STYLE('D', '%', 100, 105, 115, 1),
-    ENEMY_STYLE('H', '^', 210, 215, 225, 0),
-    ENEMY_STYLE('F', 'o', 150, 100, 70, 0),
-    ENEMY_STYLE('W', ')', 140, 95, 50, 0),
-    ENEMY_STYLE('R', '=', 170, 40, 40, 0)
+    ENEMY_STYLE('C', '#',  62,  68,  74, 1), /* capuz e capa tatica escura */
+    ENEMY_STYLE('D', '%',  36,  40,  46, 1), /* sombra */
+    ENEMY_STYLE('A', '#',  96, 106, 114, 1), /* colete cinza */
+    ENEMY_STYLE('E', 'O', 105, 255, 130, 0), /* oculos de visao noturna verde */
+    ENEMY_STYLE('S', '=',  82,  94,  88, 0), /* luneta da sniper */
+    ENEMY_STYLE('G', '-', 196, 208, 216, 0), /* cano longo da sniper */
+    ENEMY_STYLE('F', '*', 145, 255, 145, 0), /* laser verde */
+    ENEMY_STYLE('R', '=',  40,  42,  46, 0)  /* botas */
 };
 
 static const EnemyArtStyle TROLL_STYLE[128] = {
-    ENEMY_STYLE('G', '#', 80, 110, 50, 1),
-    ENEMY_STYLE('D', '%', 55, 80, 35, 1),
-    ENEMY_STYLE('E', 'o', 230, 200, 60, 0),
-    ENEMY_STYLE('N', '*', 210, 120, 120, 0),
-    ENEMY_STYLE('T', 'v', 235, 230, 210, 0),
-    ENEMY_STYLE('W', '|', 110, 75, 40, 0)
+    ENEMY_STYLE('A', '#', 118,  98,  72, 1), /* armadura bronze-ferro pesada */
+    ENEMY_STYLE('D', '%',  62,  50,  38, 1), /* sombra */
+    ENEMY_STYLE('S', '#',  84,  88,  96, 1), /* elmo e placas de ferro */
+    ENEMY_STYLE('E', 'o', 255, 185,  45, 0), /* olhos brilhantes */
+    ENEMY_STYLE('W', '|', 128,  86,  48, 0), /* cabo do martelo */
+    ENEMY_STYLE('M', '#', 172, 180, 192, 0), /* cabeca pesada do martelo */
+    ENEMY_STYLE('R', '=',  44,  42,  40, 0)  /* botas pesadas */
 };
 
 static const EnemyArtStyle APOSTLE_STYLE[128] = {
-    ENEMY_STYLE('V', '#', 100, 40, 130, 1),
-    ENEMY_STYLE('D', '%', 60, 20, 85, 1),
-    ENEMY_STYLE('E', 'O', 200, 230, 70, 0),
-    ENEMY_STYLE('T', 'v', 235, 230, 210, 0),
-    ENEMY_STYLE('C', 'v', 225, 215, 190, 0)
+    ENEMY_STYLE('C', '#', 132,  38,  48, 1), /* manto/capuz carmesim escuro */
+    ENEMY_STYLE('D', '%',  64,  20,  28, 1), /* sombra do manto */
+    ENEMY_STYLE('A', '#',  62,  66,  78, 1), /* armadura negra */
+    ENEMY_STYLE('E', 'O', 255, 220,  95, 0), /* olhos dourados */
+    ENEMY_STYLE('K', '/', 215, 228, 242, 0)  /* laminas curvas duplas */
 };
 
 static const EnemyArtStyle ZODD_STYLE[128] = {
-    ENEMY_STYLE('B', '#', 35, 25, 30, 1),
-    ENEMY_STYLE('D', '%', 80, 15, 25, 1),
-    ENEMY_STYLE('E', 'O', 230, 170, 50, 0),
-    ENEMY_STYLE('H', '^', 225, 215, 190, 0),
-    ENEMY_STYLE('W', '*', 90, 20, 35, 0),
-    ENEMY_STYLE('T', 'v', 240, 235, 225, 0),
-    ENEMY_STYLE('C', 'v', 225, 215, 190, 0),
-    ENEMY_STYLE('X', '=', 50, 45, 45, 0)
+    ENEMY_STYLE('B', '#',  48,  38,  46, 1), /* corpo/armadura obsidiana */
+    ENEMY_STYLE('D', '%', 112,  30,  38, 1), /* placas carmesim */
+    ENEMY_STYLE('W', '*',  76,  24,  34, 1), /* asas grossas */
+    ENEMY_STYLE('H', '^', 232, 224, 198, 0), /* chifres */
+    ENEMY_STYLE('E', 'O', 255, 195,  45, 0), /* olhos dourados */
+    ENEMY_STYLE('T', 'v', 240, 235, 222, 0), /* presas */
+    ENEMY_STYLE('K', '/', 208, 218, 230, 0), /* garras pesadas */
+    ENEMY_STYLE('R', '=',  36,  32,  38, 0)  /* grevas */
 };
 
 static const EnemyVisualDesign ENEMY_VISUAL_DESIGNS[] = {
-    {'Z', 9, 12, 0.60f, 0.95f, '\0', {0,0,0}, LEGACY_Z_STYLE, {
-        "..DSSSD..", "..SESES..", "..SSDSS..", "...SSS...",
-        ".RRRRRRR.", "SRRRDRRRS", "S.RRRRR.S", "S.RRDRR.S",
-        "..RRRRR..", "..RR.RR..", "..SS.SS..", "..DD.DD.."
+    /* Z legado (15x18): Soldado corrompido com mascara/cranio e olhos vermelhos */
+    {'Z', 15, 18, 0.70f, 0.98f, '\0', {0,0,0}, LEGACY_Z_STYLE, {
+        "....DAAAAAD....",
+        "...DAAAAAAAD...",
+        "...DSSSDSSSD...",
+        "...DSEDSESDD...",
+        "....DSSSSSD....",
+        "..DDCCCCCCCDD..",
+        ".DCCCCCCCCCCCD.",
+        ".DAA.CCCCC.AAD.",
+        ".DAA.CCACC.AAD.",
+        ".DAA.CCCCC.AAD.",
+        "..DD.DDDDD.DD..",
+        "....DAAAAAD....",
+        "....DAA.AAD....",
+        "....DAA.AAD....",
+        "....DAA.AAD....",
+        "....DDA.ADD....",
+        "...DRRR.RRRD...",
+        "...RRRR.RRRR..."
     }},
-    {'D', 9, 12, 0.72f, 1.05f, '\0', {0,0,0}, LEGACY_D_STYLE, {
-        "..DSSSD..", "..SESES..", "..SSDSS..", "...SSS...",
-        ".RRRRRRR.", "SRRRDRRRS", "S.RRRRR.S", "S.RRDRR.S",
-        "..RRRRR..", "..RR.RR..", "..SS.SS..", "..DD.DD.."
+    /* D legado (17x19): Artilheiro Pesado com METRALHADORA rotativa grossa */
+    {'D', 17, 19, 0.90f, 1.10f, 'F', {255,235,95}, LEGACY_D_STYLE, {
+        ".....DAAAAAD.....",
+        "....DAAAAAAAD....",
+        "....DAEEEEEAD....",
+        "....DAAAAAAAD....",
+        ".CCCDDDDDDDDDCCC.",
+        "CCCCAAAAAAAAACCCC",
+        "CCCAADAAAAADAACCC",
+        "CCAA.DAAAAAD.AACC",
+        "DDAA.AAYYYAA.AADD",
+        "DDAA.AAYYYAGGGGGG",
+        "....DAAYYYAGGGGGF",
+        "....DAAYYYAGGGGGF",
+        ".....DAAAAAD.YY..",
+        "....DDAA.AADD....",
+        "....DAA...AAD....",
+        "....DAA...AAD....",
+        "...DRAA...AARD...",
+        "...RRRR...RRRR...",
+        "..RRRRR...RRRRR.."
     }},
-    {'I', 9, 12, 0.62f, 1.00f, '\0', {0,0,0}, LEGACY_I_STYLE, {
-        "..DSSSD..", "..SESES..", "..SSDSS..", "...SSS...",
-        ".RRRRRRR.", "SRRRDRRRS", "S.RRRRR.S", "S.RRDRR.S",
-        "..RRRRR..", "..RR.RR..", "..SS.SS..", "..DD.DD.."
-    }},
-    {'Y', 13, 10, 1.25f, 0.85f, '\0', {0,0,0}, PINKY_STYLE, {
-        "...H.....H...", "..RPPPPPPPR..", "..PGPPPPPGP..",
-        "..PMTMTMTMP..", ".PPRPPPPPRPP.", "PPPPRPPPRPPPP",
-        "RPP.RPPPR.PPR", "CP..RPPPR..PC", "..PPP...PPP..",
-        ".CCCC...CCCC."
-    }},
-    {'C', 13, 11, 1.15f, 0.95f, 'M', {255,160,40}, CACODEMON_STYLE, {
-        "...H.....H...", "...DRRRRRD...", "..DRRRRRRRD..",
-        ".DRRREEERRRD.", ".RRREEPEERRR.", ".DRRREEERRRD.",
-        "RRRRRRRRRRRRR", "RDMTMTMTMTMDR", "RRDMMMMMMMDRR",
-        ".DRDDDDDDDRD.", "..DDDDDDDDD.."
-    }},
-    {'B', 13, 17, 1.20f, 1.30f, '\0', {0,0,0}, BARON_STYLE, {
-        "H...........H", "HH..FFFFF..HH", ".H..FEFEF..H.",
-        "...FFFFFFF...", "..PPPPPPPPP..", ".PPDPPPPPDPP.",
-        "PPPDPPPPPDPPP", "PPDPPPPPPPDPP", "PP.DPPPPPD.PP",
-        "NN.PPDPDPP.NN", "NN..PPPPP..NN", "....DPPPD....",
-        "...LLL.LLL...", "...LKL.LKL...", "....LL.LL....",
-        "...LL...LL...", "..XXX...XXX.."
-    }},
-    {'K', 9, 11, 0.66f, 0.85f, 'W', {255,230,120}, KUSHAN_STYLE, {
-        "....H....", "..DHHHD..", "..DFFFD..", "..DMMMD..",
-        ".MMMMMMM.", "WMMMDMMM.", "W.MRRRM..", "W.MMDMM..",
-        "W..MMM...", "...M.M...", "..DD.DD.."
-    }},
-    {'T', 15, 16, 1.20f, 1.40f, '\0', {0,0,0}, TROLL_STYLE, {
-        "....DGGGGGD.WW.", "...DGEGGGEGD.WW", "...GGGNNNGGG.WW",
-        "...DGTGGGTGD..W", "..GGGGGGGGGGG.W", ".GGDGGGGGGGDGGW",
-        "GGGGDGGGGGDGGGW", "GGDG.GGGGG.GGGW", "GG.G.DGGGD.G.GW",
-        "DD....GGGGG..DD", "....DGGGGGD....", "....GGDGDGG....",
-        "....GG...GG....", "...GGG...GGG...", "...GGG...GGG...",
+    /* I legado (15x18): Fera Sombria agil com orelhas pontudas e garras longas */
+    {'I', 15, 18, 0.78f, 0.96f, '\0', {0,0,0}, LEGACY_I_STYLE, {
+        "...BB.....BB...",
+        "...BBBDDDBBB...",
+        "...DBBBBBBBDD..",
+        "...DBEBBBEBD...",
+        "....DBCCCBD....",
+        "..DDBBBBBBBDD..",
+        ".DBBBCCCCCBBBD.",
+        "DBB..BBBBB..BBD",
+        "DB...BBBBB...BD",
+        "KK...DBBBD...KK",
+        "KKK..DBBBD..KKK",
+        ".KK..DB.BD..KK.",
+        "....DBB.BBD....",
+        "....DBB.BBD....",
+        "...DBB...BBD...",
+        "...DBB...BBD...",
+        "...DDD...DDD...",
         "..DDDD...DDDD.."
     }},
-    {'A', 11, 14, 0.95f, 1.10f, '\0', {0,0,0}, APOSTLE_STYLE, {
-        "..DVVD.....", ".DEVEVD....", ".VVVTTVV...", "..DVVVVVD..",
-        ".VVVDVVVVV.", "VVV.VVVV.VV", "VV..DVVV..V",
-        "C...VVVD..V", "....DVVV..V", "....VVDV..V",
-        "....VV.VV.V", "...VV..VV.C", "...VV..VV..",
-        "..CCC.CCC.."
+    /* Imp (15x18): Comando tatico de capacete segurando SHOTGUN de cano duplo */
+    {'M', 15, 18, 0.82f, 1.02f, 'F', {255,225,120}, IMP_SHOTGUN_STYLE, {
+        "....DHHHHHD....",
+        "...DHHHHHHHD...",
+        "...DHEEEEEHD...",
+        "....DHHHHHD....",
+        "..DDAAAAAAADD..",
+        ".DAAAAAAAAAAAD.",
+        ".DAA.AAAAA.AAD.",
+        ".DAA.AAAAA.AAD.",
+        ".DA.WWWWGGGGGF.",
+        ".DD.WWWWGGGGGF.",
+        "....DWWAAAAD...",
+        "....DAAAAAD....",
+        "....DAA.AAD....",
+        "....DAA.AAD....",
+        "....DAA.AAD....",
+        "....DDA.ADD....",
+        "...DRRR.RRRD...",
+        "...RRRR.RRRR..."
     }},
-    {'Q', 17, 20, 1.45f, 1.70f, 'E', {255,60,40}, ZODD_STYLE, {
-        "H...............H", "HH....BBBBB....HH", ".H...DBEBEBD...H.",
-        "..W..DBTTTBD..W..", ".WW..DBBBBBD..WW.", "WWW.DBBBBBBBD.WWW",
-        "WWWWDBBDBDBBDWWWW", "WWWWBBBBBBBBBWWWW",
-        ".WWWBBDBBBDBBWWW.", ".WWBBBBBBBBBBBWW.",
-        "..WBBBBDBDBBBBW..", "...BBBBBBBBBBB...",
-        "..CBBB.BBB.BBBC..", "..CBB..BDB..BBC..",
-        ".....BBBBBBB.....", ".....BBDBDBB.....",
-        "....BBB...BBB....", "....BBB...BBB....",
-        "....DDD...DDD....", "...XXXX...XXXX..."
+    /* Pinky (15x14): Cao-Blindado de ferro e carmesim de investida */
+    {'Y', 15, 14, 1.24f, 0.80f, '\0', {0,0,0}, PINKY_STYLE, {
+        "...DDAAAAADD...",
+        "..DAAAAAAAAAD..",
+        ".DACCCCCCCCAAD.",
+        ".DAEEAAAAAEED..",
+        "DDATTATATATTADD",
+        "DAAACCCCCCCAAAD",
+        "DAAADAAAAADAAAD",
+        "DAAA.DAAAAD.AAD",
+        "DAA..DAAAAD..AD",
+        "DD...AA..AA..DD",
+        "....AAA..AAA...",
+        "...DAA....AAD..",
+        "...RRR....RRR..",
+        "..RRRR....RRRR."
+    }},
+    /* Cacodemon (17x18): Drone de Guerra blindado azul-aco com CANHOES DE PLASMA */
+    {'C', 17, 18, 1.14f, 1.00f, 'F', {115,248,255}, CACODEMON_STYLE, {
+        ".....DSSSSSD.....",
+        "...DDAAAAAAADD...",
+        "..DAAAAAAAAAAAD..",
+        ".DSAAADDDDDAAASD.",
+        "DSSAAEEEEEEEAASSD",
+        "DSSAAEEPPPEEAASSD",
+        "DSSAAEEEEEEEAASSD",
+        ".DSAAADDDDDAAASD.",
+        "..DAAAAAAAAAAAD..",
+        ".GGDDAAAAAAADDGG.",
+        "FGGGDAAAAAAADGGGF",
+        "FGGG.DSSSSSD.GGGF",
+        ".GG...DDDDD...GG.",
+        ".................",
+        ".................",
+        ".................",
+        ".................",
+        "................."
+    }},
+    /* Baron of Hell (17x20): Cavaleiro Infernal negro/carmesim com chifres e nucleo de fogo */
+    {'B', 17, 20, 1.24f, 1.32f, '\0', {0,0,0}, BARON_STYLE, {
+        "HH.............HH",
+        "HHH...DDDDD...HHH",
+        ".HH..DAAAAAD..HH.",
+        "..H..DAEAEAD..H..",
+        ".....DAAAAAD.....",
+        ".CCCDAAAAAAADCCC.",
+        "CCCCAAAAAAAAACCCC",
+        "CCAA.AACCCAA.AACC",
+        "AA...AACEEAA...AA",
+        "NN...AACCCAA...NN",
+        "NNN..DAAAAAD..NNN",
+        ".NN..DAAAAAD..NN.",
+        "....DAA...AAD....",
+        "....DAA...AAD....",
+        "....DCC...CCD....",
+        "...DAA.....AAD...",
+        "...DAA.....AAD...",
+        "...DRR.....RRD...",
+        "..DRRR.....RRRD..",
+        "..RRRR.....RRRR.."
+    }},
+    /* Soldado Kushan (15x18): Sniper encapuzado com oculos verde e SNIPER longa */
+    {'K', 15, 18, 0.84f, 0.98f, 'F', {145,255,145}, KUSHAN_STYLE, {
+        ".....DDDDD.....",
+        "....DCCCCCD....",
+        "...DCCEECCCD...",
+        "...DCCCCCCCD...",
+        "....DDAAADD....",
+        "..DDCCAAACCDD..",
+        ".DCCC.AAA.CCCD.",
+        ".DCC..SSS..CCD.",
+        ".DCC.GGGGGGGGGF",
+        ".DCC.GGGGGGGGGF",
+        "..DC.DAAAAD....",
+        "....DCCCCCD....",
+        "....DCC.CCD....",
+        "....DCC.CCD....",
+        "....DAA.AAD....",
+        "....DAA.AAD....",
+        "...DRRR.RRRD...",
+        "...RRRR.RRRR..."
+    }},
+    /* Troll (17x19): Brutamontes de ferro e bronze com martelo de guerra pesado */
+    {'T', 17, 19, 1.26f, 1.36f, '\0', {0,0,0}, TROLL_STYLE, {
+        "............MMMMM",
+        "....DSSSSSD.MMMMM",
+        "...DSSEESSSDMMMMM",
+        "...DSSSSSSSD..WW.",
+        ".SSSDAAAAADSS.WW.",
+        "SSSSAAAAAAAASSWW.",
+        "SSSAAAAAAAAASSWW.",
+        "SSA.AAAAAAAA.AWW.",
+        "AA..AAAAAAAA..WW.",
+        "DD..DAAAAAAD..WW.",
+        "....DAAAAAAD..WW.",
+        "....DSSSSSSD.....",
+        "....DAA..AAD.....",
+        "....DAA..AAD.....",
+        "...DAA....AAD....",
+        "...DAA....AAD....",
+        "...DSS....SSD....",
+        "..DRRR....RRRD...",
+        "..RRRR....RRRR..."
+    }},
+    /* Apostolo (15x18): Assassino de manto carmesim com olhos dourados e laminas duplas */
+    {'A', 15, 18, 0.86f, 1.08f, '\0', {0,0,0}, APOSTLE_STYLE, {
+        ".....DDDDD.....",
+        "....DCCCCCD....",
+        "...DCECCCECD...",
+        "....DCCCCCD....",
+        "..DDCCCCCCCDD..",
+        ".DCCCAAAAACCCD.",
+        "DCC..AAAAA..CCD",
+        "KKC..AAAAA..CKK",
+        "KKK..DCCCCD.KKK",
+        "KK...DCCCCD..KK",
+        "....DCCCCCCD...",
+        "....DCCCCCCCD..",
+        "...DCCC..CCCD..",
+        "...DCC....CCD..",
+        "...DAA....AAD..",
+        "...DAA....AAD..",
+        "...DDD....DDD..",
+        "..DDDD....DDDD."
+    }},
+    /* Zodd (17x20): Senhor Abissal colossal com chifres, asas grossas e garras */
+    {'Q', 17, 20, 1.46f, 1.66f, 'E', {255,100,40}, ZODD_STYLE, {
+        "HH.............HH",
+        "HHH...BBBBB...HHH",
+        ".HH..DBEBEBD..HH.",
+        "WW...DBTTTBD...WW",
+        "WWW.DDBBBBBDD.WWW",
+        "WWWWDBBBBBBBBWWWW",
+        "WWWWBBDDDDDBBWWWW",
+        "WWWWBBBBBBBBBWWWW",
+        ".WWWBBDDDDDBBWWW.",
+        ".WW.BBBBBBBBB.WW.",
+        "..KKBBBBBBBBBKK..",
+        "..KKKBBBBBBBKKK..",
+        ".....DBBBBBD.....",
+        "....DBB...BBD....",
+        "....DBB...BBD....",
+        "...DBB.....BBD...",
+        "...DDD.....DDD...",
+        "...DRR.....RRD...",
+        "..DRRR.....RRRD..",
+        "..RRRR.....RRRR.."
     }}
 };
 
@@ -1512,18 +1823,399 @@ typedef struct {
     const RendererApi *api;
 } EnemyRenderCtx;
 
+static int enemy_inside_oval(float x, float y, float cx, float cy, float rx, float ry) {
+    float dx = (x - cx) / rx;
+    float dy = (y - cy) / ry;
+    return dx * dx + dy * dy < 1.0f;
+}
+
+typedef struct {
+    AsciiColor color;
+    char forced_glyph; /* '\0' = usa rampa ASCII densa com sombreamento */
+    unsigned char emissive;
+} EnemyProcMat;
+
+/* Paleta de materiais procedurais no mesmo estilo nitido dos personagens jogaveis (player.c). */
+static EnemyProcMat enemy_proc_palette(int mat) {
+    static const EnemyProcMat pal[] = {
+        {{  0,   0,   0}, '\0', 0}, /*  0: transparente */
+        {{ 42,  46,  54}, '\0', 0}, /*  1: aco escuro / botas / contorno */
+        {{ 84,  92, 106}, '\0', 0}, /*  2: armadura aco medio */
+        {{148, 160, 178}, '\0', 0}, /*  3: aco claro / destaque */
+        {{212, 222, 236}, '\0', 0}, /*  4: metal brilhante / laminas */
+        {{ 68,  84,  62}, '\0', 0}, /*  5: traje tatico oliva escuro */
+        {{104, 122,  92}, '\0', 0}, /*  6: traje tatico oliva claro */
+        {{138,  42,  44}, '\0', 0}, /*  7: armadura/manto carmesim */
+        {{192,  58,  54}, '\0', 0}, /*  8: carmesim vivo */
+        {{ 74,  24,  30}, '\0', 0}, /*  9: sombra carmesim */
+        {{154,  98,  52}, '\0', 0}, /* 10: madeira / couro */
+        {{ 92,  58,  34}, '\0', 0}, /* 11: couro escuro */
+        {{196, 162,  76}, '\0', 0}, /* 12: bronze / latão / municao */
+        {{245, 210,  78}, '@',  1}, /* 13: brilho dourado / municao */
+        {{255,  58,  48}, '@',  1}, /* 14: olho/visor vermelho */
+        {{110, 255, 130}, '@',  1}, /* 15: visor/laser verde sniper */
+        {{ 95, 245, 255}, '@',  1}, /* 16: plasma/lente ciano */
+        {{255, 175,  48}, '@',  1}, /* 17: fogo/visor ambar */
+        {{255, 248, 175}, '*',  1}, /* 18: flash de disparo */
+        {{ 58,  76, 114}, '\0', 0}, /* 19: casco azul-aco */
+        {{ 94, 118, 162}, '\0', 0}, /* 20: casco azul-aco claro */
+        {{224, 218, 202}, '\0', 0}, /* 21: osso / chifre / mascara */
+        {{ 30,  26,  34}, '\0', 0}, /* 22: obsidiana */
+        {{ 66,  52,  64}, '\0', 0}, /* 23: obsidiana destaque */
+        {{178, 146, 116}, '\0', 0}  /* 24: pele / rosto */
+    };
+    if (mat < 0 || mat >= (int)(sizeof(pal) / sizeof(pal[0]))) return pal[0];
+    return pal[mat];
+}
+
+/* Silhueta anatomica base inspirada em Guts/Rambo/Arauto (player.c): nitida em resolucao nativa. */
+static int enemy_humanoid_base(float x, float y, float torso_w, float leg_spread,
+                               int body_mat, int trim_mat, int dark_mat, int plate_lines) {
+    float ax = fabsf(x);
+    int mat = 0;
+
+    /* Pernas e botas de combate */
+    float leg_w = torso_w * 0.28f;
+    if (y > 0.62f && y < 0.96f && fabsf(ax - leg_spread) < leg_w) {
+        mat = (y > 0.82f) ? dark_mat : body_mat;
+        if (y > 0.72f && y < 0.755f) mat = trim_mat; /* joelheira */
+        if (ax > leg_spread + leg_w * 0.65f) mat = dark_mat;
+    }
+    if (y >= 0.94f && y < 0.99f && ax > leg_spread - leg_w && ax < leg_spread + leg_w + 0.05f) {
+        mat = dark_mat;
+    }
+
+    /* Tronco afunilado na cintura com placas e cinto */
+    float waist = torso_w * (1.0f - 0.34f * fmaxf(0.0f, (y - 0.27f) / 0.36f));
+    if (y > 0.27f && y < 0.64f && ax < waist) {
+        mat = body_mat;
+        if (plate_lines && fmodf((y + ax * 0.10f) * 28.0f, 1.0f) < 0.16f) mat = trim_mat;
+        if (ax > waist - 0.025f) mat = dark_mat;
+        if (ax < 0.025f && y < 0.54f) mat = dark_mat;
+        if (y > 0.55f && y < 0.595f) mat = dark_mat;
+        if (y > 0.555f && y < 0.59f && ax < 0.075f) mat = trim_mat;
+    }
+
+    /* Ombreiras e bracos */
+    float arm_cx = torso_w + 0.08f + (y - 0.34f) * 0.04f;
+    float arm_w = 0.068f + torso_w * 0.05f;
+    if (y > 0.28f && y < 0.39f && ax > torso_w - 0.04f && ax < torso_w + 0.17f) {
+        mat = (y < 0.31f || ax > torso_w + 0.13f) ? trim_mat : body_mat;
+    }
+    if (y > 0.38f && y < 0.65f && fabsf(ax - arm_cx) < arm_w) {
+        mat = (y > 0.58f) ? dark_mat : body_mat;
+        if (fabsf(ax - arm_cx) > arm_w * 0.72f) mat = dark_mat;
+    }
+
+    /* Pescoco */
+    if (y > 0.21f && y < 0.29f && ax < 0.10f) {
+        mat = dark_mat;
+    }
+    return mat;
+}
+
+/* Renderizador procedural nativo para todos os 11 inimigos: zero efeito "massinha". */
+static int enemy_procedural_material(char label, float x, float y, int shooting, float time_now) {
+    if (fabsf(x) > 1.0f || y < 0.0f || y > 1.0f) return 0;
+    float ax = fabsf(x);
+    int mat = 0;
+
+    if (label == 'Z') {
+        /* Z legado: Soldado tatico corrompido (estilo Fuzileiro/Rambo) com mascara e faca */
+        mat = enemy_humanoid_base(x, y, 0.30f, 0.16f, 5, 6, 1, 1);
+        /* Capacete + mascara de cranio */
+        if (enemy_inside_oval(x, y, 0.0f, 0.155f, 0.22f, 0.115f)) {
+            mat = (y < 0.145f) ? 2 : 21;
+            if (y > 0.13f && y < 0.155f) mat = 1;
+            if (y > 0.155f && y < 0.185f && ax > 0.04f && ax < 0.135f) mat = 14;
+            if (y > 0.21f && y < 0.24f && ax < 0.09f && fmodf(x * 45.0f + 10.0f, 1.0f) < 0.45f) mat = 1;
+        }
+        /* Faca de combate na mao direita */
+        if (x > 0.38f && x < 0.50f && y > 0.56f && y < 0.76f) {
+            mat = (y > 0.63f) ? 4 : 1;
+        }
+        return mat;
+    }
+
+    if (label == 'I') {
+        /* I legado: Stalker veloz em traje furtivo com laminas duplas nos antebracos */
+        float tilt_x = x + (y - 0.5f) * 0.08f;
+        mat = enemy_humanoid_base(tilt_x, y, 0.25f, 0.17f, 22, 7, 1, 0);
+        /* Faixa carmesim diagonal no peito */
+        if (y > 0.30f && y < 0.58f && fabsf(tilt_x - (0.35f - y * 0.8f)) < 0.045f) mat = 8;
+        /* Cabeca angular com visor ambar */
+        if (y > 0.07f && y < 0.24f && fabsf(tilt_x) < 0.19f - fmaxf(0.0f, y - 0.18f) * 0.9f) {
+            mat = 22;
+            if (y > 0.14f && y < 0.17f && fabsf(tilt_x) > 0.035f && fabsf(tilt_x) < 0.13f) mat = 17;
+        }
+        /* Laminas longas nos dois antebracos */
+        if (y > 0.52f && y < 0.80f) {
+            float blade_l = -0.38f - (y - 0.52f) * 0.42f;
+            float blade_r =  0.38f + (y - 0.52f) * 0.42f;
+            if (fabsf(x - blade_l) < 0.035f || fabsf(x - blade_r) < 0.035f) mat = 4;
+        }
+        return mat;
+    }
+
+    if (label == 'M') {
+        /* Imp (M): Breacher de armadura tatica segurando SHOTGUN de cano duplo */
+        mat = enemy_humanoid_base(x, y, 0.33f, 0.17f, 7, 3, 1, 1);
+        /* Capacete de combate com visor vermelho brilhante */
+        if (enemy_inside_oval(x, y, 0.0f, 0.15f, 0.24f, 0.115f)) {
+            mat = (y < 0.12f) ? 3 : 2;
+            if (y > 0.145f && y < 0.185f && ax < 0.17f) mat = 14;
+            if (y > 0.205f && ax < 0.12f) mat = 1;
+        }
+        /* SHOTGUN (coronha de madeira + cano duplo de aco apontado para direita) */
+        if (y > 0.44f && y < 0.56f && x > -0.34f && x < 0.04f) mat = 10; /* coronha madeira */
+        if (y > 0.47f && y < 0.55f && x >= 0.04f && x < 0.42f) mat = 11; /* guarda-mao */
+        if (y > 0.41f && y < 0.49f && x >= -0.08f && x < 0.86f) {
+            mat = (y < 0.45f) ? 4 : 3; /* cano duplo superior/inferior */
+            if (fabsf(y - 0.45f) < 0.008f) mat = 1;
+        }
+        if (shooting && enemy_inside_oval(x, y, 0.90f, 0.45f, 0.12f, 0.09f)) mat = 18;
+        return mat;
+    }
+
+    if (label == 'K') {
+        /* Soldado Kushan (K): Sniper encapuzado (estilo Arauto das Sombras) com SNIPER longa */
+        /* Manto/capa fluida */
+        if (y > 0.24f && y < 0.92f && ax < 0.26f + y * 0.22f) {
+            float fold = sinf(x * 42.0f + y * 4.0f);
+            mat = (fold > 0.45f) ? 6 : ((fold < -0.55f) ? 1 : 5);
+            if (ax < 0.16f && y > 0.30f && y < 0.58f) mat = 2; /* colete */
+        }
+        if (y > 0.88f && y < 0.98f && fabsf(ax - 0.15f) < 0.08f) mat = 1;
+        /* Capuz pontudo e visor verde de sniper */
+        if (y > 0.03f && y < 0.29f) {
+            float hood = (y < 0.12f) ? (0.06f + (y - 0.03f) * 2.0f) : (0.24f - (y - 0.12f) * 0.22f);
+            if (ax < hood) {
+                mat = (ax > hood - 0.035f) ? 6 : 5;
+                if (y > 0.12f && ax < hood - 0.045f) {
+                    mat = 1;
+                    if (y > 0.155f && y < 0.188f && x > -0.02f && x < 0.12f) mat = 15; /* monoculo verde */
+                }
+            }
+        }
+        /* SNIPER LONGA com luneta alta e laser verde */
+        if (y > 0.46f && y < 0.54f && x > -0.36f && x < 0.16f) mat = 1;  /* coronha/corpo */
+        if (y > 0.40f && y < 0.455f && x > -0.06f && x < 0.34f) {
+            mat = (x > 0.28f) ? 15 : 2; /* luneta + lente verde */
+        }
+        if (y > 0.45f && y < 0.495f && x >= 0.14f && x < 0.96f) mat = 4; /* cano longo fino */
+        if (y > 0.435f && y < 0.51f && x > 0.88f && x < 0.96f) mat = 3;  /* freio de boca */
+        if (shooting && enemy_inside_oval(x, y, 0.95f, 0.47f, 0.09f, 0.06f)) mat = 15;
+        return mat;
+    }
+
+    if (label == 'D') {
+        /* D legado (D): Artilheiro Pesado (estilo Guts/Exo) com METRALHADORA rotativa */
+        mat = enemy_humanoid_base(x, y, 0.38f, 0.19f, 2, 3, 1, 1);
+        /* Cinta de municao dourada cruzando o peito (estilo Rambo) */
+        if (y > 0.29f && y < 0.58f && fabsf(x - (0.78f - y * 1.95f)) < 0.055f) {
+            mat = (fmodf(y * 80.0f, 2.0f) < 1.2f) ? 13 : 1;
+        }
+        /* Capacete blindado largo com visor ambar */
+        if (y > 0.06f && y < 0.25f && ax < 0.24f) {
+            mat = (y < 0.11f) ? 3 : 2;
+            if (y > 0.14f && y < 0.18f && ax < 0.17f) mat = 17;
+        }
+        /* METRALHADORA ROTATIVA (3 canos + tambor de municao dourado) */
+        if (y > 0.48f && y < 0.66f && x > 0.02f && x < 0.34f) mat = (fmodf(x * 32.0f, 1.0f) < 0.3f) ? 1 : 12;
+        if (y > 0.42f && y < 0.54f && x > -0.22f && x < 0.36f) mat = 2; /* chassi */
+        if (x >= 0.34f && x < 0.94f) {
+            int b1 = (y > 0.42f && y < 0.455f);
+            int b2 = (y > 0.47f && y < 0.505f);
+            int b3 = (y > 0.52f && y < 0.555f);
+            if (b1 || b2 || b3) mat = 4;
+            if ((x > 0.56f && x < 0.62f) || (x > 0.82f && x < 0.88f)) {
+                if (y > 0.415f && y < 0.56f) mat = 1; /* abracadeiras */
+            }
+        }
+        if (shooting && enemy_inside_oval(x, y, 0.94f, 0.485f, 0.11f, 0.10f)) mat = 18;
+        return mat;
+    }
+
+    if (label == 'C') {
+        /* Cacodemon (C): Drone-Ciborgue flutuante blindado + ARMA FUTURISTA de plasma */
+        float hover = 0.03f * sinf(time_now * 4.0f);
+        float cy = y + hover;
+        /* Aletas laterais blindadas */
+        if (cy > 0.22f && cy < 0.58f && ax > 0.46f && ax < 0.78f - fabsf(cy - 0.40f) * 1.1f) {
+            mat = (ax > 0.64f) ? 3 : 19;
+        }
+        /* Esfera blindada principal */
+        if (enemy_inside_oval(x, cy, 0.0f, 0.40f, 0.50f, 0.28f)) {
+            mat = (x > 0.18f) ? 19 : 20;
+            if (fmodf(cy * 26.0f, 1.0f) < 0.14f) mat = 1;
+            /* Olho/lente otica ciano central */
+            if (enemy_inside_oval(x, cy, 0.0f, 0.38f, 0.24f, 0.13f)) mat = 1;
+            if (enemy_inside_oval(x, cy, 0.0f, 0.38f, 0.18f, 0.095f)) mat = 16;
+            if (enemy_inside_oval(x, cy, 0.0f, 0.38f, 0.08f, 0.045f)) mat = 4;
+        }
+        /* ARMA FUTURISTA acoplada na base (ponteiras duplas + nucleo de plasma) */
+        if (cy > 0.62f && cy < 0.84f && ax < 0.34f) {
+            if (ax > 0.16f && ax < 0.32f) mat = 3; /* ponteiras */
+            else if (cy < 0.74f) mat = 2;
+            if (enemy_inside_oval(x, cy, 0.0f, 0.76f, 0.14f, 0.07f)) mat = shooting ? 18 : 16;
+        }
+        return mat;
+    }
+
+    if (label == 'Y') {
+        /* Pinky (Y): Cao-Blindado de investida (baixo, largo, mandibula metalica) */
+        if (y > 0.28f && y < 0.74f && ax < 0.62f - fabsf(y - 0.48f) * 0.75f) {
+            mat = (y < 0.44f) ? 7 : 9;
+            if (y < 0.38f && ax < 0.42f) mat = 2; /* placas de aco na testa */
+        }
+        /* Olhos predadores laranja */
+        if (y > 0.40f && y < 0.47f && ax > 0.14f && ax < 0.32f) mat = 17;
+        /* Mandibula com dentes de aco */
+        if (y > 0.54f && y < 0.65f && ax < 0.32f) {
+            mat = (fmodf(x * 26.0f + 10.0f, 1.0f) < 0.45f) ? 21 : 1;
+        }
+        /* Patas blindadas pesadas */
+        if (y >= 0.66f && y < 0.96f && (fabsf(ax - 0.38f) < 0.12f || fabsf(ax - 0.16f) < 0.08f)) {
+            mat = (y > 0.86f) ? 1 : 2;
+        }
+        return mat;
+    }
+
+    if (label == 'A') {
+        /* Apostolo (A): Assassino sombrio encapuzado (estilo Arauto) com laminas curvas */
+        float hem = 0.94f + 0.025f * sinf(x * 32.0f);
+        if (y > 0.23f && y < hem && ax < 0.28f + y * 0.24f) {
+            float fold = sinf(x * 44.0f + y * 3.0f);
+            mat = (fold > 0.5f) ? 8 : ((fold < -0.55f) ? 9 : 7);
+            if (ax < 0.13f) mat = 22;
+        }
+        /* Capuz e mascara palida com olhos dourados */
+        if (y > 0.03f && y < 0.28f) {
+            float hood = (y < 0.11f) ? (0.05f + (y - 0.03f) * 2.2f) : (0.23f - (y - 0.11f) * 0.22f);
+            if (ax < hood) {
+                mat = (ax > hood - 0.03f) ? 8 : 7;
+                if (y > 0.11f && ax < hood - 0.045f) {
+                    mat = 21; /* mascara ossea */
+                    if (y > 0.155f && y < 0.185f && ax > 0.035f && ax < 0.105f) mat = 13;
+                }
+            }
+        }
+        /* Laminas curvas duplas nas laterais */
+        if (y > 0.44f && y < 0.78f) {
+            float curve = 0.44f + sinf((y - 0.44f) * 6.0f) * 0.18f;
+            if (fabsf(ax - curve) < 0.045f) mat = 4;
+        }
+        return mat;
+    }
+
+    if (label == 'T') {
+        /* Troll (T): Colosso de Ferro/Bronze com martelo de guerra sobre o ombro */
+        /* Martelo gigante atras/ao lado do ombro direito (como a Dragonslayer do Guts!) */
+        if (x > 0.42f && x < 0.52f && y > 0.20f && y < 0.74f) mat = 10; /* cabo */
+        if (x > 0.28f && x < 0.76f && y > 0.04f && y < 0.22f) {
+            mat = (y < 0.08f || x > 0.68f) ? 4 : 3; /* cabeca de ferro */
+        }
+        int body = enemy_humanoid_base(x, y, 0.44f, 0.22f, 11, 12, 1, 1);
+        if (body) mat = body;
+        /* Elmo pesado rebitado com visor ambar */
+        if (enemy_inside_oval(x, y, 0.0f, 0.16f, 0.23f, 0.105f)) {
+            mat = (y < 0.13f) ? 3 : 2;
+            if (y > 0.155f && y < 0.185f && ax > 0.03f && ax < 0.14f) mat = 17;
+        }
+        return mat;
+    }
+
+    if (label == 'B') {
+        /* Baron of Hell (B): Cavaleiro Infernal com chifres, peitoral em brasa e manoplas */
+        /* Chifres curvos */
+        if (y > 0.01f && y < 0.16f) {
+            float horn_x = 0.20f + (0.16f - y) * 1.4f;
+            if (fabsf(ax - horn_x) < 0.05f) mat = 21;
+        }
+        int body = enemy_humanoid_base(x, y, 0.42f, 0.21f, 22, 7, 1, 1);
+        if (body) mat = body;
+        /* Fenda/nucleo incandescente no peito e manoplas em brasa */
+        if (enemy_inside_oval(x, y, 0.0f, 0.40f, 0.12f, 0.07f)) mat = 17;
+        if (y > 0.56f && y < 0.67f && ax > 0.42f && ax < 0.62f) mat = 17;
+        /* Elmo com olhos em chamas */
+        if (y > 0.07f && y < 0.25f && ax < 0.22f - fmaxf(0.0f, y - 0.18f) * 0.8f) {
+            mat = 22;
+            if (ax > 0.16f) mat = 7;
+            if (y > 0.145f && y < 0.178f && ax > 0.04f && ax < 0.15f) mat = 17;
+        }
+        return mat;
+    }
+
+    if (label == 'Q') {
+        /* Zodd (Q): Senhor Abissal colossal (asas largas atras do corpo, chifres, armadura) */
+        /* Asas abertas atras do corpo */
+        if (y > 0.16f && y < 0.68f && ax > 0.30f) {
+            float wing_top = 0.16f + (ax - 0.30f) * 0.32f;
+            float wing_bot = 0.64f - (ax - 0.30f) * 0.28f + 0.04f * sinf(ax * 26.0f);
+            if (y > wing_top && y < wing_bot && ax < 0.96f) {
+                mat = (y < wing_top + 0.045f) ? 7 : 9;
+            }
+        }
+        /* Chifres colossais */
+        if (y > 0.005f && y < 0.15f) {
+            float horn_x = 0.21f + (0.15f - y) * 1.6f;
+            if (fabsf(ax - horn_x) < 0.055f) mat = 21;
+        }
+        int body = enemy_humanoid_base(x, y, 0.44f, 0.22f, 22, 23, 1, 1);
+        if (body) mat = body;
+        /* Garras prateadas */
+        if (y > 0.57f && y < 0.69f && ax > 0.44f && ax < 0.64f) mat = 4;
+        /* Rosto/elmo fera com olhos dourados */
+        if (y > 0.07f && y < 0.25f && ax < 0.23f - fmaxf(0.0f, y - 0.18f) * 0.8f) {
+            mat = 22;
+            if (y > 0.14f && y < 0.175f && ax > 0.04f && ax < 0.16f) mat = shooting ? 14 : 13;
+            if (y > 0.20f && y < 0.23f && ax < 0.12f && fmodf(x * 55.0f + 10.0f, 1.0f) < 0.45f) mat = 21;
+        }
+        return mat;
+    }
+
+    return 0;
+}
+
 static int enemy_sprite_sampler(float u, float v, int sx, int sy,
                                 int sprite_w, int sprite_h,
                                 float dist, float fog, float time_now,
                                 const void *user_data,
                                 char *out_ch, AsciiColor *out_col) {
     (void)dist;
-    (void)time_now;
     EnemyRenderCtx *ctx = (EnemyRenderCtx *)(uintptr_t)user_data;
-    if (!ctx || !ctx->cache || !ctx->api) {
+    if (!ctx || !ctx->api) {
         return 0;
     }
     const RendererApi *r = ctx->api;
+
+    /* Renderizacao procedural em resolucao nativa (mesma tecnica nitida dos personagens jogaveis). */
+    float px = u * 2.0f - 1.0f;
+    float py = v;
+    int pmat = enemy_procedural_material(ctx->label, px, py, ctx->shooting, time_now);
+    if (pmat > 0) {
+        EnemyProcMat m = enemy_proc_palette(pmat);
+        if (m.emissive) {
+            *out_ch = m.forced_glyph ? m.forced_glyph : '@';
+            *out_col = r->scale_rgb((float)m.color.r, (float)m.color.g, (float)m.color.b,
+                                    fmaxf(0.75f, fog));
+            return 1;
+        }
+        float nz = sqrtf(fmaxf(0.22f, 1.0f - px * px * 0.48f - (py - 0.45f) * (py - 0.45f) * 0.25f));
+        float lum = (0.48f + 0.44f * nz) * fog;
+        float boost = ctx->shooting ? 1.18f : 1.0f;
+        *out_ch = m.forced_glyph ? m.forced_glyph : r->sample_ramp(lum, sx, sy);
+        *out_col = r->scale_rgb((float)m.color.r, (float)m.color.g, (float)m.color.b,
+                                (0.72f + 0.34f * nz) * fog * boost);
+        return 1;
+    }
+    if (ctx->label != '?') {
+        return 0;
+    }
+
+    if (!ctx->cache) {
+        return 0;
+    }
 
     if (!ctx->mip_pixels || ctx->last_target_w != sprite_w || ctx->last_target_h != sprite_h) {
         ctx->mip_pixels = enemy_select_sprite_mip(ctx->cache, sprite_w, sprite_h,

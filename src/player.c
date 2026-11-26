@@ -609,7 +609,7 @@ float player_weapon_cooldown(int weapon_type) {
     switch (weapon_type) {
         case 0: return 0.28f; /* Pistola */
         case 1: return 0.72f; /* Shotgun */
-        case 2: return 1.15f; /* Sniper */
+        case 2: return 1.50f; /* Sniper */
         case 3: return 0.075f;/* Metralhadora (altissima cadencia) */
         case 4: return 0.90f; /* Arma Futurista */
         default: return FIRE_COOLDOWN;

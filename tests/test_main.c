@@ -822,6 +822,20 @@ static void test_weapons_inventory_and_drops(void) {
     }
     ASSERT_TRUE(mgr.enemies[0].active == 0,
                 "Orbe teleguiado da Arma Futurista alcanca e elimina o inimigo");
+
+    /* IA com pathfinding BFS contorna parede entre inimigo e jogador sem enroscar */
+    clear_test_arena(&map);
+    map.tiles[4][4] = '#';
+    map.tiles[5][4] = '#';
+    map.tiles[6][4] = '#';
+    map.tiles[5][6] = 'Z';
+    enemies_spawn_wave(&mgr, &map, &p);
+    player_init(&p, 2.5f, 5.5f, 0.0f);
+    for (int step = 0; step < 90; step++) {
+        enemies_update(&mgr, &map, &p, 0.08f);
+    }
+    ASSERT_TRUE(mgr.enemies[0].x < 4.5f,
+                "IA com pathfinding contorna parede sem ficar enroscada");
 }
 
 int main(void) {
