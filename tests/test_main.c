@@ -905,6 +905,18 @@ static void test_weapons_inventory_and_drops(void) {
     ASSERT_TRUE(player_begin_attack(&p_dep) == 1 && p_dep.weapon_owned[WEAPON_SNIPER] == 0 &&
                 p_dep.active_weapon == WEAPON_PISTOL,
                 "Sniper ao zerar pente e reserva some do inventario e troca para a Pistola");
+
+    /* Desbloqueio de emergencia caso a porta 'E' feche com o jogador em cima */
+    clear_test_arena(&map);
+    map.tiles[10][5] = 'E';
+    map_set_enemies_alive(1);
+    player_init(&p_dep, 5.5f, 10.5f, 0.0f);
+    ASSERT_TRUE(player_move(&p_dep, &map, 0.05f, 0.0f) == 1 &&
+                !map_is_wall(&map, (int)floorf(p_dep.x), (int)floorf(p_dep.y)),
+                "Jogador preso na porta 'E' fechada sai para o piso livre ao se mover");
+    map_set_enemies_alive(0);
+    ASSERT_TRUE(map_is_wall(&map, 5, 10) == 0,
+                "Porta 'E' libera passagem quando nao ha inimigos vivos");
 }
 
 /* Executa toda a suite de testes unitarios em sequencia e retorna 0 se passar tudo */
