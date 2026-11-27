@@ -459,8 +459,30 @@ static void handle_custom_input(Player *p, const GameMap *map, const MenuKeyBind
         player_reload(p);
     }
 
+    /* Troca de arma com scroll do mouse, tecla F ou atalhos numericos 1..9 da torre */
+    float wheel = GetMouseWheelMove();
+    if (wheel > 0.0f) {
+        player_cycle_weapon(p, -1);
+    } else if (wheel < 0.0f) {
+        player_cycle_weapon(p, 1);
+    }
     if (IsKeyPressed(KEY_F)) {
         player_cycle_weapon(p, 1);
+    }
+    for (int slot_k = 0; slot_k < 9; slot_k++) {
+        if (IsKeyPressed(KEY_ONE + slot_k)) {
+            int seen = 0;
+            for (int w = 0; w < PLAYER_MAX_WEAPONS; w++) {
+                if (player_weapon_has_ammo(p, w)) {
+                    if (seen == slot_k) {
+                        player_switch_weapon(p, w);
+                        break;
+                    }
+                    seen++;
+                }
+            }
+            break;
+        }
     }
 
     int want_shoot = (IsCursorHidden() && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) ||
@@ -627,10 +649,10 @@ static int showcase_character = PRESET_FUZILEIRO;
 static CharacterAppearance showcase_appearance;
 static char showcase_name[32] = "Fuzileiro";
 
-static void eval_showcase_point_for(int visual_id, const CharacterAppearance *app,
-                                    float gx, float gy, float breath,
-                                    int *mat_out, float *nx_out, float *ny_out) {
-    if (player_appearance_visual(visual_id, app).custom_sprite) {
+static void eval_showcase_point_ex(int visual_id, const CharacterAppearance *app,
+                                   int custom_sprite, float gx, float gy, float breath,
+                                   int *mat_out, float *nx_out, float *ny_out) {
+    if (custom_sprite) {
         if (gy < 74.0f) {
             *mat_out = player_appearance_material(visual_id, app, gx / 28.0f, (gy - breath) / 74.0f, 0);
             *nx_out = gx / 40.0f;
@@ -869,12 +891,6 @@ static void eval_showcase_point_for(int visual_id, const CharacterAppearance *ap
     *ny_out = ny;
 }
 
-static void eval_showcase_point(float gx, float gy, float breath,
-                                int *mat_out, float *nx_out, float *ny_out) {
-    eval_showcase_point_for(showcase_character, &showcase_appearance,
-                            gx, gy, breath, mat_out, nx_out, ny_out);
-}
-
 /* Cenario cyber-industrial (pilares, brilho no horizonte, piso 3D e brasas) renderizado em 1 draw call na GPU */
 static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float t,
                                       int page, int quality) {
@@ -924,6 +940,7 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
 
     ShowcaseLayout L = calc_showcase_layout(sw, sh, sc, page, quality);
     float breath = sinf(t * 2.3f) * 0.60f;
+    int sc_custom = player_appearance_visual(showcase_character, &showcase_appearance).custom_sprite;
 
     float cw = (float)sw / (float)bg_gw;
     float ch = (float)sh / (float)bg_gh;
@@ -977,7 +994,6 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
     const float inv_L_w = 1.0f / L.total_w;
     const float inv_L_h = 1.0f / L.total_h;
     const int t_scroll = (int)(t * 17.0f);
-    const AsciiColor bg_zero = {0, 0, 0};
 
     for (int r = 0; r < bg_gh; r++) {
         float py_c = ((float)r + 0.5f) * ch;
@@ -993,15 +1009,15 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
                 if (in_showcase_y && col_px_c[c] >= (float)L.x0 && col_px_c[c] <= L_x1) {
                     float sx = ((col_px_c[c] - (float)L.x0) * inv_L_w - 0.5f) * 68.0f;
                     int s_mat = 0; float s_nx = 0.0f, s_ny = 0.0f;
-                    eval_showcase_point(sx, sy, breath, &s_mat, &s_nx, &s_ny);
+                    eval_showcase_point_ex(showcase_character, &showcase_appearance, sc_custom,
+                                           sx, sy, breath, &s_mat, &s_nx, &s_ny);
                     if (s_mat != 0) continue;
                 }
                 float h_lum = clamp_f01(col_h_focus[c] * (0.72f + 0.28f * col_left_atten[c]));
                 static const char *H_CH = "=#@W";
                 bg_buf[cell_idx] = (AsciiCell){
                     H_CH[(c + r) & 3],
-                    {clamp_u8(255.0f * h_lum), clamp_u8(146.0f * h_lum), clamp_u8(54.0f * h_lum)},
-                    bg_zero
+                    {clamp_u8(255.0f * h_lum), clamp_u8(146.0f * h_lum), clamp_u8(54.0f * h_lum)}
                 };
             }
             continue;
@@ -1022,7 +1038,8 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
                 if (in_showcase_y && col_px_c[c] >= (float)L.x0 && col_px_c[c] <= L_x1) {
                     float sx = ((col_px_c[c] - (float)L.x0) * inv_L_w - 0.5f) * 68.0f;
                     int s_mat = 0; float s_nx = 0.0f, s_ny = 0.0f;
-                    eval_showcase_point(sx, sy, breath, &s_mat, &s_nx, &s_ny);
+                    eval_showcase_point_ex(showcase_character, &showcase_appearance, sc_custom,
+                                           sx, sy, breath, &s_mat, &s_nx, &s_ny);
                     if (s_mat != 0) continue;
                 }
 
@@ -1040,8 +1057,7 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
                         int ni = (int)(clamp_f01(1.0f - pulse + fabsf(pil_u) * 2.5f) * 4.5f);
                         bg_buf[cell_idx] = (AsciiCell){
                             N_CH[ni],
-                            {clamp_u8(255.0f * nlum), clamp_u8(138.0f * nlum), clamp_u8(44.0f * nlum)},
-                            bg_zero
+                            {clamp_u8(255.0f * nlum), clamp_u8(138.0f * nlum), clamp_u8(44.0f * nlum)}
                         };
                     } else {
                         int edge = (fabsf(pil_u) > 0.78f);
@@ -1061,8 +1077,7 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
                             gch,
                             {clamp_u8((44.0f + glow * 160.0f) * illum * 1.40f),
                              clamp_u8((50.0f + glow * 76.0f) * illum * 1.35f),
-                             clamp_u8((66.0f + glow * 28.0f) * illum * 1.35f)},
-                            bg_zero
+                             clamp_u8((66.0f + glow * 28.0f) * illum * 1.35f)}
                         };
                     }
                     continue;
@@ -1075,8 +1090,7 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
                     float sp_lum = (0.68f + 0.32f * sinf(t * 4.0f + (float)c)) * left_atten;
                     bg_buf[cell_idx] = (AsciiCell){
                         SPARK_CH[h & 3u],
-                        {clamp_u8(255.0f * sp_lum), clamp_u8(168.0f * sp_lum), clamp_u8(68.0f * sp_lum)},
-                        bg_zero
+                        {clamp_u8(255.0f * sp_lum), clamp_u8(168.0f * sp_lum), clamp_u8(68.0f * sp_lum)}
                     };
                     continue;
                 }
@@ -1088,8 +1102,7 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
                     if (idx > 12) idx = 12;
                     bg_buf[cell_idx] = (AsciiCell){
                         GLOW_RAMP[idx],
-                        {clamp_u8(232.0f * g_lum), clamp_u8(98.0f * g_lum), clamp_u8(40.0f * g_lum)},
-                        bg_zero
+                        {clamp_u8(232.0f * g_lum), clamp_u8(98.0f * g_lum), clamp_u8(40.0f * g_lum)}
                     };
                 }
             }
@@ -1123,7 +1136,8 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
             if (in_showcase_y && col_px_c[c] >= (float)L.x0 && col_px_c[c] <= L_x1) {
                 float sx = ((col_px_c[c] - (float)L.x0) * inv_L_w - 0.5f) * 68.0f;
                 int s_mat = 0; float s_nx = 0.0f, s_ny = 0.0f;
-                eval_showcase_point(sx, sy, breath, &s_mat, &s_nx, &s_ny);
+                eval_showcase_point_ex(showcase_character, &showcase_appearance, sc_custom,
+                                       sx, sy, breath, &s_mat, &s_nx, &s_ny);
                 if (s_mat != 0) continue;
             }
 
@@ -1153,11 +1167,16 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
 
                 bg_buf[cell_idx] = (AsciiCell){
                     lch,
-                    {clamp_u8(250.0f * line_lum), clamp_u8(126.0f * line_lum), clamp_u8(48.0f * line_lum)},
-                    bg_zero
+                    {clamp_u8(250.0f * line_lum), clamp_u8(126.0f * line_lum), clamp_u8(48.0f * line_lum)}
                 };
             } else {
-                float tile_n = 0.22f + 0.09f * sinf(x_world * 4.2f) * cos_zw;
+                /* Onda triangular rapida no lugar de sinf() por celula do piso do menu */
+                float tw_in = x_world * 0.66845f;
+                int tw_i = (int)tw_in;
+                if (tw_in < (float)tw_i) tw_i--;
+                float tw_f = tw_in - (float)tw_i;
+                float tri = (tw_f < 0.5f) ? (4.0f * tw_f - 1.0f) : (3.0f - 4.0f * tw_f);
+                float tile_n = 0.22f + 0.09f * tri * cos_zw;
                 float plate_lum = (dist_fade * tile_n + ped_glow + hor_glow) * left_atten;
                 if (plate_lum < 0.025f) continue;
 
@@ -1170,8 +1189,7 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
                     SOLID_BG_RAMP[idx],
                     {clamp_u8((115.0f + ped_glow * 140.0f) * col_scale),
                      clamp_u8((66.0f + ped_glow * 74.0f) * col_scale),
-                     clamp_u8((44.0f + dist_fade * 36.0f) * col_scale)},
-                    bg_zero
+                     clamp_u8((44.0f + dist_fade * 36.0f) * col_scale)}
                 };
             }
         }
@@ -1264,7 +1282,6 @@ static void draw_dense_ascii_word(Font font, const char *word, int x, int y,
         for (int i = 0; i < total_cells; i++) {
             wbuf[i].ch = ' ';
             wbuf[i].fg = bg_zero;
-            wbuf[i].bg = bg_zero;
         }
 
         /* Passada 1: sombra discreta apenas em ASCII puro no buffer GPU */
@@ -1286,7 +1303,7 @@ static void draw_dense_ascii_word(Font font, const char *word, int x, int y,
                             int is_b = (empty_bot && sr == sub_div - 1);
                             if (!is_r && !is_b) continue;
                             int mc = mc_base + bc * sub_div + sc_i;
-                            wbuf[(mr + 1) * grid_w + (mc + 1)] = (AsciiCell){':', sh_col, bg_zero};
+                            wbuf[(mr + 1) * grid_w + (mc + 1)] = (AsciiCell){':', sh_col};
                         }
                     }
                 }
@@ -1346,8 +1363,7 @@ static void draw_dense_ascii_word(Font font, const char *word, int x, int y,
 
                             wbuf[mr * grid_w + mc] = (AsciiCell){
                                 gch,
-                                {clamp_u8(cr * boost), clamp_u8(cg * boost), clamp_u8(cb * boost)},
-                                bg_zero
+                                {clamp_u8(cr * boost), clamp_u8(cg * boost), clamp_u8(cb * boost)}
                             };
                         }
                     }
@@ -1440,7 +1456,7 @@ static void build_character_ascii_quad(int visual_id, const CharacterAppearance 
                                        float max_gy, float lum_floor,
                                        AsciiCell *out_buf) {
     static const char *SOLID_RAMP = "=+*xX#%8&BWM@"; /* 13 niveis densos de alta cobertura */
-    static int mat_grid[SHOWCASE_GH][SHOWCASE_GW];
+    static short mat_grid[SHOWCASE_GH][SHOWCASE_GW];
     static float nx_grid[SHOWCASE_GH][SHOWCASE_GW];
     static float ny_grid[SHOWCASE_GH][SHOWCASE_GW];
 
@@ -1458,8 +1474,10 @@ static void build_character_ascii_quad(int visual_id, const CharacterAppearance 
         float gy = (((float)r + 0.5f) / (float)gh) * max_gy;
         for (int c = 0; c < gw; c++) {
             float gx = (((float)c + 0.5f) / (float)gw - 0.5f) * 68.0f;
-            eval_showcase_point_for(visual_id, app, gx, gy, breath,
-                                    &mat_grid[r][c], &nx_grid[r][c], &ny_grid[r][c]);
+            int m_tmp = 0;
+            eval_showcase_point_ex(visual_id, app, is_custom_skin, gx, gy, breath,
+                                   &m_tmp, &nx_grid[r][c], &ny_grid[r][c]);
+            mat_grid[r][c] = (short)m_tmp;
         }
     }
 
@@ -1517,8 +1535,7 @@ static void build_character_ascii_quad(int visual_id, const CharacterAppearance 
                 if (r_idx > 7) r_idx = 7;
                 out_buf[buf_idx] = (AsciiCell){
                     SKIN_RAMP[r_idx],
-                    {clamp_u8(cr * ch_lum), clamp_u8(cg * ch_lum), clamp_u8(cb * ch_lum)},
-                    {0, 0, 0}
+                    {clamp_u8(cr * ch_lum), clamp_u8(cg * ch_lum), clamp_u8(cb * ch_lum)}
                 };
                 continue;
             }
@@ -1563,8 +1580,7 @@ static void build_character_ascii_quad(int visual_id, const CharacterAppearance 
                 glyph,
                 {clamp_u8(cr * ch_lum + edge_tint * 92.0f),
                  clamp_u8(cg * ch_lum + edge_tint * 55.0f),
-                 clamp_u8(cb * ch_lum + edge_tint * 25.0f)},
-                {0, 0, 0}
+                 clamp_u8(cb * ch_lum + edge_tint * 25.0f)}
             };
         }
     }

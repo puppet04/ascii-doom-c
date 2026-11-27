@@ -892,6 +892,19 @@ static void test_weapons_inventory_and_drops(void) {
                 enemies_weapon_drop_pool()[0].weapon == WEAPON_FLAMETHROWER &&
                 enemies_weapon_drop_pool()[0].ammo == 400,
                 "Matar Boss Lanca-Chamas derruba Lanca-Chamas no chao com 10x carregador (400)");
+    /* Arma finita some do inventario e volta para a Pistola ao zerar pente e reserva */
+    Player p_dep;
+    player_init(&p_dep, 2.5f, 2.5f, 0.0f);
+    player_pickup_weapon(&p_dep, WEAPON_SNIPER, 2);
+    player_switch_weapon(&p_dep, WEAPON_SNIPER);
+    p_dep.shoot_timer = 0.0f;
+    ASSERT_TRUE(player_begin_attack(&p_dep) == 1 && p_dep.weapon_owned[WEAPON_SNIPER] == 1 &&
+                p_dep.active_weapon == WEAPON_SNIPER,
+                "Sniper com 1 bala restante permanece equipada na torre");
+    p_dep.shoot_timer = 0.0f;
+    ASSERT_TRUE(player_begin_attack(&p_dep) == 1 && p_dep.weapon_owned[WEAPON_SNIPER] == 0 &&
+                p_dep.active_weapon == WEAPON_PISTOL,
+                "Sniper ao zerar pente e reserva some do inventario e troca para a Pistola");
 }
 
 /* Executa toda a suite de testes unitarios em sequencia e retorna 0 se passar tudo */
