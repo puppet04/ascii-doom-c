@@ -1,35 +1,32 @@
-# Guia da Biblioteca de Renderização ASCII (`render_api.h` + `renderer.h`)
+# Guia da Biblioteca de Renderizacao ASCII (`render_api.h` + `renderer.h`)
 
-Este guia documenta a biblioteca gráfica do **ASCII DOOM em C** (Módulo 3 — Checchia). A engine de renderização funciona como uma **biblioteca isolada**: nenhum outro módulo da equipe (`map.c`, `entities.c`, `player.c`, `network.c`) precisa editar `src/renderer.c` nem incluir `raylib.h` para desenhar no mundo 3D, no minimapa ou na interface.
+Este guia documenta a interface grafica do **SECTOR 404** (`src/renderer.c`). A engine foi isolada como uma biblioteca interna para que `map.c`, `entities.c`, `player.c` e `network.c` consigam desenhar no mundo 3D e no minimapa sem incluir `<raylib.h>` nem alterar o codigo do raycaster.
 
 ---
 
 ## 1. Arquitetura em Duas Camadas
 
-A biblioteca é dividida em dois cabeçalhos para manter baixo acoplamento e testes unitários rápidos:
-
-1. **`include/render_api.h` (Interface Pura em C, Zero Raylib):**
-   - Define os tipos leves `AsciiColor`, `AsciiCell`, `RenderSpriteSpec`, os ponteiros de hooks e a vtable `RendererApi`.
-   - Pode ser incluído livremente em `entities.h`, `map.h` e `player.h` sem puxar `<raylib.h>` — garantindo baixo acoplamento entre os módulos da equipe.
-2. **`include/renderer.h` + `src/renderer.c` (Backend Raylib + GPU Shader `#version 330`):**
-   - Implementa o raycasting 3D em 2 passes, o z-buffer, o atlas mipmapped `16×6` de glifos ASCII `64×64` (renderizado em `50px` inteiros), os presets de qualidade (`F2`) e estilo (`F4`), o suporte a skins remotas em `SpriteEntity` (`visual_id`, `appearance`, `team_accent`), o HUD e a `RendererApi`.
-   - Expõe `renderer_get_api()` e os registradores de hooks usados em `src/main.c`.
+1. **`include/render_api.h` (Interface Pura em C, sem Raylib):**
+   - Define `AsciiColor`, `AsciiCell`, `RenderSpriteSpec`, os tipos de callback de hooks e a vtable `RendererApi`.
+   - Pode ser incluida diretamente em modulos de logica e na suite `tests/test_main.c` sem puxar dependencias graficas.
+2. **`include/renderer.h` + `src/renderer.c` (Backend Raylib + GLSL `#version 330`):**
+   - Implementa o raycasting DDA em 2 passes, o z-buffer, o atlas mipmapped `16x6`, os presets de qualidade (`F2`) e estilo (`F4`), o suporte a skins de jogadores remotos e a `RendererApi`.
 
 ---
 
-## 2. Como o Pipeline Funciona
+## 2. Pipeline do Frame
 
-1. **Grade Lógica Dinâmica (`screen_grid`):** cada frame preenche uma matriz até `640×360` células (`r_width × r_height`), variando conforme a qualidade (`BAIXO`, `MEDIO`, `ALTO`, `ULTRA`, `AUTO`) e chegando a células ultra-finas no Estilo 2 (`MICRO-ASCII`).
-2. **Raycasting + Oclusão (`z_buffer` e `cell_depth`):**
-   - **Passe 1 (`renderer_draw_walls`):** lança `r_width` raios via DDA, corrige olho-de-peixe (`perp_dist`), salva `z_buffer[x]` e rasteriza cada parede.
-   - **Passe 2 (`renderer_draw_walls`):** preenche teto e chão em ordem de linha (L1 cache), consultando o `floor_hook` para armadilhas/kits/chamas.
-   - **Sprites, Jogadores Remotos, Projéteis, Arma e Minimapa:** escrevem na grade respeitando `z_buffer[x]` e `cell_depth[y][x]` (jogadores remotos em `renderer_draw_sprites` usam seu próprio `visual_id`/`appearance`).
-3. **Upload + Renderização GPU em 1 Draw Call (`renderer_draw_ascii_buffer`):**
-   - Compacta a grade numa textura RGBA (`RGB = cor foreground`, `A = índice do glifo 1..95`) e dispara um único `DrawTexturePro` sob o fragment shader GLSL `#version 330`.
-   - **Estilo 1 (`ESTILO 1: SOBREPOSTO`):** glifos densos com sobreposição `1.72×` no shader.
-   - **Estilo 2 (`ESTILO 2: MICRO-ASCII`):** micro-caracteres lado a lado (`1.0×`, curva gama via LUT de brilho e zero sobreposição / zero quadrados de fundo).
+1. **Grade logica (`screen_grid`):** cada frame preenche uma grade de ate `544x272` celulas (`r_width x r_height`), ajustada conforme o preset (`BAIXO`, `MEDIO`, `ALTO`, `ULTRA`, `AUTO`) e o estilo visual (`F4`).
+2. **Raycasting + Oclusao (`z_buffer` e `cell_depth`):**
+   - **Passe 1 (`renderer_draw_walls`):** lanca `r_width` raios via DDA, corrige olho-de-peixe (`perp_dist`), grava `z_buffer[x]` e rasteriza as colunas de parede.
+   - **Passe 2 (`renderer_draw_walls`):** preenche teto e chao em ordem de linha (amigavel ao cache L1), consultando o `floor_hook` para armadilhas, fogo e kits medicos.
+   - **Sprites, projeteis, arma e minimapa:** escrevem na grade respeitando `z_buffer[x]` e `cell_depth[y][x]`.
+3. **Upload + GPU (`renderer_draw_ascii_buffer`):**
+   - Compacta a grade numa textura RGBA (`576x352` no maximo; `RGB = cor do caractere`, `A = indice do glifo 1..95`) e renderiza em **1 draw call**.
+   - `ASCII_FS_CLASSIC_CODE` (**Sobreposto**): glifos sobrepostos (`1.72x`) com visual classico denso.
+   - `ASCII_FS_MICRO_CODE` (**Micro-ASCII**): micro-caracteres lado a lado (`1.0x`), sem quadrados de fundo e com LUT de contraste.
 
-### Ordem Canônica por Frame (`run_game_session` em `src/main.c`)
+### Ordem por Quadro (`run_game_session` em `src/main.c`)
 
 ```c
 const RendererApi *r_api = renderer_get_api();
@@ -56,50 +53,50 @@ player_draw_ability_hud(&player, sw, sh);
 
 ---
 
-## 3. Referência Rápida da `RendererApi` (`include/render_api.h`)
+## 3. Referencia Rapida da `RendererApi` (`include/render_api.h`)
 
 ### Estruturas Principais
 
 - **`AsciiColor`**: `{ unsigned char r, g, b; }`
-- **`AsciiCell`**: `{ char ch; AsciiColor fg; AsciiColor bg; }` (`' '` ou `'\0'` é transparente na GPU).
+- **`AsciiCell`**: `{ char ch; AsciiColor fg; }` — ocupa 4 bytes (`' '` ou `'\0'` fica transparente na GPU; `.bg` foi removido para reduzir banda de memoria, mantendo o parametro `bg` em `set_cell`/`set_cell_if_closer` apenas por compatibilidade de assinatura).
 - **`RenderSpriteSpec`**:
-  - `world_x`, `world_y`: posição no mapa (ex.: centro da célula `mx + 0.5f`).
-  - `height_scale`: altura relativa à parede (`1.0f` = altura padrão).
-  - `width_ratio`: razão `largura / altura` do sprite projetado.
-  - `min_w`, `min_h`: dimensões mínimas em células para sprites distantes não sumirem.
-  - `min_fog`: luminosidade mínima `[0.0f..1.0f]` aplicada na neblina distante.
+  - `world_x`, `world_y`: posicao no mapa (ex.: `mx + 0.5f`).
+  - `height_scale`: altura relativa a parede (`1.0f` = altura padrao).
+  - `width_ratio`: razao `largura / altura` do sprite projetado.
+  - `min_w`, `min_h`: tamanho minimo em celulas quando distante.
+  - `min_fog`: luminosidade minima `[0.0f..1.0f]` na neblina distante.
 
-### Funções Disponíveis em `const RendererApi *r`
+### Funcoes em `const RendererApi *r`
 
-| Método | O que faz |
+| Metodo | O que faz |
 | :--- | :--- |
-| `r->draw_world_sprite(player, &spec, sampler, ctx)` | Projeta um billboard 3D, calcula fog + z-buffer e chama `sampler(...)` apenas nos pixels visíveis. |
-| `r->draw_world_orb(player, x, y, h, rad_scale, min_r, max_r, core_ch, core_col, edge_ch, edge_col, thresh)` | Desenha um projétil esférico 3D (bola de fogo, orbe de energia) com oclusão por paredes. |
-| `r->draw_world_floor_ring(cx, cy, radius, inner_ch, inner_col, outer_ch, outer_col)` | Desenha um anel circular no chão 3D (ex.: área de habilidade) com oclusão por paredes e sprites. |
-| `r->project_point(player, x, y, h, &sx, &sy, &depth)` | Converte `(x, y, altura)` do mundo para célula `(sx, sy)` e retorna `1` se estiver à frente de `z_buffer[sx]`. |
-| `r->set_cell(x, y, ch, fg, bg)` | Escreve uma célula diretamente na grade ASCII do frame. |
+| `r->draw_world_sprite(player, &spec, sampler, ctx)` | Projeta um billboard 3D com fog + z-buffer e chama `sampler(...)` apenas nos pixels visiveis. |
+| `r->draw_world_orb(player, x, y, h, rad_scale, min_r, max_r, core_ch, core_col, edge_ch, edge_col, thresh)` | Desenha um projetil esferico 3D (bola de fogo, orbe de energia) respeitando o z-buffer. |
+| `r->draw_world_floor_ring(cx, cy, radius, inner_ch, inner_col, outer_ch, outer_col)` | Desenha um anel circular no chao 3D (ex.: area da Teto) com oclusao por paredes. |
+| `r->project_point(player, x, y, h, &sx, &sy, &depth)` | Converte `(x, y, altura)` do mundo para celula `(sx, sy)` e retorna `1` se estiver a frente de `z_buffer[sx]`. |
+| `r->set_cell(x, y, ch, fg, bg)` | Escreve uma celula diretamente na grade ASCII do frame (`bg` e mantido por compatibilidade). |
 | `r->set_cell_if_closer(x, y, depth, ch, fg, bg)` | Escreve apenas se `depth < z_buffer[x]` e `depth < cell_depth[y][x]`. |
-| `r->get_grid_size(&w, &h)` | Retorna as dimensões atuais (`r_width`, `r_height`) da malha dinâmica. |
-| `r->sample_ramp(lum, x, y)` | Escolhe o caractere da rampa densa (`=-+*xX#%8&BWM@`) com dithering Bayer 4×4 conforme `lum` em `[0..1]`. |
-| `r->scale_rgb(r, g, b, factor)` | Multiplica uma cor RGB por `factor` (com saturação segura em `[0..255]`). |
-| `r->get_time()` | Tempo atual de execução em segundos (para animações). |
-| `r->get_view_angle(player)` | Ângulo real da câmera (respeita 1ª e 3ª pessoa). |
+| `r->get_grid_size(&w, &h)` | Retorna as dimensoes atuais (`r_width`, `r_height`) da grade dinamica. |
+| `r->sample_ramp(lum, x, y)` | Escolhe o caractere da rampa densa (`=-+*xX#%8&BWM@`) com dithering Bayer 4x4 conforme `lum` em `[0..1]`. |
+| `r->scale_rgb(r, g, b, factor)` | Multiplica uma cor RGB por `factor` com clamp seguro em `[0..255]`. |
+| `r->get_time()` | Tempo atual de execucao em segundos para animacoes. |
+| `r->get_view_angle(player)` | Angulo real da camera (respeita 1a e 3a pessoa). |
 
 ---
 
 ## 4. Sistema de Hooks (`renderer_set_*_hook`)
 
-Para customizar paredes, piso ou minimapa sem alterar `src/renderer.c`, crie callbacks com as assinaturas de `include/render_api.h` no seu módulo e registre-os em `register_renderer_hooks()` (`src/main.c`):
+Os hooks sao registrados em `register_renderer_hooks()` (`src/main.c`):
 
-- `renderer_set_wall_hook(RendererWallStyleHookFn hook)`: chamado por coluna ao atingir uma parede. Usado por `map_wall_style_hook()` para deixar a saída `'E'` branca/brilhante quando os inimigos morrem e clarear paredes atravessáveis (`$`, `&`, `/`).
-- `renderer_set_floor_hook(RendererFloorHookFn hook)`: chamado por célula visível do chão. Usado por `map_floor_decal_hook()` para desenhar placas de armadilha (`^`), fogo ativo (`F`) e kits médicos (`+`) sobre o piso metálico.
-- `renderer_set_minimap_hook(RendererMinimapHookFn hook)`: chamado no minimapa 2D para tiles transitáveis. Usado por `map_minimap_tile_hook()` para marcar fogo ativo (`^`) e kits médicos (`+`).
+- `renderer_set_wall_hook(RendererWallStyleHookFn hook)`: chamado por coluna ao atingir uma parede (`map_wall_style_hook()` destaca saidas `'E'` liberadas e paredes atravessaveis `$`, `&`, `/`).
+- `renderer_set_floor_hook(RendererFloorHookFn hook)`: chamado por celula visivel do chao (`map_floor_decal_hook()` desenha armadilhas `^`, fogo ativo `F` e kits medicos `+`).
+- `renderer_set_minimap_hook(RendererMinimapHookFn hook)`: chamado no minimapa 2D (`map_minimap_tile_hook()` marca fogo `^`/`F` e kits `+`).
 
 ---
 
-## 5. Exemplos Práticos de Uso
+## 5. Exemplos Praticos de Uso
 
-### Exemplo A: Renderizar um Inimigo ou Objeto 3D (`draw_world_sprite`)
+### Exemplo A: Sprite 3D com `draw_world_sprite`
 
 ```c
 #include "render_api.h"
@@ -118,14 +115,12 @@ static int meu_objeto_sampler(float u, float v, int sx, int sy,
     const MeuObjetoCtx *ctx = (const MeuObjetoCtx *)user_data;
     const RendererApi *r = ctx->api;
 
-    /* Descarta fundo fora da silhueta oval */
     float dx = u - 0.5f;
     float dy = v - 0.5f;
     if (dx * dx + dy * dy > 0.22f) {
         return 0;
     }
 
-    /* Usa r->sample_ramp para acompanhar automaticamente a qualidade F2 e o estilo F4 */
     float lum = (0.85f - (dx * dx + dy * dy)) * fog;
     *out_ch = r->sample_ramp(lum, sx, sy);
     *out_col = r->scale_rgb(240.0f, 120.0f, 40.0f, fog);
@@ -148,7 +143,7 @@ void desenhar_meu_objeto(const void *player_ptr, float x, float y, const Rendere
 }
 ```
 
-### Exemplo B: Desenhar um Projétil Esférico (`draw_world_orb`)
+### Exemplo B: Projetil Esferico com `draw_world_orb`
 
 ```c
 AsciiColor nucleo = {255, 190, 50};
@@ -158,21 +153,19 @@ r->draw_world_orb(player_ptr, proj_x, proj_y, 0.46f,
                   '@', nucleo, '*', borda, 0.55f);
 ```
 
-### Exemplo C: Desenhar Qualquer Matriz 2D na GPU (`renderer_draw_ascii_buffer`)
-
-Para interfaces, menus, retratos ou animações 2D em ASCII sem centenas de chamadas `DrawTextCodepoint`:
+### Exemplo C: Matriz 2D Direto na GPU (`renderer_draw_ascii_buffer`)
 
 ```c
 AsciiCell painel[40 * 80];
-/* preencha painel[y * 80 + x] com { ch, fg, {0, 0, 0} } (' ' fica transparente) */
+/* preencha painel[y * 80 + x] com { ch, fg } (' ' fica transparente) */
 renderer_draw_ascii_buffer(painel, 80, 40, 80, pos_x, pos_y, largura_px, altura_px);
 ```
 
 ---
 
-## 6. Boas Práticas para a Equipe
+## 6. Boas Praticas
 
-1. **Nunca edite `src/renderer.c` para adicionar inimigos, armas/habilidades ou itens de mapa:** crie tudo no seu próprio arquivo (`entities.c`, `player.c` ou `map.c`) via `RendererApi` e hooks.
-2. **Não inclua `"raylib.h"` em módulos de lógica:** inclua apenas `"render_api.h"`, preservando a compilação limpa da suíte `tests/test_main.c`.
-3. **Respeite a qualidade dinâmica (`F2`):** em vez de travar o corpo do sprite em um único caractere fixo (`#`), use `r->sample_ramp(lum, sx, sy)` nas superfícies principais e reserve símbolos fixos apenas para detalhes finos (olhos, chifres, mira, contornos).
-4. **Zero quadrados de fundo em UI:** sempre preencha `.bg = {0, 0, 0}` e use `' '` para espaços vazios ao chamar `renderer_draw_ascii_buffer()`.
+1. Mantenha efeitos de inimigos, habilidades e mapa dentro de `entities.c`, `player.c` ou `map.c` via `RendererApi` e hooks — sem misturar logica de gameplay em `src/renderer.c`.
+2. Evite incluir `"raylib.h"` nos headers compartilhados para manter a compilacao rapida e os testes isolados.
+3. Use `r->sample_ramp(lum, sx, sy)` nas superficies maiores dos sprites para escalar bem nos modos de qualidade `F2` e nos dois estilos `F4`.
+4. Use `' '` para celulas transparentes ao chamar `renderer_draw_ascii_buffer()`.

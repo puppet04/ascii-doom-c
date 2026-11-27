@@ -17,12 +17,14 @@ const http = require('http');
 const crypto = require('crypto');
 
 const PORT = parseInt(process.env.PORT || '8787', 10);
-const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'; /* GUID padrao do handshake WebSocket */
 const MAX_FRAME_BYTES = 64 * 1024;
-const MAX_GUESTS_PER_ROOM = 3;
+const MAX_GUESTS_PER_ROOM = 3; /* 1 host + 3 convidados = 4 players na sala */
 
+/* Guarda as salas ativas em memoria indexadas pelo codigo (ex: K7B2) */
 const rooms = new Map();
 
+/* Limpa e valida o codigo da sala (maiusculas e numeros, 3 a 8 caracteres) */
 function normalizeRoomCode(raw) {
   if (!raw) return '';
   const clean = String(raw).toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -30,6 +32,7 @@ function normalizeRoomCode(raw) {
   return clean;
 }
 
+/* Manda erro HTTP simples e fecha o socket se o handshake falhar */
 function sendHttpError(socket, statusCode, message) {
   const body = Buffer.from(message, 'utf8');
   const head =
@@ -44,6 +47,7 @@ function sendHttpError(socket, statusCode, message) {
   }
 }
 
+/* Monta um quadro WebSocket pra mandar pro cliente (servidor nunca mascara payload) */
 function encodeWsFrame(opcode, payloadBuf) {
   const payload = payloadBuf ? Buffer.from(payloadBuf) : Buffer.alloc(0);
   const len = payload.length;
@@ -66,6 +70,7 @@ function encodeWsFrame(opcode, payloadBuf) {
   return Buffer.concat([header, payload]);
 }
 
+/* Wrapper com estado do socket pra acumular chunks TCP e enviar quadros */
 function makeWsClient(socket) {
   const client = {
     socket,
@@ -105,6 +110,7 @@ function makeWsClient(socket) {
   return client;
 }
 
+/* Le todos os frames WebSocket prontos no rxBuf e tira a mascara do cliente */
 function parseWsFrames(client, onBinary, onClose) {
   while (client.rxBuf.length >= 2) {
     const b0 = client.rxBuf[0];
@@ -139,6 +145,7 @@ function parseWsFrames(client, onBinary, onClose) {
     if (masked) offset += 4;
     if (client.rxBuf.length < offset + payloadLen) return;
 
+    /* Tira a mascara XOR de 4 bytes que todo cliente WebSocket e obrigado a enviar */
     const frameData = Buffer.allocUnsafe(payloadLen);
     client.rxBuf.copy(frameData, 0, offset, offset + payloadLen);
     if (masked) {
@@ -160,9 +167,10 @@ function parseWsFrames(client, onBinary, onClose) {
       onClose();
       return;
     } else if (opcode === 0x9) {
+      /* Responde ping com pong na hora */
       client.sendFrame(0xA, frameData);
     } else if (opcode === 0xA) {
-      // pong
+      // pong recebido (so precisa atualizar lastActivity acima)
     } else if (opcode === 0x0) {
       client.fragChunks.push(frameData);
       if (fin) {
@@ -181,6 +189,7 @@ function parseWsFrames(client, onBinary, onClose) {
   }
 }
 
+/* Servidor HTTP simples pro healthcheck do Render e listagem de salas em /rooms */
 const server = http.createServer((req, res) => {
   if (req.url && req.url.startsWith('/rooms')) {
     const list = [];
@@ -195,6 +204,7 @@ const server = http.createServer((req, res) => {
   res.end(`SECTOR 404 Relay OK (salas ativas: ${rooms.size})\n`);
 });
 
+/* Trata conexoes WebSocket entrando em /ws?room=CODIGO&role=host|client */
 server.on('upgrade', (req, socket, head) => {
   let url;
   try {
@@ -239,6 +249,7 @@ server.on('upgrade', (req, socket, head) => {
     }
   }
 
+  /* Calcula Sec-WebSocket-Accept com SHA-1 + Base64 pra fechar o handshake */
   const accept = crypto.createHash('sha1').update(wsKey + WS_GUID).digest('base64');
   const upgradeResp =
     'HTTP/1.1 101 Switching Protocols\r\n' +
@@ -246,6 +257,7 @@ server.on('upgrade', (req, socket, head) => {
     'Connection: Upgrade\r\n' +
     `Sec-WebSocket-Accept: ${accept}\r\n\r\n`;
 
+  /* Desativa algoritmo de Nagle pra mandar os pacotes do jogo sem atraso */
   socket.setNoDelay(true);
   socket.write(upgradeResp);
 
@@ -258,6 +270,7 @@ server.on('upgrade', (req, socket, head) => {
   let assignedPeerId = 0;
 
   if (role === 'host') {
+    /* Se ja tinha outro host com esse codigo, derruba a sala antiga antes */
     if (room && room.host && !room.host.closed) {
       for (const g of room.guests.values()) {
         g.close(4001, 'Host replaced');
@@ -277,6 +290,7 @@ server.on('upgrade', (req, socket, head) => {
     room.guests.set(assignedPeerId, client);
   }
 
+  /* Se o host cair, derruba a sala inteira; se for convidado, so tira ele da lista */
   function cleanup() {
     if (cleanupDone) return;
     cleanupDone = true;
@@ -294,11 +308,13 @@ server.on('upgrade', (req, socket, head) => {
     }
   }
 
+  /* Repassa os pacotes binarios olhando os 4 primeiros bytes (target/peer_id) */
   function handleBinary(frameBuf) {
     if (!frameBuf || frameBuf.length < 5) return;
     const headerId = frameBuf.readUInt32LE(0);
     if (role === 'host') {
       if (headerId === 0) {
+        /* targetId == 0 significa broadcast para todos os convidados da sala */
         const out = Buffer.from(frameBuf);
         out.writeUInt32LE(0, 0);
         for (const g of room.guests.values()) {
@@ -313,6 +329,7 @@ server.on('upgrade', (req, socket, head) => {
         }
       }
     } else {
+      /* Convidado mandando pro host: marca o peer_id dele nos 4 primeiros bytes */
       if (room.host && !room.host.closed) {
         const out = Buffer.from(frameBuf);
         out.writeUInt32LE(assignedPeerId >>> 0, 0);
@@ -334,6 +351,7 @@ server.on('upgrade', (req, socket, head) => {
   }
 });
 
+/* Manda ping a cada 20s e fecha salas que ficarem mais de 90s sem atividade */
 setInterval(() => {
   const now = Date.now();
   for (const [code, room] of rooms.entries()) {

@@ -32,8 +32,9 @@ if not exist "C:\msys64\ucrt64\include\raylib.h" (
 
 set "CC=C:\msys64\ucrt64\bin\gcc.exe"
 set "WINDRES=C:\msys64\ucrt64\bin\windres.exe"
-set CFLAGS=-Wall -Wextra -std=c11 -O2 -Iinclude
+set CFLAGS=-Wall -Wextra -std=c11 -O2 -ftree-vectorize -ffunction-sections -Iinclude
 set LDFLAGS=-static-libgcc -Wl,-Bstatic -lraylib -lglfw3 -lwinpthread -Wl,-Bdynamic -lopengl32 -lgdi32 -lwinmm -lshell32 -lws2_32 -lwinhttp -lm
+set REL_LDFLAGS=-s -Wl,--gc-sections %LDFLAGS%
 
 set SRCS=src\map.c src\player.c src\entities.c src\renderer.c src\network.c src\main.c src\embedded_assets.c src\glfw_static_shim.c
 set TEST_SRCS=src\map.c src\player.c src\entities.c src\network.c src\embedded_assets.c src\glfw_static_shim.c tests\test_main.c
@@ -77,7 +78,7 @@ if exist "assets\app_icon.rc" (
 )
 
 echo [BUILD] Compilando %TARGET%...
-%CC% %CFLAGS% %SRCS% %ICON_OBJ% -o %TARGET% %LDFLAGS%
+%CC% %CFLAGS% %SRCS% %ICON_OBJ% -o %TARGET% %REL_LDFLAGS%
 if errorlevel 1 (
     echo [ERRO] Falha na compilacao! Verifique os erros acima.
     exit /b 1

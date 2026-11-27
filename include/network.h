@@ -17,12 +17,14 @@
 #define DEFAULT_PORT 5000
 #define NET_DEFAULT_RELAY_URL "wss://sector404-relay.onrender.com"
 
+/* Modo de operacao da sessao de rede nesta instancia do jogo. */
 typedef enum {
     NET_MODE_OFFLINE = 0,
     NET_MODE_HOST = 1,
     NET_MODE_CLIENT = 2
 } NetMode;
 
+/* Regra da partida multiplayer (cooperativo contra inimigos ou PvP entre jogadores). */
 typedef enum {
     NET_GAME_COOP = 0,
     NET_GAME_PVP  = 1
@@ -43,6 +45,7 @@ typedef enum {
     NET_RELAY_CLOSED = 4
 } NetRelayStatus;
 
+/* Pacote legado simples usado no modo 1v1 e nos testes unitarios de loopback. */
 typedef struct {
     int player_id;
     float x;
@@ -314,10 +317,14 @@ int net_send_lobby_leave(NetContext *net);
 int net_poll_lobby(NetContext *net, const NetCtrlPacket *host_offer, int *peer_left_out);
 
 /* Scanner UDP de salas abertas na LAN e em localhost. */
+/* Abre socket UDP nao-bloqueante para escutar respostas de hosts na rede local. */
 int net_discovery_open(unsigned long long *out_sock);
+/* Envia pacote de busca (broadcast na LAN e loopback local) na porta informada. */
 void net_discovery_send_probe(unsigned long long sock_handle, int port);
+/* Le ofertas recebidas, atualiza a lista de salas e remove as que expiraram. */
 int net_discovery_poll(unsigned long long sock_handle, NetDiscoveredRoom *rooms,
                        int *room_count, int max_rooms, double now);
+/* Fecha o socket temporario do scanner de salas. */
 void net_discovery_close(unsigned long long *sock_handle);
 
 /* API classica 1v1 (mantida 100% compativel com testes unitarios). */
@@ -325,16 +332,22 @@ int net_send_state(NetContext *net, const Player *local_player, int shooting);
 int net_receive_state(NetContext *net);
 
 /* API multi-jogador em estrela (ate 4 jogadores, Co-op e PvP). */
+/* Cliente envia seu estado ao Host; Host aplica localmente e envia snapshot a todos. */
 int net_send_match_state(NetContext *net, const Player *local_player, int shooting);
+/* Drena pacotes pendentes da partida e atualiza slots, vida, dano PvP e kills. */
 int net_receive_match_state(NetContext *net);
 
 /* Fecha o socket e limpa recursos de rede. */
 void net_close(NetContext *net);
 
 /* Utilitarios e inicializacao do modo Online (Relay WebSocket via WinHTTP). */
+/* Gera codigo curto aleatorio de sala para compartilhar com outros jogadores online. */
 void net_generate_room_code(char *out_code, int out_size);
+/* Obtém a URL configurada do servidor Relay (padrao ou override por ambiente). */
 void net_get_relay_url(char *out_url, int out_size);
+/* Abre conexao WebSocket com o servidor Relay usando o codigo de sala informado. */
 int net_init_relay(NetContext *net, NetMode mode, const char *relay_url, const char *room_code);
+/* Consulta estado atual da conexao Relay e copia eventual mensagem de erro. */
 NetRelayStatus net_relay_get_status(const NetContext *net, char *err_out, int err_size);
 
 #endif /* NETWORK_H */

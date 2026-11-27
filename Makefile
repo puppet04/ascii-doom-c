@@ -1,7 +1,8 @@
 CC = gcc
 WINDRES = windres
-CFLAGS = -Wall -Wextra -std=c11 -O2 -Iinclude
+CFLAGS = -Wall -Wextra -std=c11 -O2 -ftree-vectorize -ffunction-sections -Iinclude
 LDFLAGS = -static-libgcc -Wl,-Bstatic -lraylib -lglfw3 -lwinpthread -Wl,-Bdynamic -lopengl32 -lgdi32 -lwinmm -lshell32 -lws2_32 -lwinhttp -lm
+REL_LDFLAGS = -s -Wl,--gc-sections $(LDFLAGS)
 
 BIN_DIR = bin
 TARGET = $(BIN_DIR)/sector404.exe
@@ -22,7 +23,7 @@ $(ICON_RES): assets/app_icon.rc assets/icon.ico | $(BIN_DIR)
 	$(WINDRES) --include-dir=assets assets/app_icon.rc -O coff -o $(ICON_RES)
 
 $(TARGET): $(GAME_SRCS) $(ICON_RES) | $(BIN_DIR)
-	$(CC) $(CFLAGS) $(GAME_SRCS) $(ICON_RES) -o $(TARGET) $(LDFLAGS)
+	$(CC) $(CFLAGS) $(GAME_SRCS) $(ICON_RES) -o $(TARGET) $(REL_LDFLAGS)
 
 run: $(TARGET)
 	$(TARGET)
