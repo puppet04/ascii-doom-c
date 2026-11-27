@@ -3866,6 +3866,66 @@ static void draw_player_burning_overlay(int sw, int sh) {
     DrawText(burn_lbl, bx + b_pad_x, by + b_pad_y, b_fs, (Color){255, 235, 110, 255});
 }
 
+/* Verifica se a coordenada continua (x, y) esta tocando o portal de saida 'E' */
+static int is_pos_on_exit_tile(const GameMap *map, float x, float y) {
+    if (!map) return 0;
+    return map_get_raw_tile(map, (int)floorf(x), (int)floorf(y)) == 'E' ||
+           map_get_raw_tile(map, (int)floorf(x + 0.15f), (int)floorf(y)) == 'E' ||
+           map_get_raw_tile(map, (int)floorf(x - 0.15f), (int)floorf(y)) == 'E' ||
+           map_get_raw_tile(map, (int)floorf(x), (int)floorf(y + 0.15f)) == 'E' ||
+           map_get_raw_tile(map, (int)floorf(x), (int)floorf(y - 0.15f)) == 'E';
+}
+
+/* Carrega uma nova fase no multiplayer, reposiciona em piso seguro e sincroniza spawns/inimigos */
+static void apply_mp_level_change(int new_level_idx, GameMap *map, Player *player,
+                                  EnemyManager *enemies, NetContext *net, int my_slot,
+                                  float *base_sx, float *base_sy,
+                                  float mp_sx[NET_MAX_PLAYERS],
+                                  float mp_sy[NET_MAX_PLAYERS],
+                                  float mp_sang[NET_MAX_PLAYERS],
+                                  float *wave_timer,
+                                  char *banner_msg, size_t banner_size,
+                                  float *banner_timer) {
+    int clamped = map_level_clamp(new_level_idx);
+    const MapLevelInfo *info = map_level_get(clamped);
+    map_load_level(clamped, map);
+
+    *base_sx = info->spawn1_x;
+    *base_sy = info->spawn1_y;
+    map_apply_pending_spawn(base_sx, base_sy);
+
+    compute_mp_spawn_points(map, *base_sx, *base_sy, net->game_mode, mp_sx, mp_sy, mp_sang);
+    player->x = mp_sx[my_slot];
+    player->y = mp_sy[my_slot];
+    player->angle = mp_sang[my_slot];
+    player->ability_state.fireball_active = 0;
+    player->ability_state.zone_time = 0.0f;
+
+    net->remote_level = clamped;
+    snprintf(net->remote_map_name, sizeof(net->remote_map_name), "%s", info->name);
+    for (int s = 0; s < NET_MAX_PLAYERS; s++) {
+        if (s != my_slot) {
+            /* Evita que coordenadas antigas da fase anterior reativem o portal 'E' no novo mapa */
+            net->slots[s].has_pos = 0;
+        }
+    }
+
+    if (net->game_mode == NET_GAME_COOP) {
+        map_begin_enemy_spawn();
+        enemies_spawn_wave(enemies, map, player);
+        map_end_enemy_spawn();
+        map_set_enemies_alive(enemies_required_alive(enemies));
+    } else {
+        map_set_enemies_alive(1);
+    }
+
+    *wave_timer = 3.0f;
+    if (banner_msg && banner_size > 0 && banner_timer) {
+        snprintf(banner_msg, banner_size, "%s", info->name);
+        *banner_timer = 2.4f;
+    }
+}
+
 /* Executa uma partida completa (Singleplayer Offline, Host UDP ou Client UDP de ate 4 jogadores)
  * mantendo velocidade independente de FPS via Delta Time (dt), controle de pause,
  * sincronizacao multiplayer Co-op/PvP e ordem canonica das chamadas da biblioteca renderer. */
@@ -3960,7 +4020,10 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         }
         player_apply_class(&player, &selected_class);
 
-        if (!map_is_wall(&map, (int)floorf(sv->x), (int)floorf(sv->y))) {
+        if (!map_is_wall(&map, (int)floorf(sv->x - PLAYER_RADIUS), (int)floorf(sv->y - PLAYER_RADIUS)) &&
+            !map_is_wall(&map, (int)floorf(sv->x + PLAYER_RADIUS), (int)floorf(sv->y - PLAYER_RADIUS)) &&
+            !map_is_wall(&map, (int)floorf(sv->x - PLAYER_RADIUS), (int)floorf(sv->y + PLAYER_RADIUS)) &&
+            !map_is_wall(&map, (int)floorf(sv->x + PLAYER_RADIUS), (int)floorf(sv->y + PLAYER_RADIUS))) {
             player.x = sv->x;
             player.y = sv->y;
         }
@@ -4024,8 +4087,12 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         enemies_spawn_wave(&enemies, &map, &player);
         map_end_enemy_spawn();
         map_set_enemies_alive(enemies_required_alive(&enemies));
+    } else if (is_multiplayer) {
+        /* Em PvP a saida 'E' permanece trancada como parede solida */
+        map_set_enemies_alive(1);
     }
     float wave_timer = 3.0f;
+    float mp_level_cooldown = 0.0f;
 
     while (!WindowShouldClose() && running) {
         int win_active = sync_window_focus_and_borderless();
@@ -4056,6 +4123,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         if (pvp_hit_timer > 0.0f) pvp_hit_timer = fmaxf(0.0f, pvp_hit_timer - dt);
         if (pvp_hurt_timer > 0.0f) pvp_hurt_timer = fmaxf(0.0f, pvp_hurt_timer - dt);
         if (respawn_banner_timer > 0.0f) respawn_banner_timer = fmaxf(0.0f, respawn_banner_timer - dt);
+        if (mp_level_cooldown > 0.0f) mp_level_cooldown = fmaxf(0.0f, mp_level_cooldown - dt);
 
         if (IsKeyPressed(KEY_F11)) {
             toggle_borderless_window();
@@ -4168,16 +4236,53 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
                             wave_timer = 3.0f;
                         }
                     }
-                } else if (alive == 0) {
-                    wave_timer -= dt;
-                    if (wave_timer <= 0.0f) {
-                        map_begin_enemy_spawn();
-                        enemies_spawn_wave(&enemies, &map, &player);
-                        map_end_enemy_spawn();
-                        map_set_enemies_alive(enemies_required_alive(&enemies));
-                        wave_timer = 3.0f;
+                } else {
+                    if (map_has_exit_tile(&map)) {
+                        /* Em Co-op com portal 'E', nao respawna onda em cima da porta aberta; avanca de fase */
+                        if (alive == 0) {
+                            wave_timer = 3.0f;
+                        }
+                        if (mode == NET_MODE_HOST && alive == 0 && mp_level_cooldown <= 0.0f) {
+                            int touched_exit = is_pos_on_exit_tile(&map, player.x, player.y);
+                            for (int s = 0; s < NET_MAX_PLAYERS && !touched_exit; s++) {
+                                if (s != my_slot && net.slots[s].active && net.slots[s].has_pos &&
+                                    net.slots[s].health > 0) {
+                                    touched_exit = is_pos_on_exit_tile(&map, net.slots[s].x, net.slots[s].y);
+                                }
+                            }
+                            if (touched_exit) {
+                                if (level_idx + 1 < map_level_count()) {
+                                    level_idx++;
+                                    lvl_info = map_level_get(level_idx);
+                                    if (cfg) cfg->selected_level = level_idx;
+                                    apply_mp_level_change(level_idx, &map, &player, &enemies, &net,
+                                                          my_slot, &base_sx, &base_sy,
+                                                          mp_sx, mp_sy, mp_sang, &wave_timer,
+                                                          respawn_msg, sizeof(respawn_msg),
+                                                          &respawn_banner_timer);
+                                    mp_level_cooldown = 1.5f;
+                                    net_send_match_state(&net, &player, 0);
+                                } else {
+                                    snprintf(err_buf, err_size,
+                                             "Todas as fases concluidas! Kills: %d.",
+                                             player.ability_state.kills);
+                                    running = 0;
+                                }
+                            }
+                        }
+                    } else if (alive == 0) {
+                        wave_timer -= dt;
+                        if (wave_timer <= 0.0f) {
+                            map_begin_enemy_spawn();
+                            enemies_spawn_wave(&enemies, &map, &player);
+                            map_end_enemy_spawn();
+                            map_set_enemies_alive(enemies_required_alive(&enemies));
+                            wave_timer = 3.0f;
+                        }
                     }
                 }
+            } else {
+                map_set_enemies_alive(1);
             }
         }
 
@@ -4193,6 +4298,22 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
                 player.id = my_slot + 1;
             }
             is_pvp = (net.game_mode == NET_GAME_PVP);
+
+            /* Cliente sincroniza imediatamente quando o Anfitriao avanca para a proxima fase */
+            if (running && mode == NET_MODE_CLIENT && net.connected) {
+                int host_lvl = map_level_clamp(net.remote_level);
+                if (host_lvl != level_idx) {
+                    level_idx = host_lvl;
+                    lvl_info = map_level_get(level_idx);
+                    if (cfg) cfg->selected_level = level_idx;
+                    apply_mp_level_change(level_idx, &map, &player, &enemies, &net,
+                                          my_slot, &base_sx, &base_sy,
+                                          mp_sx, mp_sy, mp_sang, &wave_timer,
+                                          respawn_msg, sizeof(respawn_msg),
+                                          &respawn_banner_timer);
+                    net_send_match_state(&net, &player, 0);
+                }
+            }
 
             /* Aplica apenas o incremento de dano PvP novo recebido pelo host desde o ultimo frame */
             if (running && is_pvp && net.total_dmg_to_slot[my_slot] > net.applied_pvp_dmg) {

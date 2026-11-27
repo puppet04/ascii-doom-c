@@ -948,15 +948,41 @@ void player_init(Player *p, float x, float y, float angle) {
     player_apply_class(p, &base_cls);
 }
 
+/* Tenta desatolar o jogador caso alguma parede/porta tenha fechado em cima dele */
+static int resolve_stuck_position(Player *p, const GameMap *map) {
+    if (!is_position_blocked(map, p->x, p->y)) {
+        return 0;
+    }
+    static const float DIRS[8][2] = {
+        { 1.0f,  0.0f}, {-1.0f,  0.0f}, { 0.0f,  1.0f}, { 0.0f, -1.0f},
+        { 0.7071f,  0.7071f}, {-0.7071f,  0.7071f},
+        { 0.7071f, -0.7071f}, {-0.7071f, -0.7071f}
+    };
+    static const float RADII[6] = {0.15f, 0.30f, 0.45f, 0.65f, 0.90f, 1.25f};
+    for (int r = 0; r < 6; r++) {
+        for (int d = 0; d < 8; d++) {
+            float nx = p->x + DIRS[d][0] * RADII[r];
+            float ny = p->y + DIRS[d][1] * RADII[r];
+            if (!is_position_blocked(map, nx, ny)) {
+                p->x = nx;
+                p->y = ny;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 /* Tenta mover em X e Y separado para deslizar nas paredes sem travar */
 int player_move(Player *p, const GameMap *map, float forward, float strafe) {
     if (!p || !map) {
         return 0;
     }
 
+    int unstuck = resolve_stuck_position(p, map);
     float dx = cosf(p->angle) * forward - sinf(p->angle) * strafe;
     float dy = sinf(p->angle) * forward + cosf(p->angle) * strafe;
-    int moved = 0;
+    int moved = unstuck;
 
     if (!is_position_blocked(map, p->x + dx, p->y)) {
         p->x += dx;
