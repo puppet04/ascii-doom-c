@@ -52,6 +52,7 @@ static float g_spawn_y = 4.5f;
 static int g_spawn_pending = 0;
 static unsigned char g_trap_active[MAP_HEIGHT][MAP_WIDTH];
 static float g_trap_timer[MAP_HEIGHT][MAP_WIDTH];
+static int g_active_traps_count = 0;
 static unsigned char g_medkit_used[MAP_HEIGHT][MAP_WIDTH];
 static unsigned char g_weapon_pickup_used[MAP_HEIGHT][MAP_WIDTH];
 
@@ -62,6 +63,7 @@ static unsigned char g_weapon_pickup_used[MAP_HEIGHT][MAP_WIDTH];
 void map_reset_traps(void) {
     memset(g_trap_active, 0, sizeof(g_trap_active));
     memset(g_trap_timer, 0, sizeof(g_trap_timer));
+    g_active_traps_count = 0;
 }
 
 /* Marca todos os kits medicos do mapa como disponiveis novamente */
@@ -366,13 +368,16 @@ void map_trigger_trap(int x, int y) {
     if (x < 0 || x >= MAP_WIDTH || y < 0 || y >= MAP_HEIGHT) {
         return;
     }
-    g_trap_active[y][x] = 1;
+    if (!g_trap_active[y][x]) {
+        g_trap_active[y][x] = 1;
+        g_active_traps_count++;
+    }
     g_trap_timer[y][x] = TRAP_ACTIVE_DURATION;
 }
 
-/* Atualiza o tempo restante de todas as armadilhas acesas */
+/* Atualiza o tempo restante de todas as armadilhas acesas (pula o grid se nenhuma estiver acesa) */
 void map_update_traps(float dt) {
-    if (dt <= 0.0f) {
+    if (dt <= 0.0f || g_active_traps_count <= 0) {
         return;
     }
     for (int y = 0; y < MAP_HEIGHT; y++) {
@@ -382,6 +387,7 @@ void map_update_traps(float dt) {
                 if (g_trap_timer[y][x] <= 0.0f) {
                     g_trap_active[y][x] = 0;
                     g_trap_timer[y][x] = 0.0f;
+                    if (g_active_traps_count > 0) g_active_traps_count--;
                 }
             }
         }
@@ -555,28 +561,67 @@ void map_apply_pending_spawn(float *player_x, float *player_y) {
     g_spawn_pending = 0;
 }
 
+/* Tabela de flags pre-calculada para todos os 256 caracteres ASCII:
+ * evita dezenas de comparacoes por passo no raycaster DDA e na linha de visao */
+enum {
+    TILE_F_SECRET   = 1 << 0,
+    TILE_F_EXIT     = 1 << 1,
+    TILE_F_SOLID    = 1 << 2,
+    TILE_F_VIS_WALL = 1 << 3
+};
+static unsigned char g_tile_lut[256];
+static int g_tile_lut_ready = 0;
+
+static void ensure_tile_lut(void) {
+    if (g_tile_lut_ready) return;
+    for (int c = 0; c < 256; c++) {
+        char t = (char)c;
+        unsigned char fl = 0;
+        if (is_secret_floor(t)) {
+            fl |= TILE_F_SECRET;
+        } else {
+            int non_wall = (t == '.' || t == ' ' || t == 'P' ||
+                            map_is_enemy_spawn_char(t) ||
+                            map_is_hazard_tile(t) ||
+                            map_is_medkit_tile(t) ||
+                            map_weapon_tile_type(t) >= 0);
+            if (!non_wall) {
+                fl |= TILE_F_VIS_WALL;
+                if (t == 'E') {
+                    fl |= TILE_F_EXIT;
+                } else if (t != '$' && t != '&' && t != '/') {
+                    fl |= TILE_F_SOLID;
+                }
+            }
+        }
+        g_tile_lut[c] = fl;
+    }
+    g_tile_lut_ready = 1;
+}
+
 /* Verifica colisao fisica: retorna 1 se a celula bloqueia movimento e tiros */
 int map_is_wall(const GameMap *map, int x, int y) {
     if (!map || x < 0 || x >= map->width || y < 0 || y >= map->height) {
         return 1;
     }
-    char tile = map_get_raw_tile(map, x, y);
-    if (is_secret_floor(tile)) {
-        return g_spawning_enemies ? 1 : 0;
-    }
-    if (tile == 'P' || map_is_enemy_spawn_char(tile) ||
-        map_is_hazard_tile(tile) || map_is_medkit_tile(tile) ||
-        map_weapon_tile_type(tile) >= 0) {
-        return 0;
-    }
-    return (tile != '.' && tile != ' ' && !map_is_passable_wall(tile));
+    if (!g_tile_lut_ready) ensure_tile_lut();
+    unsigned char fl = g_tile_lut[(unsigned char)map->tiles[y][x]];
+    if (fl & TILE_F_SOLID) return 1;
+    if (fl & TILE_F_EXIT) return g_enemies_alive;
+    if (fl & TILE_F_SECRET) return g_spawning_enemies ? 1 : 0;
+    return 0;
 }
 
 /* Verifica visibilidade no raycaster/minimapa (inclui paredes falsas e esconde pisos secretos) */
 int map_is_visible_wall(const GameMap *map, int x, int y) {
-    char tile = map_get_raw_tile(map, x, y);
     g_last_tile_passable = 0;
-    if (is_secret_floor(tile)) {
+    if (!map || x < 0 || x >= map->width || y < 0 || y >= map->height) {
+        g_minimap_secret_floor = 0;
+        return 1;
+    }
+    if (!g_tile_lut_ready) ensure_tile_lut();
+    unsigned char fl = g_tile_lut[(unsigned char)map->tiles[y][x]];
+    if (fl & TILE_F_SECRET) {
         int on_minimap = (g_minimap_secret_floor &&
                           x == g_minimap_secret_x &&
                           y == g_minimap_secret_y);
@@ -584,11 +629,7 @@ int map_is_visible_wall(const GameMap *map, int x, int y) {
         return on_minimap ? 1 : 0;
     }
     g_minimap_secret_floor = 0;
-    return (tile != '.' && tile != ' ' && tile != 'P' &&
-            !map_is_enemy_spawn_char(tile) &&
-            !map_is_hazard_tile(tile) &&
-            !map_is_medkit_tile(tile) &&
-            map_weapon_tile_type(tile) < 0);
+    return (fl & TILE_F_VIS_WALL) ? 1 : 0;
 }
 
 /* Checa se o mapa possui pelo menos um portal de saida E */
@@ -1212,7 +1253,13 @@ void map_render_hazards(const GameMap *map, const void *player_ptr,
     }
 
     for (int my = 0; my < map->height; my++) {
+        const char *row = map->tiles[my];
         for (int mx = 0; mx < map->width; mx++) {
+            /* Pula direto pisos vazios e paredes comuns (mais de 95% das celulas do mapa) */
+            char raw = row[mx];
+            if (raw == '.' || raw == '#' || raw == '@' || raw == '%' || raw == ' ' || raw == 'E') {
+                continue;
+            }
             int is_fire = map_is_fire_active_at(map, mx, my);
             int is_medkit = !is_fire && map_is_medkit_active_at(map, mx, my);
             int is_weapon = !is_fire && !is_medkit && map_is_weapon_pickup_active_at(map, mx, my);

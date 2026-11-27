@@ -769,6 +769,18 @@ static void enemy_build_flow_field(const GameMap *map, int goal_x, int goal_y,
     }
 }
 
+/* Hash rapido FNV-1a sobre os tiles do mapa para saber se o cache do BFS continua valido */
+static unsigned long long hash_map_tiles(const GameMap *map) {
+    unsigned long long h = 14695981039346656037ULL;
+    const unsigned char *bytes = (const unsigned char *)map->tiles;
+    size_t n = (size_t)map->height * (size_t)(MAP_WIDTH + 1);
+    for (size_t i = 0; i < n; i++) {
+        h ^= (unsigned long long)bytes[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
 /* Loop principal de IA: movimenta inimigos via flow-field BFS, evita empilhamento e executa ataques. */
 void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float dt) {
     if (!mgr || !map || !player || dt <= 0.0f || player->health <= 0) {
@@ -780,8 +792,27 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
     update_map_fire_hazards(map, player, dt);
     weapon_drops_update(player);
 
-    int flow_dist[MAP_HEIGHT][MAP_WIDTH];
-    enemy_build_flow_field(map, (int)floorf(player->x), (int)floorf(player->y), flow_dist);
+    /* So recalcula o flow-field BFS quando o jogador muda de celula ou o mapa/saida muda */
+    static int flow_dist[MAP_HEIGHT][MAP_WIDTH];
+    static int cached_tx = -9999, cached_ty = -9999;
+    static int cached_mw = -1, cached_mh = -1, cached_exit_blocked = -1;
+    static unsigned long long cached_map_hash = 0ULL;
+
+    int target_tx = (int)floorf(player->x);
+    int target_ty = (int)floorf(player->y);
+    int exit_blocked = map_are_enemies_alive();
+    unsigned long long cur_hash = hash_map_tiles(map);
+    if (target_tx != cached_tx || target_ty != cached_ty ||
+        map->width != cached_mw || map->height != cached_mh ||
+        exit_blocked != cached_exit_blocked || cur_hash != cached_map_hash) {
+        enemy_build_flow_field(map, target_tx, target_ty, flow_dist);
+        cached_tx = target_tx;
+        cached_ty = target_ty;
+        cached_mw = map->width;
+        cached_mh = map->height;
+        cached_exit_blocked = exit_blocked;
+        cached_map_hash = cur_hash;
+    }
 
     for (int i = 0; i < mgr->count; i++) {
         Enemy *e = &mgr->enemies[i];
@@ -817,8 +848,10 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
         float dist = sqrtf(dx * dx + dy * dy);
         int is_ranged = (e->attack_kind == ENEMY_ATTACK_HITSCAN ||
                          e->attack_kind == ENEMY_ATTACK_PROJECTILE);
-        int can_see = has_line_of_sight(map, player->x, player->y, e->x, e->y);
-        int can_shoot = is_ranged
+        /* Pula o raymarch de visao se o inimigo estiver longe demais pra perseguir ou atacar */
+        int in_active_range = (dist < aggro_range || dist <= attack_range);
+        int can_see = in_active_range ? has_line_of_sight(map, player->x, player->y, e->x, e->y) : 0;
+        int can_shoot = (in_active_range && is_ranged)
             ? (can_see && enemy_has_clear_shot(map, e->x, e->y, player->x, player->y))
             : can_see;
         float preferred_distance = is_ranged
@@ -1697,7 +1730,8 @@ typedef struct {
     EnemyRenderCell quarter[SPRITE_MIP_QUARTER_MAX_HEIGHT][SPRITE_MIP_QUARTER_MAX_WIDTH];
 } EnemySpriteCache;
 
-static EnemySpriteCache enemy_sprite_caches[ENEMY_SPRITE_CACHE_COUNT];
+/* So o simbolo desconhecido '?' usa o cache Scale2x; todos os inimigos reais usam render procedural */
+static EnemySpriteCache enemy_fallback_cache;
 static EnemyRenderCell enemy_sprite_source[SPRITE_SOURCE_MAX_HEIGHT][SPRITE_SOURCE_MAX_WIDTH];
 static EnemyRenderCell enemy_sprite_scale2[SPRITE_SOURCE_MAX_HEIGHT * 2][SPRITE_SOURCE_MAX_WIDTH * 2];
 static int enemy_sprite_pipeline_ready = 0;
@@ -1930,42 +1964,30 @@ static void enemy_build_sprite_cache(EnemySpriteCache *cache, char label,
 
     int scale2_width = width * 2;
     int scale2_height = height * 2;
-    enemy_scale2x(&enemy_sprite_source[0][0], width, height,
-                  SPRITE_SOURCE_MAX_WIDTH, &enemy_sprite_scale2[0][0],
+    enemy_scale2x((const EnemyRenderCell *)enemy_sprite_source, width, height,
+                  SPRITE_SOURCE_MAX_WIDTH, (EnemyRenderCell *)enemy_sprite_scale2,
                   SPRITE_SOURCE_MAX_WIDTH * 2);
 
     cache->full_width = width * SPRITE_UPSCALE + 2;
     cache->full_height = height * SPRITE_UPSCALE + 2;
-    enemy_scale2x(&enemy_sprite_scale2[0][0], scale2_width, scale2_height,
-                  SPRITE_SOURCE_MAX_WIDTH * 2, &cache->full[1][1],
+    enemy_scale2x((const EnemyRenderCell *)enemy_sprite_scale2, scale2_width, scale2_height,
+                  SPRITE_SOURCE_MAX_WIDTH * 2,
+                  (EnemyRenderCell *)cache->full + SPRITE_UPSCALED_MAX_WIDTH + 1,
                   SPRITE_UPSCALED_MAX_WIDTH);
     enemy_finish_sprite_cache(cache);
 }
 
-/* Pre-calcula todos os caches de sprites uma unica vez na primeira renderizacao. */
+/* Pre-calcula o cache Scale2x de fallback ('?') uma unica vez na primeira renderizacao. */
 static void enemy_sprite_pipeline_init(void) {
     if (enemy_sprite_pipeline_ready) return;
 
-    memset(enemy_sprite_caches, 0, sizeof(enemy_sprite_caches));
-    for (int i = 0; i < ENEMY_VISUAL_DESIGN_COUNT; i++) {
-        const EnemyVisualDesign *design = &ENEMY_VISUAL_DESIGNS[i];
-        enemy_build_sprite_cache(&enemy_sprite_caches[i], design->label,
-            design->width, design->height, design, NULL);
-    }
-
-    const EnemyDesign *imp = enemy_design_for_label('M');
-    enemy_build_sprite_cache(&enemy_sprite_caches[ENEMY_IMP_CACHE_INDEX], 'M',
-        ENEMY_ART_WIDTH, ENEMY_ART_MAX_HEIGHT, NULL, imp);
-    enemy_build_sprite_cache(&enemy_sprite_caches[ENEMY_FALLBACK_CACHE_INDEX], '?',
+    enemy_build_sprite_cache(&enemy_fallback_cache, '?',
         ENEMY_ART_WIDTH, ENEMY_ART_HEIGHT, NULL, &ENEMY_DESIGN_FALLBACK);
     enemy_sprite_pipeline_ready = 1;
 }
 
 static const EnemySpriteCache *enemy_sprite_cache_for_label(char label) {
-    const EnemyVisualDesign *design = enemy_visual_design_for_label(label);
-    if (design) return &enemy_sprite_caches[design - ENEMY_VISUAL_DESIGNS];
-    if (label == 'M') return &enemy_sprite_caches[ENEMY_IMP_CACHE_INDEX];
-    return &enemy_sprite_caches[ENEMY_FALLBACK_CACHE_INDEX];
+    return (label == '?') ? &enemy_fallback_cache : NULL;
 }
 
 /* Escolhe o nivel de mipmap (full, half ou quarter) conforme o tamanho projetado na tela. */

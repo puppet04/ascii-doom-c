@@ -553,8 +553,10 @@ void player_tick_ability(Player *p, float dt) {
     if (s->berserk_time > 0) {
         s->berserk_time = fmaxf(0, s->berserk_time - dt);
         if (s->berserk_time == 0) {
-            /* Devolve a arma anterior quando a armadura Berserker expira */
-            p->active_weapon = s->saved_weapon;
+            /* Devolve a arma anterior quando a armadura Berserker expira (ou Pistola se acabou) */
+            int restore = player_weapon_has_ammo(p, s->saved_weapon) ? s->saved_weapon : 0;
+            p->active_weapon = restore;
+            p->ammo = p->weapon_mag[restore];
             p->shoot_timer = 0;
         }
     }
@@ -683,6 +685,17 @@ int player_weapon_has_infinite_reserve(int weapon_type) {
     return weapon_type == 0;
 }
 
+/* Retorna 1 se o jogador possui a arma e ela ainda tem municao (ou nao gasta bala) */
+int player_weapon_has_ammo(const Player *p, int weapon_type) {
+    if (!p || weapon_type < 0 || weapon_type >= PLAYER_MAX_WEAPONS || !p->weapon_owned[weapon_type]) {
+        return 0;
+    }
+    if (weapon_type == 5 || player_weapon_has_infinite_reserve(weapon_type)) {
+        return 1;
+    }
+    return (p->weapon_mag[weapon_type] > 0 || p->weapon_reserve[weapon_type] > 0);
+}
+
 /* Entrega uma arma ou soma municao na reserva (1 = arma nova, 2 = municao extra) */
 int player_pickup_weapon(Player *p, int weapon_type, int ammo_amount) {
     if (!p || weapon_type < 0 || weapon_type >= PLAYER_MAX_WEAPONS || ammo_amount <= 0) {
@@ -740,12 +753,12 @@ int player_reload(Player *p) {
     return 1;
 }
 
-/* Troca diretamente para a arma indicada se o jogador ja a tiver coletado */
+/* Troca diretamente para a arma indicada se o jogador a possuir com municao */
 int player_switch_weapon(Player *p, int weapon_type) {
     if (!p || p->ability_state.berserk_time > 0.0f) {
         return 0;
     }
-    if (weapon_type < 0 || weapon_type >= PLAYER_MAX_WEAPONS || !p->weapon_owned[weapon_type]) {
+    if (!player_weapon_has_ammo(p, weapon_type)) {
         return 0;
     }
     p->active_weapon = weapon_type;
@@ -753,7 +766,7 @@ int player_switch_weapon(Player *p, int weapon_type) {
     return 1;
 }
 
-/* Avanca ou volta para a proxima arma possuida (roda do mouse / teclas de troca) */
+/* Avanca ou volta para a proxima arma disponivel (roda do mouse / teclas de troca) */
 int player_cycle_weapon(Player *p, int dir) {
     if (!p || p->ability_state.berserk_time > 0.0f) {
         return 0;
@@ -766,7 +779,7 @@ int player_cycle_weapon(Player *p, int dir) {
     for (int i = 1; i < PLAYER_MAX_WEAPONS; i++) {
         int cand = (cur + step * i) % PLAYER_MAX_WEAPONS;
         if (cand < 0) cand += PLAYER_MAX_WEAPONS;
-        if (p->weapon_owned[cand]) {
+        if (player_weapon_has_ammo(p, cand)) {
             p->active_weapon = cand;
             p->ammo = p->weapon_mag[cand];
             return 1;
@@ -775,7 +788,7 @@ int player_cycle_weapon(Player *p, int dir) {
     return 0;
 }
 
-/* Inicia um ataque/tiro consumindo municao e armando o cooldown e o tiro dobrado do Rambo */
+/* Inicia um ataque/tiro consumindo municao; se zerar pente e reserva, descarta a arma */
 int player_begin_attack(Player *p) {
     if (!p || p->health <= 0 || p->shoot_timer > 0) return 0;
     if (p->ability_state.berserk_time > 0) {
@@ -792,7 +805,17 @@ int player_begin_attack(Player *p) {
         p->shoot_timer = player_weapon_cooldown(w);
         return 1;
     }
-    if (p->ammo <= 0) return 0;
+    if (p->ammo <= 0) {
+        if (!player_weapon_has_infinite_reserve(w) && p->weapon_reserve[w] <= 0 && w != 0) {
+            p->weapon_owned[w] = 0;
+            p->weapon_mag[w] = 0;
+            if (!player_cycle_weapon(p, -1)) {
+                p->active_weapon = 0;
+                p->ammo = p->weapon_mag[0];
+            }
+        }
+        return 0;
+    }
     if (p->weapon_mag[w] <= 0) {
         int mag = player_weapon_mag_size(w);
         p->weapon_mag[w] = p->ammo > mag ? mag : p->ammo;
@@ -803,7 +826,19 @@ int player_begin_attack(Player *p) {
     if (p->ability_state.boosted_shot) p->ability_state.guerrilla_time = 0;
     p->weapon_mag[w]--;
     p->ammo = p->weapon_mag[w];
-    p->shoot_timer = player_weapon_cooldown(w);
+    float shot_cd = player_weapon_cooldown(w);
+    p->shoot_timer = shot_cd;
+
+    /* Se acabou toda a bala (pente + reserva) de uma arma finita, some do inventario e volta pra outra */
+    if (!player_weapon_has_infinite_reserve(w) && p->weapon_mag[w] <= 0 && p->weapon_reserve[w] <= 0) {
+        p->weapon_owned[w] = 0;
+        p->weapon_mag[w] = 0;
+        p->weapon_reserve[w] = 0;
+        if (!player_cycle_weapon(p, -1)) {
+            p->active_weapon = 0;
+            p->ammo = p->weapon_mag[0];
+        }
+    }
     return 1;
 }
 
@@ -1002,9 +1037,18 @@ void player_handle_input(Player *p, const GameMap *map, float dt,
         }
     }
 
-    /* Recarregar municao */
+    /* Recarregar municao e troca de arma por scroll ou F */
     if (IsKeyPressed(KEY_R)) {
         player_reload(p);
+    }
+    float wheel = GetMouseWheelMove();
+    if (wheel > 0.0f) {
+        player_cycle_weapon(p, -1);
+    } else if (wheel < 0.0f) {
+        player_cycle_weapon(p, 1);
+    }
+    if (IsKeyPressed(KEY_F)) {
+        player_cycle_weapon(p, 1);
     }
 
     /* Disparo com clique esquerdo ou Espaco, limitado por FIRE_COOLDOWN (dt) */
@@ -1235,16 +1279,41 @@ int player_render_weapon(const Player *p, const RendererApi *r) {
         }
     }
 
-    /* 2) Espada Matadora de Dragoes rotacionada em 2D real */
+    /* 2) Espada Matadora de Dragoes rotacionada em 2D real (restrita a caixa delimitadora) */
     float dir_x = sinf(ang);
     float dir_y = -cosf(ang);
     float perp_x = cosf(ang);
     float perp_y = sinf(ang);
+    float inv_x_aspect = 1.65f / aspect;
+    float reach_a0 = -0.22f * blade_len;
+    float reach_a1 = 1.02f * blade_len;
+    float pad_ac = 0.13f;
+    float c0x = piv_x + (reach_a0 * dir_x - pad_ac * fabsf(perp_x)) * inv_x_aspect;
+    float c1x = piv_x + (reach_a0 * dir_x + pad_ac * fabsf(perp_x)) * inv_x_aspect;
+    float c2x = piv_x + (reach_a1 * dir_x - pad_ac * fabsf(perp_x)) * inv_x_aspect;
+    float c3x = piv_x + (reach_a1 * dir_x + pad_ac * fabsf(perp_x)) * inv_x_aspect;
+    float min_nx = fminf(fminf(c0x, c1x), fminf(c2x, c3x));
+    float max_nx = fmaxf(fmaxf(c0x, c1x), fmaxf(c2x, c3x));
+    float c0y = piv_y + reach_a0 * dir_y - pad_ac * fabsf(perp_y);
+    float c1y = piv_y + reach_a0 * dir_y + pad_ac * fabsf(perp_y);
+    float c2y = piv_y + reach_a1 * dir_y - pad_ac * fabsf(perp_y);
+    float c3y = piv_y + reach_a1 * dir_y + pad_ac * fabsf(perp_y);
+    float min_ny = fminf(fminf(c0y, c1y), fminf(c2y, c3y));
+    float max_ny = fmaxf(fmaxf(c0y, c1y), fmaxf(c2y, c3y));
 
-    for (int y = 0; y < rh; y++) {
+    int by0 = (int)floorf(min_ny * (float)rh) - 1;
+    int by1 = (int)ceilf(max_ny * (float)rh) + 1;
+    int bx0 = (int)floorf(min_nx * (float)rw) - 1;
+    int bx1 = (int)ceilf(max_nx * (float)rw) + 1;
+    if (by0 < 0) by0 = 0;
+    if (by1 > rh) by1 = rh;
+    if (bx0 < 0) bx0 = 0;
+    if (bx1 > rw) bx1 = rw;
+
+    for (int y = by0; y < by1; y++) {
         float ny = ((float)y + 0.5f) / (float)rh;
         float rel_y = ny - piv_y;
-        for (int x = 0; x < rw; x++) {
+        for (int x = bx0; x < bx1; x++) {
             float nx = ((float)x + 0.5f) / (float)rw;
             /* Compensa aspecto da tela para manter espessura uniforme em qualquer angulo */
             float rel_x = (nx - piv_x) * (aspect / 1.65f);
@@ -1360,7 +1429,173 @@ void player_get_weapon_hud_info(const Player *p, PlayerWeaponHudInfo *out) {
     out->bar_ratio = mag > 0 ? (float)cur / (float)mag : 0.0f;
 }
 
-/* Desenha o painel de status da habilidade, contador de kills e borda vermelha do Berserk */
+/* Cor tematica e icone curto em ASCII de cada arma na torre lateral do HUD */
+static Color weapon_tower_accent(int w, const char **out_icon) {
+    switch (w) {
+        case 0: if (out_icon) *out_icon = "==";  return (Color){125, 215, 255, 255};
+        case 1: if (out_icon) *out_icon = "=]="; return (Color){255, 165, 65, 255};
+        case 2: if (out_icon) *out_icon = "--+"; return (Color){135, 245, 115, 255};
+        case 3: if (out_icon) *out_icon = "==="; return (Color){255, 215, 80, 255};
+        case 4: if (out_icon) *out_icon = "=>="; return (Color){105, 245, 255, 255};
+        case 5: if (out_icon) *out_icon = "(*)"; return (Color){65, 225, 238, 255};
+        case 6: if (out_icon) *out_icon = "=o="; return (Color){235, 222, 165, 255};
+        case 7: if (out_icon) *out_icon = "=#="; return (Color){240, 185, 95, 255};
+        case 8: if (out_icon) *out_icon = "=*";  return (Color){255, 118, 48, 255};
+        default: if (out_icon) *out_icon = "=="; return (Color){165, 190, 220, 255};
+    }
+}
+
+/* Torre vertical de armas possuidas no canto inferior direito (logo acima da barra geral do HUD) */
+static void draw_weapon_tower_hud(const Player *p, int screen_w, int screen_h) {
+    int owned[PLAYER_MAX_WEAPONS];
+    int count = 0;
+    for (int w = 0; w < PLAYER_MAX_WEAPONS; w++) {
+        if (player_weapon_has_ammo(p, w)) {
+            owned[count++] = w;
+        }
+    }
+    int berserk = (p->ability_state.berserk_time > 0.0f);
+    if (count <= 0 && !berserk) {
+        return;
+    }
+
+    int hud_h = (int)((float)screen_h * 0.145f);
+    if (hud_h < 82) hud_h = 82;
+    int hud_y = screen_h - hud_h;
+
+    float sc = (float)screen_h / 720.0f;
+    if (sc < 0.72f) sc = 0.72f;
+    if (sc > 1.35f) sc = 1.35f;
+
+    int total_rows = count + (berserk ? 1 : 0);
+    int top_limit = (int)(232.0f * sc);
+    if (top_limit > hud_y - 90) top_limit = 82;
+    int avail_h = (hud_y - 10) - top_limit - 18;
+    if (avail_h < 60) avail_h = 60;
+
+    int gap = (int)(4.0f * sc);
+    if (gap < 3) gap = 3;
+    int row_h = (int)(28.0f * sc);
+    if (row_h < 20) row_h = 20;
+    if (total_rows * (row_h + gap) > avail_h && total_rows > 0) {
+        row_h = (avail_h / total_rows) - gap;
+        if (row_h < 17) row_h = 17;
+    }
+
+    int card_w = (int)(192.0f * sc);
+    if (card_w < 146) card_w = 146;
+    if (card_w > 236) card_w = 236;
+    int right_margin = 12;
+    int base_x = screen_w - card_w - right_margin;
+    int bottom_y = hud_y - 10;
+    int tower_h = total_rows * row_h + (total_rows - 1) * gap;
+    int start_y = bottom_y - tower_h;
+
+    int hdr_fs = (row_h <= 19) ? 9 : ((screen_w < 1000) ? 10 : 11);
+    const char *hdr = "ARSENAL [SCROLL]";
+    int hdr_w = MeasureText(hdr, hdr_fs);
+    DrawRectangle(screen_w - hdr_w - right_margin - 12, start_y - hdr_fs - 8,
+                  hdr_w + 12, hdr_fs + 5, (Color){10, 14, 22, 195});
+    DrawText(hdr, screen_w - hdr_w - right_margin - 6, start_y - hdr_fs - 6,
+             hdr_fs, (Color){145, 168, 198, 230});
+
+    int fs_name = (row_h <= 20) ? 10 : ((int)(12.5f * sc) < 11 ? 11 : (int)(12.5f * sc));
+    int fs_ammo = fs_name;
+
+    int draw_idx = 0;
+    if (berserk) {
+        int rx = base_x - 7;
+        int rw = card_w + 7;
+        int ry = start_y;
+        Color acc = (Color){255, 78, 68, 255};
+        DrawRectangle(rx, ry, rw, row_h, (Color){38, 14, 18, 242});
+        DrawRectangle(rx, ry, 4, row_h, acc);
+        DrawRectangleLinesEx((Rectangle){(float)rx, (float)ry, (float)rw, (float)row_h}, 1.5f, acc);
+        int ty = ry + (row_h - fs_name) / 2;
+        DrawText(">> ESPADA", rx + 10, ty, fs_name, (Color){255, 220, 210, 255});
+        const char *bt = TextFormat("%.1fs", p->ability_state.berserk_time);
+        DrawText(bt, rx + rw - MeasureText(bt, fs_ammo) - 8, ty, fs_ammo, acc);
+        draw_idx++;
+    }
+
+    for (int i = 0; i < count; i++, draw_idx++) {
+        int w = owned[i];
+        int is_active = (!berserk && p->active_weapon == w);
+        const char *icon = "==";
+        Color acc = weapon_tower_accent(w, &icon);
+
+        int shift = is_active ? 7 : 0;
+        int rx = base_x - shift;
+        int rw = card_w + shift;
+        int ry = start_y + draw_idx * (row_h + gap);
+
+        Color bg = is_active ? (Color){22, 29, 42, 240} : (Color){12, 16, 24, 205};
+        Color bd = is_active ? acc : (Color){48, 58, 76, 205};
+        Color bar_c = is_active ? acc : (Color){(unsigned char)(acc.r * 0.62f),
+                                                (unsigned char)(acc.g * 0.62f),
+                                                (unsigned char)(acc.b * 0.62f), 220};
+
+        DrawRectangle(rx, ry, rw, row_h, bg);
+        DrawRectangle(rx, ry, is_active ? 4 : 3, row_h, bar_c);
+        DrawRectangleLinesEx((Rectangle){(float)rx, (float)ry, (float)rw, (float)row_h},
+                             is_active ? 1.5f : 1.0f, bd);
+
+        int mag = player_weapon_mag_size(w);
+        int cur_mag = p->weapon_mag[w];
+        int res = p->weapon_reserve[w];
+
+        /* Barra fina de municao na base do card ativo */
+        if (is_active && w != 5 && mag > 0) {
+            float ratio = (float)cur_mag / (float)mag;
+            if (ratio < 0.0f) ratio = 0.0f;
+            if (ratio > 1.0f) ratio = 1.0f;
+            int meter_w = rw - 10;
+            int fill_w = (int)((float)meter_w * ratio);
+            DrawRectangle(rx + 6, ry + row_h - 3, meter_w, 2, (Color){34, 42, 56, 230});
+            if (fill_w > 0) {
+                DrawRectangle(rx + 6, ry + row_h - 3, fill_w, 2,
+                              cur_mag > 0 ? acc : (Color){245, 78, 68, 255});
+            }
+        }
+
+        int ty = ry + (row_h - fs_name) / 2 - (is_active ? 1 : 0);
+        char left_txt[40];
+        snprintf(left_txt, sizeof(left_txt), "%d %s %s", i + 1, icon, player_weapon_name(w));
+
+        char ammo_txt[24];
+        Color ammo_col;
+        if (w == 5) {
+            snprintf(ammo_txt, sizeof(ammo_txt), "MELEE");
+            ammo_col = is_active ? acc : (Color){145, 200, 210, 215};
+        } else if (player_weapon_has_infinite_reserve(w)) {
+            if (cur_mag <= 0) {
+                snprintf(ammo_txt, sizeof(ammo_txt), "[R]");
+                ammo_col = (Color){255, 115, 85, 255};
+            } else {
+                snprintf(ammo_txt, sizeof(ammo_txt), "%02d/INF", cur_mag);
+                ammo_col = is_active ? (Color){230, 242, 255, 255} : (Color){155, 175, 198, 215};
+            }
+        } else if (cur_mag <= 0) {
+            snprintf(ammo_txt, sizeof(ammo_txt), "[R]/%d", res);
+            ammo_col = (Color){255, 105, 75, 255};
+        } else {
+            snprintf(ammo_txt, sizeof(ammo_txt), "%02d/%03d", cur_mag, res);
+            ammo_col = is_active ? (Color){255, 224, 115, 255} : (Color){175, 188, 205, 215};
+        }
+
+        int ammo_w = MeasureText(ammo_txt, fs_ammo);
+        int max_left_w = rw - ammo_w - 20;
+        int l_fs = fs_name;
+        while (l_fs > 9 && MeasureText(left_txt, l_fs) > max_left_w) {
+            l_fs--;
+        }
+        Color name_col = is_active ? WHITE : (Color){182, 196, 215, 220};
+        DrawText(left_txt, rx + 9, ry + (row_h - l_fs) / 2 - (is_active ? 1 : 0), l_fs, name_col);
+        DrawText(ammo_txt, rx + rw - ammo_w - 8, ty, fs_ammo, ammo_col);
+    }
+}
+
+/* Desenha o painel de status da habilidade, contador de kills, torre de armas e borda Berserk */
 void player_draw_ability_hud(const Player *p, int screen_w, int screen_h) {
     if (!p) {
         return;
@@ -1405,6 +1640,7 @@ void player_draw_ability_hud(const Player *p, int screen_w, int screen_h) {
     int kw = MeasureText(kills, f) + 20;
     DrawRectangle(screen_w - kw - 12, f + 29, kw, f + 10, (Color){12, 14, 22, 220});
     DrawText(kills, screen_w - kw - 2, f + 34, f, WHITE);
+    draw_weapon_tower_hud(p, screen_w, screen_h);
     if (a->berserk_time > 0) {
         DrawRectangleLinesEx((Rectangle){2, 2, (float)screen_w - 4, (float)screen_h - 4},
                              4, (Color){190, 20, 30, 220});

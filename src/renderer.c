@@ -8,13 +8,14 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* Grade interna 3D dinamica com limites maximos estaticos */
-#define MAX_R_WIDTH  640
-#define MAX_R_HEIGHT 360
+/* Grade interna 3D dinamica ajustada ao teto maximo real do modo ULTRA (540x270) */
+#define MAX_R_WIDTH  544
+#define MAX_R_HEIGHT 272
 
-/* Parametros do atlas mipmapped (16x6 celulas de 64x64) e ring-buffers GPU anti-stall */
-#define GPU_TEX_W       640
-#define GPU_TEX_H       384
+/* Parametros do atlas mipmapped (16x6 celulas de 64x64) e ring-buffers GPU anti-stall
+ * GPU_TEX_H=352 garante que o showcase do menu em Micro-ASCII (280x340) rode sempre na GPU */
+#define GPU_TEX_W       576
+#define GPU_TEX_H       352
 #define GPU_UI_W        256
 #define GPU_UI_H        256
 #define GPU_MUG_SIZE    64
@@ -88,7 +89,7 @@ static const char *DENSE_RAMP = "=-+*xX#%8&BWM@";
 static const int DENSE_RAMP_LEN = 14;
 
 /* --- Shaders GLSL 330 usados na GPU (um por estilo visual) --- */
-/* Estilo 2 (Micro-ASCII): 1 celula = 1 glifo 1.0x sem loop, lendo cor em RGB e indice do caractere no alpha */
+/* Estilo 2 (Micro-ASCII): 1 celula = 1 glifo 1.0x sem loop; derivadas lidas antes do discard pro driver Intel */
 static const char *ASCII_FS_MICRO_CODE =
     "#version 330\n"
     "in vec2 fragTexCoord;\n"
@@ -99,24 +100,26 @@ static const char *ASCII_FS_MICRO_CODE =
     "out vec4 finalColor;\n"
     "void main() {\n"
     "    vec2 cellCoord = fragTexCoord * texSize;\n"
-    "    vec2 cellUV = (floor(cellCoord) + 0.5) / texSize;\n"
-    "    vec4 cell = texture(texture0, cellUV);\n"
-    "    float gIdx = floor(cell.a * 255.0 + 0.5);\n"
-    "    if (gIdx < 0.5) discard;\n"
-    "    float col = mod(gIdx, 16.0);\n"
-    "    float row = floor(gIdx / 16.0);\n"
     "    const vec2 margin = vec2(0.24, 0.09);\n"
     "    const vec2 cellScale = vec2(1.0 / 16.0, 1.0 / 6.0);\n"
+    "    vec2 span = (1.0 - 2.0 * margin) * cellScale;\n"
+    "    vec2 dux = dFdx(cellCoord) * span;\n"
+    "    vec2 duy = dFdy(cellCoord) * span;\n"
+    "    vec2 cellUV = (floor(cellCoord) + 0.5) / texSize;\n"
+    "    vec4 cell = texture(texture0, cellUV);\n"
+    "    if (cell.a < (0.5 / 255.0)) discard;\n"
+    "    float gIdx = floor(cell.a * 255.0 + 0.5);\n"
+    "    float row = floor(gIdx * (1.0 / 16.0));\n"
+    "    float col = gIdx - row * 16.0;\n"
     "    vec2 uvs = mix(margin, 1.0 - margin, clamp(fract(cellCoord), 0.0, 1.0));\n"
     "    vec2 atlasUV = (vec2(col, row) + uvs) * cellScale;\n"
-    "    vec2 span = (1.0 - 2.0 * margin) * cellScale;\n"
-    "    float a = textureGrad(glyphAtlas, atlasUV, dFdx(cellCoord) * span, dFdy(cellCoord) * span).a;\n"
+    "    float a = textureGrad(glyphAtlas, atlasUV, dux, duy).a;\n"
     "    float mask = smoothstep(0.03, 0.34, a);\n"
     "    if (mask < 0.02) discard;\n"
     "    finalColor = vec4(cell.rgb * fragColor.rgb, mask * fragColor.a);\n"
     "}\n";
 
-/* Estilo 1 (Classico): mistura os 4 vizinhos 2x2 com sobreposicao de 1.72x pra deixar os glifos maiores e mais cheios */
+/* Estilo 1 (Classico): mistura os 4 vizinhos 2x2 com sobreposicao de 1.72x; constantes pre-multiplicadas pra aliviar GPU integrada */
 static const char *ASCII_FS_CLASSIC_CODE =
     "#version 330\n"
     "in vec2 fragTexCoord;\n"
@@ -126,34 +129,32 @@ static const char *ASCII_FS_CLASSIC_CODE =
     "uniform vec2 texSize;\n"
     "uniform vec2 gridDims;\n"
     "out vec4 finalColor;\n"
-    "float sampleGlyph(float gIdx, vec2 localUV, vec2 margin, float scaleInv, vec2 gx, vec2 gy) {\n"
-    "    float col = mod(gIdx, 16.0);\n"
-    "    float row = floor(gIdx / 16.0);\n"
-    "    vec2 uvs = mix(margin, 1.0 - margin, clamp(localUV, 0.0, 1.0));\n"
-    "    const vec2 cellScale = vec2(1.0 / 16.0, 1.0 / 6.0);\n"
-    "    vec2 atlasUV = (vec2(col, row) + uvs) * cellScale;\n"
-    "    vec2 span = (1.0 - 2.0 * margin) * cellScale * scaleInv;\n"
-    "    float a = textureGrad(glyphAtlas, atlasUV, gx * span, gy * span).a;\n"
-    "    return smoothstep(0.14, 0.52, a);\n"
-    "}\n"
     "void main() {\n"
+    "    vec2 invTex = 1.0 / texSize;\n"
     "    vec2 cellCoord = fragTexCoord * texSize;\n"
     "    vec2 cellIdx = floor(cellCoord);\n"
-    "    vec2 gx = dFdx(cellCoord);\n"
-    "    vec2 gy = dFdy(cellCoord);\n"
-    "    const float OVERLAP = 1.72;\n"
+    "    const float INV_OVERLAP = 1.0 / 1.72;\n"
+    "    const vec2 margin = vec2(0.16, 0.08);\n"
+    "    const vec2 cellScale = vec2(1.0 / 16.0, 1.0 / 6.0);\n"
+    "    vec2 span = (1.0 - 2.0 * margin) * cellScale * INV_OVERLAP;\n"
+    "    vec2 dux = dFdx(cellCoord) * span;\n"
+    "    vec2 duy = dFdy(cellCoord) * span;\n"
     "    vec3 outRgb = vec3(0.0);\n"
     "    float outA = 0.0;\n"
     "    for (int dy = -1; dy <= 0; dy++) {\n"
     "        for (int dx = -1; dx <= 0; dx++) {\n"
     "            vec2 idx = cellIdx + vec2(float(dx), float(dy));\n"
     "            if (idx.x < 0.0 || idx.y < 0.0 || idx.x >= gridDims.x || idx.y >= gridDims.y) continue;\n"
-    "            vec2 rel = (cellCoord - idx) / OVERLAP;\n"
+    "            vec2 rel = (cellCoord - idx) * INV_OVERLAP;\n"
     "            if (rel.x < 0.0 || rel.x > 1.0 || rel.y < 0.0 || rel.y > 1.0) continue;\n"
-    "            vec4 c = texture(texture0, (idx + 0.5) / texSize);\n"
-    "            float g = floor(c.a * 255.0 + 0.5);\n"
-    "            if (g >= 0.5) {\n"
-    "                float m = sampleGlyph(g, rel, vec2(0.16, 0.08), 1.0 / OVERLAP, gx, gy);\n"
+    "            vec4 c = texture(texture0, (idx + 0.5) * invTex);\n"
+    "            if (c.a >= (0.5 / 255.0)) {\n"
+    "                float g = floor(c.a * 255.0 + 0.5);\n"
+    "                float row = floor(g * (1.0 / 16.0));\n"
+    "                float col = g - row * 16.0;\n"
+    "                vec2 uvs = mix(margin, 1.0 - margin, rel);\n"
+    "                vec2 atlasUV = (vec2(col, row) + uvs) * cellScale;\n"
+    "                float m = smoothstep(0.14, 0.52, textureGrad(glyphAtlas, atlasUV, dux, duy).a);\n"
     "                outRgb = mix(outRgb, c.rgb, m);\n"
     "                outA = max(outA, m);\n"
     "            }\n"
@@ -238,16 +239,17 @@ int renderer_get_visual_style(void) {
 
 /* Grava uma celula direto na grade (usado por efeitos de HUD/arma sem teste de profundidade) */
 static void set_cell(int x, int y, char ch, AsciiColor fg, AsciiColor bg) {
+    (void)bg;
     if (x < 0 || x >= r_width || y < 0 || y >= r_height) {
         return;
     }
     screen_grid[y][x].ch = ch;
     screen_grid[y][x].fg = fg;
-    screen_grid[y][x].bg = bg;
 }
 
 /* So grava a celula se estiver na frente da parede (z_buffer) e de outro sprite (cell_depth) */
 static void set_cell_if_closer(int x, int y, float depth, char ch, AsciiColor fg, AsciiColor bg) {
+    (void)bg;
     if (x < 0 || x >= r_width || y < 0 || y >= r_height) {
         return;
     }
@@ -257,7 +259,6 @@ static void set_cell_if_closer(int x, int y, float depth, char ch, AsciiColor fg
     cell_depth[y][x] = depth;
     screen_grid[y][x].ch = ch;
     screen_grid[y][x].fg = fg;
-    screen_grid[y][x].bg = bg;
 }
 
 /* Texto curto mostrado no HUD para a densidade atual */
@@ -290,7 +291,7 @@ void renderer_update_auto_perf(float frame_dt) {
         auto_perf_scale = 1.0f;
         return;
     }
-    if (frame_dt <= 0.0005f || frame_dt > 0.25f) {
+    if (frame_dt <= 0.0005f || frame_dt > 0.08f) {
         return;
     }
 
@@ -299,21 +300,22 @@ void renderer_update_auto_perf(float frame_dt) {
     static float recover_accum = 0.0f;
     ema_dt = ema_dt * 0.90f + frame_dt * 0.10f;
 
-    /* Em PCs lentos (< 56 FPS sustentados por 0.8s), reduz gradualmente a malha */
+    /* Em PCs lentos (< 56 FPS sustentados), reduz gradualmente; se cair abaixo de 34 FPS reage em 0.45s */
     if (ema_dt > (1.0f / 56.0f)) {
         recover_accum = 0.0f;
         degrade_accum += frame_dt;
-        if (degrade_accum >= 0.80f && auto_perf_scale > 0.52f) {
+        float wait_t = (ema_dt > (1.0f / 34.0f)) ? 0.45f : 0.80f;
+        if (degrade_accum >= wait_t && auto_perf_scale > 0.52f) {
             if (auto_perf_scale > 0.86f) auto_perf_scale = 0.86f;
             else if (auto_perf_scale > 0.74f) auto_perf_scale = 0.74f;
             else if (auto_perf_scale > 0.62f) auto_perf_scale = 0.62f;
             else auto_perf_scale = 0.52f;
             degrade_accum = 0.0f;
         }
-    } else if (ema_dt < (1.0f / 85.0f) && auto_perf_scale < 1.0f) {
+    } else if (ema_dt < (1.0f / 72.0f) && auto_perf_scale < 1.0f) {
         degrade_accum = 0.0f;
         recover_accum += frame_dt;
-        if (recover_accum >= 2.0f) {
+        if (recover_accum >= 1.20f) {
             if (auto_perf_scale < 0.62f) auto_perf_scale = 0.62f;
             else if (auto_perf_scale < 0.74f) auto_perf_scale = 0.74f;
             else if (auto_perf_scale < 0.86f) auto_perf_scale = 0.86f;
@@ -719,7 +721,6 @@ void renderer_clear(void) {
         for (int i = 0; i < MAX_R_WIDTH; i++) {
             empty_row[i].ch = ' ';
             empty_row[i].fg = black;
-            empty_row[i].bg = black;
             max_depth_row[i] = MAX_DEPTH;
         }
         clear_rows_ready = 1;
@@ -962,7 +963,6 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
                 float shade = wall_fog * tex_mul;
                 screen_grid[y][x].ch = '|';
                 screen_grid[y][x].fg = scale_rgb(r_c, g_c, b_c, shade);
-                screen_grid[y][x].bg = bg_black;
                 cell_depth[y][x] = perp_dist;
             }
         } else if (tile == '#') {
@@ -991,7 +991,6 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
                 float shade = wall_fog * tex_mul;
                 screen_grid[y][x].ch = wch ? wch : sample_dense_ramp(shade, x, y);
                 screen_grid[y][x].fg = scale_rgb(r_c, g_c, b_c, shade);
-                screen_grid[y][x].bg = bg_black;
                 cell_depth[y][x] = perp_dist;
             }
         } else if (tile == '@') {
@@ -1018,7 +1017,6 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
                     screen_grid[y][x].ch = sample_dense_ramp(shade, x, y);
                     screen_grid[y][x].fg = scale_rgb(r_c, g_c, b_c, shade);
                 }
-                screen_grid[y][x].bg = bg_black;
                 cell_depth[y][x] = perp_dist;
             }
         } else if (tile == '%') {
@@ -1042,7 +1040,6 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
                 float shade = wall_fog * tex_mul;
                 screen_grid[y][x].ch = wch ? wch : sample_dense_ramp(shade, x, y);
                 screen_grid[y][x].fg = scale_rgb(r_c, g_c, b_c, shade);
-                screen_grid[y][x].bg = bg_black;
                 cell_depth[y][x] = perp_dist;
             }
         } else {
@@ -1058,7 +1055,6 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
                 float shade = wall_fog * tex_mul;
                 screen_grid[y][x].ch = sample_dense_ramp(shade, x, y);
                 screen_grid[y][x].fg = scale_rgb(r_c, g_c, b_c, shade);
-                screen_grid[y][x].bg = bg_black;
                 cell_depth[y][x] = perp_dist;
             }
         }
@@ -1091,7 +1087,6 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
             float cfog = 1.0f - row_dist * inv_13_0;
             if (cfog < 0.14f) cfog = 0.14f;
 
-            row[x].bg = bg_black;
             if (is_light) {
                 float lum = 0.92f * cfog;
                 row[x].ch = sample_dense_ramp(lum, x, y);
@@ -1145,7 +1140,6 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
                     if (g_floor_hook(map, floor_mx, floor_my, fu, fv, row_dist, &dch, &dcol)) {
                         row[x].ch = dch;
                         row[x].fg = dcol;
-                        row[x].bg = bg_black;
                         continue;
                     }
                 }
@@ -1159,7 +1153,6 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
             float ffog = 1.0f - row_dist * inv_13_5;
             if (ffog < 0.18f) ffog = 0.18f;
 
-            row[x].bg = bg_black;
             if (is_seam) {
                 float lum = 0.78f * ffog;
                 row[x].ch = (fu < 0.055f && fv < 0.055f) ? '+' : '=';
@@ -1337,6 +1330,9 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
             float sx_u = sx_s - sway;
             float ax_u = fabsf(sx_u);
             float v = v_step;
+            float custom_nz = use_custom_skin ? sqrtf(fmaxf(0.20f, 1.0f - sx_u * sx_u * 0.55f)) : 0.0f;
+            float custom_lum = use_custom_skin ? clamp_f01((0.50f + 0.46f * custom_nz) * fog) : 0.0f;
+            float custom_mul = use_custom_skin ? ((0.76f + 0.28f * custom_nz) * fog) : 0.0f;
 
             for (int sy = sy_lo; sy <= sy_hi; sy++, v += inv_sh) {
                 if (dist >= cell_depth[sy][sx]) {
@@ -1350,7 +1346,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
                         vu > 0.34f && vu < 0.50f) {
                         cell_depth[sy][sx] = dist;
                         screen_grid[sy][sx] = (AsciiCell){
-                            '@', scale_rgb(255.0f, 230.0f, 85.0f, fmaxf(0.92f * fog, 0.65f)), bg_black
+                            '@', scale_rgb(255.0f, 230.0f, 85.0f, fmaxf(0.92f * fog, 0.65f))
                         };
                         continue;
                     }
@@ -1358,9 +1354,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
                     if (mat) {
                         static const char *SKIN_3D_RAMP = "#%8&BWM@";
                         Color color = character_color(mat);
-                        float nz = sqrtf(fmaxf(0.20f, 1.0f - sx_u * sx_u * 0.55f));
-                        float lum = clamp_f01((0.50f + 0.46f * nz) * fog);
-                        float sl = clamp_f01(lum + bayer4x4(sx, sy) * 0.35f);
+                        float sl = clamp_f01(custom_lum + bayer4x4(sx, sy) * 0.35f);
                         int ri = (int)(sl * 7.9f);
                         if (ri < 0) ri = 0;
                         if (ri > 7) ri = 7;
@@ -1368,9 +1362,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
                         cell_depth[sy][sx] = dist;
                         screen_grid[sy][sx] = (AsciiCell){
                             ch,
-                            scale_rgb((float)color.r, (float)color.g, (float)color.b,
-                                      (0.76f + 0.28f * nz) * fog),
-                            bg_black
+                            scale_rgb((float)color.r, (float)color.g, (float)color.b, custom_mul)
                         };
                     }
                     continue;
@@ -1613,7 +1605,7 @@ static void api_draw_world_sprite(const void *player_ptr,
             if (sampler(u, v, sx, sy, sprite_w, sprite_h, dist, fog, time_now,
                         user_data, &out_ch, &out_col) && out_ch) {
                 cell_depth[sy][sx] = dist;
-                screen_grid[sy][sx] = (AsciiCell){out_ch, out_col, bg_black};
+                screen_grid[sy][sx] = (AsciiCell){out_ch, out_col};
             }
         }
     }
@@ -1676,7 +1668,6 @@ static void api_draw_world_floor_ring(float cx, float cy, float radius,
     const float r_hi_sq = (radius + max_edge) * (radius + max_edge);
     const float r_lo = (radius > max_edge) ? (radius - max_edge) : 0.0f;
     const float r_lo_sq = r_lo * r_lo;
-    AsciiColor bg_black = make_color(0, 0, 0);
 
     for (int y = floor_cast_begin; y < r_height; y++) {
         float bfd = floor_base_dist[y];
@@ -1701,11 +1692,9 @@ static void api_draw_world_floor_ring(float cx, float cy, float radius,
                 if (edge < thickness) {
                     row[x].ch = inner_ch;
                     row[x].fg = inner_col;
-                    row[x].bg = bg_black;
                 } else if (edge < thickness * 2.0f) {
                     row[x].ch = outer_ch;
                     row[x].fg = outer_col;
-                    row[x].bg = bg_black;
                 }
             }
         }
@@ -2171,7 +2160,7 @@ void renderer_draw_weapon(const Player *player) {
                         wch = sample_dense_ramp(lum, c, r);
                         wcol = scale_rgb(br, bg, bb, lum + 0.16f);
                     }
-                    wep_cache[r][c] = (AsciiCell){wch, wcol, bg_black};
+                    wep_cache[r][c] = (AsciiCell){wch, wcol};
                 }
             }
             wep_c_cols = w_cols;
@@ -2458,11 +2447,9 @@ static void draw_hud_mugshot(int bx, int by, int bw, int bh, const Player *playe
                         CharacterColor mc = player_get_material_color(mat);
                         mug_buf[idx].ch = (mat == 3) ? '@' : '#';
                         mug_buf[idx].fg = make_color(mc.r, mc.g, mc.b);
-                        mug_buf[idx].bg = bg_zero;
                     } else {
                         mug_buf[idx].ch = ' ';
                         mug_buf[idx].fg = bg_zero;
-                        mug_buf[idx].bg = bg_zero;
                     }
                 }
             }
@@ -2543,7 +2530,6 @@ static void draw_hud_mugshot(int bx, int by, int bw, int bh, const Player *playe
                 if (rad > 0.90f && !in_ear && !in_neck) {
                     mug_buf[idx].ch = ' ';
                     mug_buf[idx].fg = bg_zero;
-                    mug_buf[idx].bg = bg_zero;
                     continue;
                 }
 
@@ -2649,7 +2635,6 @@ static void draw_hud_mugshot(int bx, int by, int bw, int bh, const Player *playe
 
                 mug_buf[idx].ch = glyph;
                 mug_buf[idx].fg = scale_rgb(cr, cg, cb, light + 0.14f);
-                mug_buf[idx].bg = bg_zero;
             }
         }
         c_custom = 0;

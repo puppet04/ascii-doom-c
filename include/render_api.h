@@ -20,14 +20,12 @@ typedef struct {
     unsigned char b;
 } AsciiColor;
 
-/* Representa uma celula logica da grade ASCII (tela 3D ou buffers 2D de UI/menu):
+/* Representa uma celula logica compacta de 4 bytes da grade ASCII (tela 3D ou UI):
  * - ch: caractere ASCII imprimivel [33..126], ou ' ' / '\0' para celula transparente.
- * - fg: cor do caractere (foreground).
- * - bg: reservado/preto nos estilos puros em ASCII sem fundo pintado. */
+ * - fg: cor RGB do caractere (4 bytes totais = 1 palavra de 32 bits na CPU). */
 typedef struct {
     char ch;
     AsciiColor fg;
-    AsciiColor bg;
 } AsciiCell;
 
 /* Especificacao geometrica de um sprite 3D no mundo (mundo em blocos [0..MAP_WIDTH]).

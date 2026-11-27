@@ -135,6 +135,7 @@ int player_weapon_mag_size(int weapon_type);
 float player_weapon_cooldown(int weapon_type);
 const char *player_weapon_name(int weapon_type);
 int player_weapon_has_infinite_reserve(int weapon_type);
+int player_weapon_has_ammo(const Player *p, int weapon_type);
 int player_pickup_weapon(Player *p, int weapon_type, int ammo_amount);
 int player_reload(Player *p);
 int player_switch_weapon(Player *p, int weapon_type);
