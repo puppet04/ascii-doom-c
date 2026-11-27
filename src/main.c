@@ -649,11 +649,10 @@ static int showcase_character = PRESET_FUZILEIRO;
 static CharacterAppearance showcase_appearance;
 static char showcase_name[32] = "Fuzileiro";
 
-<<<<<<< HEAD
-static void eval_showcase_point_for(int visual_id, const CharacterAppearance *app,
-                                    float gx, float gy, float breath,
-                                    int *mat_out, float *nx_out, float *ny_out) {
-    if (player_appearance_visual(visual_id, app).custom_sprite) {
+static void eval_showcase_point_ex(int visual_id, const CharacterAppearance *app,
+                                   int custom_sprite, float gx, float gy, float breath,
+                                   int *mat_out, float *nx_out, float *ny_out) {
+    if (custom_sprite) {
         /* Alinha a sola (y ~= 0.99) com as botas do Fuzileiro em gy = 78.2.
            A respiracao diminui ate a cintura para manter os pes no chao. */
         float sprite_y = (gy - (78.2f - 0.99f * 74.0f)) / 74.0f;
@@ -662,14 +661,6 @@ static void eval_showcase_point_for(int visual_id, const CharacterAppearance *ap
                                                    sprite_y - breath * upper_body / 74.0f, 0);
         if (sprite_mat != 0) {
             *mat_out = sprite_mat;
-=======
-static void eval_showcase_point_ex(int visual_id, const CharacterAppearance *app,
-                                   int custom_sprite, float gx, float gy, float breath,
-                                   int *mat_out, float *nx_out, float *ny_out) {
-    if (custom_sprite) {
-        if (gy < 74.0f) {
-            *mat_out = player_appearance_material(visual_id, app, gx / 28.0f, (gy - breath) / 74.0f, 0);
->>>>>>> 465763ae659de48cc39a8ba9fe4db436090303a4
             *nx_out = gx / 40.0f;
             *ny_out = 0.0f;
             return;
