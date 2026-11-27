@@ -2,7 +2,7 @@ CC = gcc
 WINDRES = windres
 CFLAGS = -Wall -Wextra -std=c11 -O2 -ftree-vectorize -ffunction-sections -Iinclude
 LDFLAGS = -static-libgcc -Wl,-Bstatic -lraylib -lglfw3 -lwinpthread -Wl,-Bdynamic -lopengl32 -lgdi32 -lwinmm -lshell32 -lws2_32 -lwinhttp -lm
-REL_LDFLAGS = -s -Wl,--gc-sections $(LDFLAGS)
+REL_LDFLAGS = -Wl,--gc-sections $(LDFLAGS)
 
 BIN_DIR = bin
 TARGET = $(BIN_DIR)/sector404.exe
