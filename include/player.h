@@ -86,6 +86,8 @@ CharacterClass player_roster_get(const CharacterRoster *roster, int index);
 /* Retorna indice criado ou -1 para dados invalidos/limite atingido. */
 int player_roster_add(CharacterRoster *roster, const CharacterClass *draft);
 
+#define PLAYER_MAX_WEAPONS 9
+
 typedef struct {
     int id;
     char class_name[32];
@@ -102,10 +104,24 @@ typedef struct {
     int max_health;
     int ammo;
     int active_weapon;
+    int weapon_owned[PLAYER_MAX_WEAPONS];
+    int weapon_mag[PLAYER_MAX_WEAPONS];
+    int weapon_reserve[PLAYER_MAX_WEAPONS];
     int score;
     float bob_phase;
     float shoot_timer;
+    float hurt_timer;
+    int last_damage;
 } Player;
+
+int player_weapon_mag_size(int weapon_type);
+float player_weapon_cooldown(int weapon_type);
+const char *player_weapon_name(int weapon_type);
+int player_weapon_has_infinite_reserve(int weapon_type);
+int player_pickup_weapon(Player *p, int weapon_type, int ammo_amount);
+int player_reload(Player *p);
+int player_switch_weapon(Player *p, int weapon_type);
+int player_cycle_weapon(Player *p, int direction);
 
 void player_tick_ability(Player *p, float dt);
 void player_register_kill(Player *p, float x, float y);

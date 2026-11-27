@@ -107,6 +107,15 @@ int map_is_medkit_active_at(const GameMap *map, int x, int y);
 int map_try_collect_medkit(const GameMap *map, int x, int y);
 void map_reset_medkits(void);
 
+/* Pickups de armas no mapa ('G'=Shotgun, 'S'=Sniper, 'R'=Metralhadora, 'O'=Arma Futurista) com 10x carregador. */
+int map_weapon_tile_type(char tile);
+int map_is_weapon_pickup_active_at(const GameMap *map, int x, int y);
+int map_try_collect_weapon_pickup(const GameMap *map, int x, int y, int *out_weapon_type);
+int map_sample_weapon_pickup_sprite(int weapon_type, float u, float v, int sx, int sy,
+                                    float fog, float time_now, const RendererApi *r,
+                                    char *out_ch, AsciiColor *out_col);
+void map_reset_weapon_pickups(void);
+
 int map_is_fire_active_minimap(const GameMap *mm_map, int mx, int my);
 int map_is_medkit_active_minimap(const GameMap *mm_map, int mx, int my);
 

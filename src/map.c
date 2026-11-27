@@ -49,6 +49,7 @@ static int g_spawn_pending = 0;
 static unsigned char g_trap_active[MAP_HEIGHT][MAP_WIDTH];
 static float g_trap_timer[MAP_HEIGHT][MAP_WIDTH];
 static unsigned char g_medkit_used[MAP_HEIGHT][MAP_WIDTH];
+static unsigned char g_weapon_pickup_used[MAP_HEIGHT][MAP_WIDTH];
 
 #define TRAP_ACTIVE_DURATION 3.0f
 
@@ -59,6 +60,10 @@ void map_reset_traps(void) {
 
 void map_reset_medkits(void) {
     memset(g_medkit_used, 0, sizeof(g_medkit_used));
+}
+
+void map_reset_weapon_pickups(void) {
+    memset(g_weapon_pickup_used, 0, sizeof(g_weapon_pickup_used));
 }
 
 void map_init_default(GameMap *map) {
@@ -75,6 +80,7 @@ void map_init_default(GameMap *map) {
     g_spawn_pending = 1;
     map_reset_traps();
     map_reset_medkits();
+    map_reset_weapon_pickups();
     map->width = MAP_WIDTH;
     map->height = MAP_HEIGHT;
 
@@ -108,6 +114,7 @@ int map_load_from_file(GameMap *map, const char *filename) {
     g_spawn_pending = 0;
     map_reset_traps();
     map_reset_medkits();
+    map_reset_weapon_pickups();
     const char *lvl_ptr = strstr(filename, "level");
     if (lvl_ptr) {
         int lvl = 0;
@@ -379,9 +386,40 @@ int map_try_collect_medkit(const GameMap *map, int x, int y) {
     return 1;
 }
 
+int map_weapon_tile_type(char tile) {
+    switch (tile) {
+        case 'G': return 1; /* WEAPON_SHOTGUN */
+        case 'S': return 2; /* WEAPON_SNIPER */
+        case 'R': return 3; /* WEAPON_MACHINEGUN */
+        case 'O': return 4; /* WEAPON_FUTURISTIC */
+        default:  return -1;
+    }
+}
+
+int map_is_weapon_pickup_active_at(const GameMap *map, int x, int y) {
+    if (!map || x < 0 || x >= MAP_WIDTH || y < 0 || y >= MAP_HEIGHT) {
+        return 0;
+    }
+    char tile = map_get_raw_tile(map, x, y);
+    return map_weapon_tile_type(tile) >= 0 && g_weapon_pickup_used[y][x] == 0;
+}
+
+int map_try_collect_weapon_pickup(const GameMap *map, int x, int y, int *out_weapon_type) {
+    if (!map_is_weapon_pickup_active_at(map, x, y)) {
+        return 0;
+    }
+    int wtype = map_weapon_tile_type(map_get_raw_tile(map, x, y));
+    g_weapon_pickup_used[y][x] = 1;
+    if (out_weapon_type) {
+        *out_weapon_type = wtype;
+    }
+    return 1;
+}
+
 char map_get_wall_equivalent(char tile) {
     if (tile == 'P' || map_is_enemy_spawn_char(tile) ||
-        tile == '^' || tile == 'F' || tile == '+') {
+        tile == '^' || tile == 'F' || tile == '+' ||
+        map_weapon_tile_type(tile) >= 0) {
         return '.';
     }
     switch (tile) {
@@ -478,7 +516,8 @@ int map_is_wall(const GameMap *map, int x, int y) {
         return g_spawning_enemies ? 1 : 0;
     }
     if (tile == 'P' || map_is_enemy_spawn_char(tile) ||
-        map_is_hazard_tile(tile) || map_is_medkit_tile(tile)) {
+        map_is_hazard_tile(tile) || map_is_medkit_tile(tile) ||
+        map_weapon_tile_type(tile) >= 0) {
         return 0;
     }
     return (tile != '.' && tile != ' ' && !map_is_passable_wall(tile));
@@ -498,7 +537,8 @@ int map_is_visible_wall(const GameMap *map, int x, int y) {
     return (tile != '.' && tile != ' ' && tile != 'P' &&
             !map_is_enemy_spawn_char(tile) &&
             !map_is_hazard_tile(tile) &&
-            !map_is_medkit_tile(tile));
+            !map_is_medkit_tile(tile) &&
+            map_weapon_tile_type(tile) < 0);
 }
 
 int map_has_exit_tile(const GameMap *map) {
@@ -766,13 +806,265 @@ int map_minimap_tile_hook(const void *mm_map_ptr, int mx, int my,
         *out_col = (AsciiColor){185, 255, 205};
         return 1;
     }
+    if (map_is_weapon_pickup_active_at(mm_map, mx, my)) {
+        char raw = map_get_raw_tile(mm_map, mx, my);
+        *out_ch = raw;
+        *out_col = (AsciiColor){115, 235, 255};
+        return 1;
+    }
     return 0;
 }
 
 typedef struct {
     float seed;
+    int weapon_type;
     const RendererApi *api;
 } HazardRenderCtx;
+
+int map_sample_weapon_pickup_sprite(int weapon_type, float u, float v, int sx, int sy,
+                                    float fog, float time_now, const RendererApi *r,
+                                    char *out_ch, AsciiColor *out_col) {
+    if (!r || !out_ch || !out_col) return 0;
+
+    /* Coordenadas normalizadas [-1, 1] com leve flutuacao vertical */
+    float bob = 0.06f * sinf(time_now * 4.5f);
+    float nx = u * 2.0f - 1.0f;
+    float ny = v * 2.0f - 1.0f + bob;
+    float pulse = 0.88f + 0.12f * sinf(time_now * 6.5f);
+
+    if (weapon_type == 1) {
+        /* SHOTGUN: cano duplo largo + guarda-mao de madeira + coronha curva */
+        int top_barrel = (ny > -0.34f && ny < -0.14f && nx > -0.32f && nx < 0.94f);
+        int bot_barrel = (ny >= -0.14f && ny < 0.04f && nx > -0.24f && nx < 0.88f);
+        int pump       = (ny >= 0.00f && ny < 0.22f && nx > 0.02f && nx < 0.56f);
+        int receiver   = (ny > -0.30f && ny < 0.22f && nx > -0.42f && nx <= 0.04f);
+        int stock      = (nx >= -0.94f && nx <= -0.36f &&
+                          ny > (-0.12f + (-0.36f - nx) * 0.45f) &&
+                          ny < (0.28f + (-0.36f - nx) * 0.65f));
+        if (!top_barrel && !bot_barrel && !pump && !receiver && !stock) return 0;
+
+        if (pump || stock) {
+            *out_ch = '#';
+            *out_col = r->scale_rgb(175.0f, 102.0f, 52.0f, fog);
+        } else if (top_barrel) {
+            *out_ch = (nx > 0.82f) ? ']' : '=';
+            *out_col = r->scale_rgb(225.0f, 232.0f, 240.0f, fog * pulse);
+        } else if (bot_barrel) {
+            *out_ch = '=';
+            *out_col = r->scale_rgb(145.0f, 155.0f, 170.0f, fog);
+        } else {
+            *out_ch = r->sample_ramp(0.65f * fog, sx, sy);
+            *out_col = r->scale_rgb(235.0f, 150.0f, 65.0f, fog * pulse);
+        }
+        return 1;
+    }
+
+    if (weapon_type == 2) {
+        /* SNIPER: cano longo e fino + luneta alta com lente verde + bipe */
+        int barrel = (ny > -0.12f && ny < 0.04f && nx > -0.32f && nx < 0.98f);
+        int muzzle = (ny > -0.18f && ny < 0.10f && nx >= 0.86f && nx < 0.98f);
+        int scope  = (ny > -0.48f && ny < -0.22f && nx > -0.30f && nx < 0.28f);
+        int mount  = (ny >= -0.24f && ny <= -0.10f &&
+                      ((nx > -0.18f && nx < -0.06f) || (nx > 0.08f && nx < 0.20f)));
+        int body   = (ny >= 0.02f && ny < 0.26f && nx > -0.48f && nx < 0.36f);
+        int stock  = (ny > -0.04f && ny < 0.34f && nx >= -0.96f && nx <= -0.46f);
+        int mag    = (ny >= 0.24f && ny < 0.56f && nx > -0.12f && nx < 0.12f);
+        int bipod  = (ny >= 0.04f && ny < 0.52f && fabsf((nx - 0.52f) - (ny - 0.04f) * 0.40f) < 0.06f);
+        if (!barrel && !muzzle && !scope && !mount && !body && !stock && !mag && !bipod) return 0;
+
+        if (scope) {
+            int lens = (nx > 0.16f || nx < -0.20f);
+            *out_ch = lens ? '@' : '=';
+            *out_col = lens ? r->scale_rgb(120.0f, 255.0f, 130.0f, fog * pulse)
+                            : r->scale_rgb(80.0f, 92.0f, 102.0f, fog);
+        } else if (muzzle || barrel) {
+            *out_ch = muzzle ? '#' : '-';
+            *out_col = r->scale_rgb(215.0f, 230.0f, 210.0f, fog * pulse);
+        } else if (bipod || mag || mount) {
+            *out_ch = '|';
+            *out_col = r->scale_rgb(105.0f, 118.0f, 108.0f, fog);
+        } else {
+            *out_ch = r->sample_ramp(0.72f * fog, sx, sy);
+            *out_col = r->scale_rgb(165.0f, 185.0f, 130.0f, fog);
+        }
+        return 1;
+    }
+
+    if (weapon_type == 3) {
+        /* METRALHADORA: canos rotativos pesados + tambor de municao + alca superior */
+        int handle  = ((ny > -0.56f && ny < -0.40f && nx > -0.34f && nx < 0.22f) ||
+                       (ny >= -0.42f && ny < -0.22f &&
+                        ((nx > -0.34f && nx < -0.20f) || (nx > 0.08f && nx < 0.22f))));
+        int body    = (ny > -0.26f && ny < 0.24f && nx > -0.68f && nx < 0.26f);
+        int barrels = (nx >= 0.24f && nx < 0.96f &&
+                       ((ny > -0.22f && ny < -0.08f) ||
+                        (ny > -0.04f && ny < 0.10f) ||
+                        (ny > 0.14f && ny < 0.26f)));
+        int clamp   = (ny > -0.24f && ny < 0.28f &&
+                       ((nx > 0.50f && nx < 0.60f) || (nx > 0.84f && nx < 0.94f)));
+        int drum    = (ny >= 0.22f && ny < 0.68f && nx > -0.24f && nx < 0.22f);
+        int grip    = (ny >= 0.22f && ny < 0.64f && nx > -0.64f && nx < -0.42f);
+        if (!handle && !body && !barrels && !clamp && !drum && !grip) return 0;
+
+        if (drum) {
+            *out_ch = (fabsf(nx) < 0.08f) ? ':' : '#';
+            *out_col = r->scale_rgb(225.0f, 195.0f, 75.0f, fog * pulse);
+        } else if (clamp || barrels) {
+            *out_ch = clamp ? '#' : '=';
+            *out_col = r->scale_rgb(195.0f, 210.0f, 185.0f, fog * pulse);
+        } else if (handle || grip) {
+            *out_ch = '#';
+            *out_col = r->scale_rgb(82.0f, 96.0f, 78.0f, fog);
+        } else {
+            *out_ch = r->sample_ramp(0.70f * fog, sx, sy);
+            *out_col = r->scale_rgb(120.0f, 165.0f, 92.0f, fog);
+        }
+        return 1;
+    }
+
+    if (weapon_type == 5) {
+        /* MAQUITA (Boss 1): carcaca azul-turquesa + disco serrilhado prateado girando */
+        float dx_s = (nx - 0.34f) / 0.44f;
+        float dy_s = (ny + 0.04f) / 0.56f;
+        float r2 = dx_s * dx_s + dy_s * dy_s;
+        int blade = (r2 <= 1.0f);
+        int body  = (ny > -0.26f && ny < 0.36f && nx > -0.82f && nx < 0.16f);
+        int handle = (ny > -0.58f && ny <= -0.22f && nx > -0.66f && nx < -0.06f &&
+                      (ny < -0.42f || nx < -0.50f || nx > -0.22f));
+        int base  = (ny >= 0.30f && ny < 0.48f && nx > -0.58f && nx < 0.52f);
+        if (!blade && !body && !handle && !base) return 0;
+
+        if (blade && !body) {
+            float ang = atan2f(dy_s, dx_s) + time_now * 14.0f;
+            int tooth = (sinf(ang * 12.0f) > 0.15f);
+            *out_ch = (r2 < 0.14f) ? '@' : (tooth ? '*' : '#');
+            *out_col = (r2 < 0.14f) ? r->scale_rgb(255.0f, 210.0f, 70.0f, fog)
+                                    : r->scale_rgb(215.0f, 228.0f, 240.0f, fog * pulse);
+        } else if (handle || base) {
+            *out_ch = '=';
+            *out_col = r->scale_rgb(56.0f, 62.0f, 70.0f, fog);
+        } else {
+            *out_ch = r->sample_ramp(0.75f * fog, sx, sy);
+            *out_col = r->scale_rgb(38.0f, 178.0f, 202.0f, fog * pulse);
+        }
+        return 1;
+    }
+
+    if (weapon_type == 6) {
+        /* REVOLVER GRANDE (Boss 2): cano longo cromado + tambor largo + cabo madeira */
+        int barrel = (ny > -0.34f && ny < -0.06f && nx > -0.04f && nx < 0.96f);
+        int sight  = (ny > -0.44f && ny <= -0.32f && nx > 0.78f && nx < 0.94f);
+        int cyl    = (ny > -0.30f && ny < 0.16f && nx > -0.42f && nx <= 0.04f);
+        int frame  = (ny > -0.26f && ny < 0.24f && nx > -0.56f && nx <= -0.36f);
+        int grip   = (nx >= -0.88f && nx <= -0.42f &&
+                      ny > (0.04f + (-0.42f - nx) * 0.75f) &&
+                      ny < (0.48f + (-0.42f - nx) * 0.85f));
+        if (!barrel && !sight && !cyl && !frame && !grip) return 0;
+
+        if (grip) {
+            *out_ch = '#';
+            *out_col = r->scale_rgb(165.0f, 96.0f, 48.0f, fog);
+        } else if (cyl) {
+            *out_ch = (fabsf(ny + 0.07f) < 0.08f) ? '=' : '#';
+            *out_col = r->scale_rgb(235.0f, 220.0f, 165.0f, fog * pulse);
+        } else {
+            *out_ch = (sight || nx > 0.86f) ? ']' : '=';
+            *out_col = r->scale_rgb(220.0f, 230.0f, 244.0f, fog * pulse);
+        }
+        return 1;
+    }
+
+    if (weapon_type == 7) {
+        /* TOMMY GUN (Boss 3): cano aletado + tambor redondo 50 balas + madeira */
+        int barrel   = (ny > -0.24f && ny < -0.04f && nx > -0.10f && nx < 0.96f);
+        int receiver = (ny > -0.28f && ny < 0.06f && nx > -0.44f && nx <= 0.26f);
+        int foregrip = (ny >= 0.00f && ny < 0.44f && nx > 0.34f && nx < 0.50f);
+        int stock    = (nx >= -0.96f && nx <= -0.40f &&
+                        ny > (-0.12f + (-0.40f - nx) * 0.35f) &&
+                        ny < (0.28f + (-0.40f - nx) * 0.55f));
+        float dx_d = (nx - 0.04f) / 0.26f;
+        float dy_d = (ny - 0.30f) / 0.34f;
+        int drum = (dx_d * dx_d + dy_d * dy_d <= 1.0f);
+        if (!barrel && !receiver && !foregrip && !stock && !drum) return 0;
+
+        if (drum) {
+            int center = (dx_d * dx_d + dy_d * dy_d < 0.22f);
+            *out_ch = center ? '@' : '#';
+            *out_col = center ? r->scale_rgb(245.0f, 205.0f, 75.0f, fog * pulse)
+                              : r->scale_rgb(68.0f, 74.0f, 84.0f, fog);
+        } else if (stock || foregrip) {
+            *out_ch = '#';
+            *out_col = r->scale_rgb(158.0f, 96.0f, 50.0f, fog);
+        } else {
+            *out_ch = '=';
+            *out_col = r->scale_rgb(185.0f, 195.0f, 208.0f, fog * pulse);
+        }
+        return 1;
+    }
+
+    if (weapon_type == 8) {
+        /* LANCA-CHAMAS (Boss 4): tubo pesado + cilindro vermelho + chama-piloto na ponta */
+        int tube   = (ny > -0.24f && ny < 0.06f && nx > -0.62f && nx < 0.78f);
+        int tank   = (ny >= 0.04f && ny < 0.46f && nx > -0.42f && nx < 0.36f);
+        int grip   = (ny >= 0.04f && ny < 0.50f && nx > -0.78f && nx < -0.52f);
+        float dx_f = (nx - 0.88f) / 0.16f;
+        float dy_f = (ny + 0.09f) / 0.24f;
+        int flame  = (dx_f * dx_f + dy_f * dy_f <= 1.0f);
+        if (!tube && !tank && !grip && !flame) return 0;
+
+        if (flame) {
+            *out_ch = (pulse > 0.94f) ? '@' : '*';
+            *out_col = r->scale_rgb(255.0f, 180.0f, 45.0f, fog * (pulse + 0.15f));
+        } else if (tank) {
+            *out_ch = '#';
+            *out_col = r->scale_rgb(218.0f, 52.0f, 38.0f, fog * pulse);
+        } else if (grip) {
+            *out_ch = '#';
+            *out_col = r->scale_rgb(72.0f, 78.0f, 86.0f, fog);
+        } else {
+            *out_ch = '=';
+            *out_col = r->scale_rgb(175.0f, 185.0f, 196.0f, fog);
+        }
+        return 1;
+    }
+
+    /* ARMA FUTURISTA (4): ponteiras duplas abertas + nucleo de plasma brilhante */
+    int top_prong = (ny > -0.42f && ny < -0.18f && nx > 0.10f && nx < 0.95f);
+    int bot_prong = (ny > 0.14f && ny < 0.38f && nx > 0.10f && nx < 0.95f);
+    int core      = ((nx - 0.22f) * (nx - 0.22f) + (ny + 0.02f) * (ny + 0.02f) < 0.09f);
+    int chassis   = (ny > -0.34f && ny < 0.30f && nx > -0.62f && nx <= 0.18f);
+    int fin       = (ny >= 0.28f && ny < 0.66f && nx > -0.48f && nx < -0.18f);
+    if (!top_prong && !bot_prong && !core && !chassis && !fin) return 0;
+
+    if (core) {
+        *out_ch = (pulse > 0.94f) ? '@' : '*';
+        *out_col = r->scale_rgb(110.0f, 250.0f, 255.0f, fog * (pulse + 0.12f));
+    } else if (top_prong || bot_prong) {
+        *out_ch = (nx > 0.78f) ? '>' : '=';
+        *out_col = r->scale_rgb(165.0f, 225.0f, 255.0f, fog * pulse);
+    } else if (fin) {
+        *out_ch = '/';
+        *out_col = r->scale_rgb(125.0f, 95.0f, 210.0f, fog);
+    } else {
+        *out_ch = r->sample_ramp(0.78f * fog, sx, sy);
+        *out_col = r->scale_rgb(110.0f, 145.0f, 225.0f, fog);
+    }
+    return 1;
+}
+
+static int map_weapon_pickup_sampler(float u, float v, int sx, int sy,
+                                     int sprite_w, int sprite_h,
+                                     float dist, float fog, float time_now,
+                                     const void *user_data,
+                                     char *out_ch, AsciiColor *out_col) {
+    (void)sprite_w;
+    (void)sprite_h;
+    (void)dist;
+    const HazardRenderCtx *ctx = (const HazardRenderCtx *)user_data;
+    if (!ctx || !ctx->api) return 0;
+    return map_sample_weapon_pickup_sprite(ctx->weapon_type, u, v, sx, sy,
+                                           fog, time_now, ctx->api, out_ch, out_col);
+}
 
 static int map_medkit_sampler(float u, float v, int sx, int sy,
                               int sprite_w, int sprite_h,
@@ -854,7 +1146,8 @@ void map_render_hazards(const GameMap *map, const void *player_ptr,
         for (int mx = 0; mx < map->width; mx++) {
             int is_fire = map_is_fire_active_at(map, mx, my);
             int is_medkit = !is_fire && map_is_medkit_active_at(map, mx, my);
-            if (!is_fire && !is_medkit) {
+            int is_weapon = !is_fire && !is_medkit && map_is_weapon_pickup_active_at(map, mx, my);
+            if (!is_fire && !is_medkit && !is_weapon) {
                 continue;
             }
 
@@ -864,6 +1157,7 @@ void map_render_hazards(const GameMap *map, const void *player_ptr,
 
             HazardRenderCtx ctx;
             ctx.seed = (float)(mx * 17 + my * 31);
+            ctx.weapon_type = is_weapon ? map_weapon_tile_type(map_get_raw_tile(map, mx, my)) : -1;
             ctx.api = r;
 
             if (is_medkit) {
@@ -873,6 +1167,13 @@ void map_render_hazards(const GameMap *map, const void *player_ptr,
                 spec.min_h = 4;
                 spec.min_fog = 0.32f;
                 r->draw_world_sprite(player_ptr, &spec, map_medkit_sampler, &ctx);
+            } else if (is_weapon) {
+                spec.height_scale = 0.34f / 0.78f;
+                spec.width_ratio = 1.95f;
+                spec.min_w = 10;
+                spec.min_h = 5;
+                spec.min_fog = 0.45f;
+                r->draw_world_sprite(player_ptr, &spec, map_weapon_pickup_sampler, &ctx);
             } else {
                 spec.height_scale = 1.20f / 0.78f;
                 spec.width_ratio = 0.58f;

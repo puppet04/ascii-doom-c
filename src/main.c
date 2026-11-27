@@ -445,8 +445,12 @@ static void handle_custom_input(Player *p, const GameMap *map, const MenuKeyBind
         }
     }
 
-    if (IsKeyPressed(b->reload) && p->ammo < 30) {
-        p->ammo = 30;
+    if (IsKeyPressed(b->reload)) {
+        player_reload(p);
+    }
+
+    if (IsKeyPressed(KEY_F)) {
+        player_cycle_weapon(p, 1);
     }
 
     int want_shoot = (IsCursorHidden() && IsMouseButtonDown(MOUSE_BUTTON_LEFT)) ||
@@ -3557,7 +3561,9 @@ static int check_pvp_player_hit(const GameMap *map, Player *shooter, NetContext 
     int berserk = (shooter->ability_state.berserk_time > 0.0f);
     int multiplier = (shooter->ability == ABILITY_GUERRILLA && shooter->ability_state.boosted_shot) ? 2 : 1;
     shooter->ability_state.boosted_shot = 0;
-    float best_dist = berserk ? 1.5f : weapons[WEAPON_PISTOL].range;
+    int aw = (shooter->active_weapon >= 0 && shooter->active_weapon < MAX_WEAPONS)
+        ? shooter->active_weapon : WEAPON_PISTOL;
+    float best_dist = berserk ? 1.5f : weapons[aw].range;
     int best_slot = -1;
 
     for (int s = 0; s < NET_MAX_PLAYERS; s++) {
@@ -3583,7 +3589,7 @@ static int check_pvp_player_hit(const GameMap *map, Player *shooter, NetContext 
     }
 
     if (best_slot >= 0) {
-        int base_dmg = berserk ? 45 : weapons[WEAPON_PISTOL].damage;
+        int base_dmg = berserk ? 45 : weapons[aw].damage;
         int dmg = player_attack_damage(shooter, base_dmg * multiplier);
         if (dmg < 1) dmg = 1;
         net->outgoing_pvp_dmg[best_slot] += dmg;
@@ -3706,6 +3712,49 @@ static void draw_mp_players_hp_hud(int sw, int sh, float sc,
 }
 
 /* Indicativo visual de queimadura (burn) do jogador nas bordas da tela e alerta */
+static void draw_player_damage_overlay(int sw, int sh, float hurt_timer, int last_damage) {
+    if (hurt_timer <= 0.0f) {
+        return;
+    }
+    int hud_h = (int)((float)sh * 0.145f);
+    if (hud_h < 82) hud_h = 82;
+    int view_h = sh - hud_h;
+    if (view_h < 40) view_h = sh;
+
+    float t = hurt_timer / 0.35f;
+    if (t > 1.0f) t = 1.0f;
+
+    /* Flash vermelho sutil na tela toda + vinheta forte nas bordas */
+    unsigned char wash_a = (unsigned char)(62.0f * t);
+    unsigned char edge_a = (unsigned char)(195.0f * t);
+    unsigned char inner_a = (unsigned char)(105.0f * t);
+    int b1 = (int)((float)sw * 0.022f);
+    if (b1 < 12) b1 = 12;
+    if (b1 > 30) b1 = 30;
+    int b2 = b1 / 2;
+
+    DrawRectangle(0, 0, sw, view_h, (Color){210, 20, 24, wash_a});
+    DrawRectangle(0, 0, sw, b1, (Color){235, 28, 32, edge_a});
+    DrawRectangle(0, view_h - b1, sw, b1, (Color){235, 28, 32, edge_a});
+    DrawRectangle(0, b1, b1, view_h - b1 * 2, (Color){235, 28, 32, edge_a});
+    DrawRectangle(sw - b1, b1, b1, view_h - b1 * 2, (Color){235, 28, 32, edge_a});
+    DrawRectangle(b1, b1, sw - b1 * 2, b2, (Color){255, 70, 55, inner_a});
+    DrawRectangle(b1, view_h - b1 - b2, sw - b1 * 2, b2, (Color){255, 70, 55, inner_a});
+
+    /* Aviso compacto "-X HP" no centro-topo do viewport */
+    if (last_damage > 0) {
+        char dmg_txt[32];
+        snprintf(dmg_txt, sizeof(dmg_txt), "-%d HP", last_damage);
+        int fs = (sw < 1000) ? 18 : 24;
+        int tw = MeasureText(dmg_txt, fs);
+        int tx = (sw - tw) / 2;
+        int ty = (int)((float)view_h * 0.14f) - (int)((1.0f - t) * 14.0f);
+        unsigned char txt_a = (unsigned char)(255.0f * t);
+        DrawText(dmg_txt, tx + 2, ty + 2, fs, (Color){20, 0, 0, txt_a});
+        DrawText(dmg_txt, tx, ty, fs, (Color){255, 85, 75, txt_a});
+    }
+}
+
 static void draw_player_burning_overlay(int sw, int sh) {
     int hud_h = (int)((float)sh * 0.145f);
     if (hud_h < 82) hud_h = 82;
@@ -4022,7 +4071,9 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
                         pvp_hit_timer = 0.22f;
                     }
                 } else {
-                    enemies_check_hit(&enemies, &map, &player, &weapons[WEAPON_PISTOL]);
+                    int aw = (player.active_weapon >= 0 && player.active_weapon < MAX_WEAPONS)
+                        ? player.active_weapon : WEAPON_PISTOL;
+                    enemies_check_hit(&enemies, &map, &player, &weapons[aw]);
                 }
             }
             if (!is_pvp) {
@@ -4202,6 +4253,9 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         renderer_draw_scene_and_hud(&player, is_multiplayer, net.connected,
                                     mouse_locked, cfg->show_fps ? cfg->fps_cap : -1);
         player_draw_ability_hud(&player, sw, sh);
+        if (player.hurt_timer > 0.0f) {
+            draw_player_damage_overlay(sw, sh, player.hurt_timer, player.last_damage);
+        }
         if (enemies_player_is_burning()) {
             draw_player_burning_overlay(sw, sh);
         }

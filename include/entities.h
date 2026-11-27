@@ -11,17 +11,27 @@
  * de inimigos (spawn, movimentacao por Delta Time e deteccao de acertos).
  */
 
-#define MAX_WEAPONS 4
+#define MAX_WEAPONS 9
 #define MAX_ENEMIES 32
+#define MAX_WEAPON_DROPS 32
+#define MAX_PLAYER_ORBS 16
 #define SHADOW_BURN_DURATION 5.0f
 #define SHADOW_BURN_DAMAGE 2
 
 typedef enum {
     WEAPON_PISTOL = 0,
     WEAPON_SHOTGUN = 1,
-    WEAPON_PLASMA = 2,
-    WEAPON_BFG = 3
+    WEAPON_SNIPER = 2,
+    WEAPON_MACHINEGUN = 3,
+    WEAPON_FUTURISTIC = 4,
+    WEAPON_MAQUITA = 5,
+    WEAPON_REVOLVER = 6,
+    WEAPON_TOMMYGUN = 7,
+    WEAPON_FLAMETHROWER = 8
 } WeaponType;
+
+#define WEAPON_PLASMA WEAPON_MACHINEGUN
+#define WEAPON_BFG    WEAPON_FUTURISTIC
 
 typedef enum {
     ENEMY_LEGACY_Z = 0,
@@ -35,6 +45,10 @@ typedef enum {
     ENEMY_BERSERK_TROLL,
     ENEMY_BERSERK_APOSTLE,
     ENEMY_BERSERK_ZODD,
+    ENEMY_BOSS_MAQUITA,
+    ENEMY_BOSS_REVOLVER,
+    ENEMY_BOSS_TOMMY,
+    ENEMY_BOSS_FLAME,
     ENEMY_TYPE_COUNT
 } EnemyType;
 
@@ -65,7 +79,29 @@ typedef struct {
     float cooldown;
     int ammo_cost;
     float range;
+    int mag_size;
+    int infinite_reserve;
 } Weapon;
+
+typedef struct {
+    int active;
+    float x;
+    float y;
+    WeaponType weapon;
+    int ammo;
+} WeaponDrop;
+
+typedef struct {
+    int active;
+    float x;
+    float y;
+    float dx;
+    float dy;
+    float speed;
+    float age;
+    float turn_rate;
+    int damage;
+} PlayerOrb;
 
 typedef struct {
     int active;
@@ -85,6 +121,7 @@ typedef struct {
     int optional_for_exit;
     float burn_time;
     float burn_tick;
+    int burn_is_fire;
 } Enemy;
 
 typedef struct {
@@ -116,6 +153,8 @@ int enemies_alive(const EnemyManager *mgr);
 int enemies_required_alive(const EnemyManager *mgr);
 void enemies_update_fireball(EnemyManager *mgr, const GameMap *map, Player *player, float dt);
 const EnemyProjectile *enemies_projectile_pool(void);
+const WeaponDrop *enemies_weapon_drop_pool(void);
+const PlayerOrb *enemies_player_orb_pool(void);
 int enemies_player_is_burning(void);
 
 /* Atualiza movimentacao e ataque dos inimigos usando Delta Time (dt). */

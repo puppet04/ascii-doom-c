@@ -520,6 +520,9 @@ void player_tick_ability(Player *p, float dt) {
         s->guerrilla_time = fminf(GUERRILLA_CHARGE_TIME, s->guerrilla_time + dt);
     s->cooldown = fmaxf(0, s->cooldown - dt);
     s->zone_time = fmaxf(0, s->zone_time - dt);
+    if (p->hurt_timer > 0.0f) {
+        p->hurt_timer = fmaxf(0.0f, p->hurt_timer - dt);
+    }
     if (s->berserk_time > 0) {
         s->berserk_time = fmaxf(0, s->berserk_time - dt);
         if (s->berserk_time == 0) {
@@ -587,6 +590,145 @@ void player_take_damage(Player *p, int damage) {
     p->ability_state.guerrilla_time = 0;
     if (p->ability_state.berserk_time > 0) damage *= 2;
     p->health = p->health > damage ? p->health - damage : 0;
+    p->hurt_timer = 0.35f;
+    p->last_damage = damage;
+}
+
+int player_weapon_mag_size(int weapon_type) {
+    switch (weapon_type) {
+        case 0: return 10; /* Pistola */
+        case 1: return 6;  /* Shotgun */
+        case 2: return 5;  /* Sniper */
+        case 3: return 30; /* Metralhadora */
+        case 4: return 4;  /* Arma Futurista */
+        case 5: return 10; /* Maquita (Boss 1) */
+        case 6: return 6;  /* Revolver Grande (Boss 2) */
+        case 7: return 50; /* Tommy Gun (Boss 3) */
+        case 8: return 40; /* Lanca-Chamas (Boss 4) */
+        default: return 10;
+    }
+}
+
+float player_weapon_cooldown(int weapon_type) {
+    switch (weapon_type) {
+        case 0: return 0.28f; /* Pistola */
+        case 1: return 0.72f; /* Shotgun */
+        case 2: return 1.50f; /* Sniper */
+        case 3: return 0.075f;/* Metralhadora (altissima cadencia) */
+        case 4: return 0.90f; /* Arma Futurista */
+        case 5: return 0.045f;/* Maquita (corpo a corpo ultra-rapida, mais rapida que metralhadora) */
+        case 6: return 0.62f; /* Revolver Grande (Boss 2) */
+        case 7: return 0.075f;/* Tommy Gun (Boss 3) */
+        case 8: return 0.11f; /* Lanca-Chamas (Boss 4) */
+        default: return FIRE_COOLDOWN;
+    }
+}
+
+const char *player_weapon_name(int weapon_type) {
+    switch (weapon_type) {
+        case 0: return "PISTOLA";
+        case 1: return "SHOTGUN";
+        case 2: return "SNIPER";
+        case 3: return "METRALH";
+        case 4: return "FUTURIST";
+        case 5: return "MAQUITA";
+        case 6: return "REVOLVER";
+        case 7: return "TOMMYGUN";
+        case 8: return "L.CHAMAS";
+        default: return "PISTOLA";
+    }
+}
+
+int player_weapon_has_infinite_reserve(int weapon_type) {
+    return weapon_type == 0;
+}
+
+int player_pickup_weapon(Player *p, int weapon_type, int ammo_amount) {
+    if (!p || weapon_type < 0 || weapon_type >= PLAYER_MAX_WEAPONS || ammo_amount <= 0) {
+        return 0;
+    }
+    int mag = player_weapon_mag_size(weapon_type);
+    if (!p->weapon_owned[weapon_type]) {
+        p->weapon_owned[weapon_type] = 1;
+        int load = ammo_amount < mag ? ammo_amount : mag;
+        p->weapon_mag[weapon_type] = load;
+        if (!player_weapon_has_infinite_reserve(weapon_type)) {
+            p->weapon_reserve[weapon_type] += ammo_amount - load;
+        }
+        if (p->active_weapon == weapon_type) {
+            p->ammo = p->weapon_mag[weapon_type];
+        }
+        return 1;
+    }
+    if (!player_weapon_has_infinite_reserve(weapon_type)) {
+        p->weapon_reserve[weapon_type] += ammo_amount;
+    }
+    return 2;
+}
+
+int player_reload(Player *p) {
+    if (!p || p->health <= 0 || p->ability_state.berserk_time > 0.0f) {
+        return 0;
+    }
+    int w = p->active_weapon;
+    if (w < 0 || w >= PLAYER_MAX_WEAPONS || !p->weapon_owned[w]) {
+        return 0;
+    }
+    int mag = player_weapon_mag_size(w);
+    if (w == 5) {
+        return 0;
+    }
+    if (p->weapon_mag[w] >= mag) {
+        p->ammo = p->weapon_mag[w];
+        return 0;
+    }
+    if (player_weapon_has_infinite_reserve(w)) {
+        p->weapon_mag[w] = mag;
+        p->ammo = mag;
+        return 1;
+    }
+    int need = mag - p->weapon_mag[w];
+    if (p->weapon_reserve[w] <= 0) {
+        return 0;
+    }
+    int take = p->weapon_reserve[w] < need ? p->weapon_reserve[w] : need;
+    p->weapon_mag[w] += take;
+    p->weapon_reserve[w] -= take;
+    p->ammo = p->weapon_mag[w];
+    return 1;
+}
+
+int player_switch_weapon(Player *p, int weapon_type) {
+    if (!p || p->ability_state.berserk_time > 0.0f) {
+        return 0;
+    }
+    if (weapon_type < 0 || weapon_type >= PLAYER_MAX_WEAPONS || !p->weapon_owned[weapon_type]) {
+        return 0;
+    }
+    p->active_weapon = weapon_type;
+    p->ammo = p->weapon_mag[weapon_type];
+    return 1;
+}
+
+int player_cycle_weapon(Player *p, int dir) {
+    if (!p || p->ability_state.berserk_time > 0.0f) {
+        return 0;
+    }
+    int step = (dir < 0) ? -1 : 1;
+    int cur = p->active_weapon;
+    if (cur < 0 || cur >= PLAYER_MAX_WEAPONS) {
+        cur = 0;
+    }
+    for (int i = 1; i < PLAYER_MAX_WEAPONS; i++) {
+        int cand = (cur + step * i) % PLAYER_MAX_WEAPONS;
+        if (cand < 0) cand += PLAYER_MAX_WEAPONS;
+        if (p->weapon_owned[cand]) {
+            p->active_weapon = cand;
+            p->ammo = p->weapon_mag[cand];
+            return 1;
+        }
+    }
+    return 0;
 }
 
 int player_begin_attack(Player *p) {
@@ -595,12 +737,28 @@ int player_begin_attack(Player *p) {
         p->shoot_timer = 0.60f;
         return 1;
     }
+    int w = p->active_weapon;
+    if (w < 0 || w >= PLAYER_MAX_WEAPONS) w = 0;
+    if (w == 5) {
+        /* Maquita (corpo a corpo continua): nao consome municao ao segurar ligada. */
+        p->ability_state.boosted_shot = p->ability == ABILITY_GUERRILLA &&
+            p->ability_state.guerrilla_time >= GUERRILLA_CHARGE_TIME;
+        if (p->ability_state.boosted_shot) p->ability_state.guerrilla_time = 0;
+        p->shoot_timer = player_weapon_cooldown(w);
+        return 1;
+    }
     if (p->ammo <= 0) return 0;
+    if (p->weapon_mag[w] <= 0) {
+        int mag = player_weapon_mag_size(w);
+        p->weapon_mag[w] = p->ammo > mag ? mag : p->ammo;
+    }
+    if (p->weapon_mag[w] <= 0) return 0;
     p->ability_state.boosted_shot = p->ability == ABILITY_GUERRILLA &&
         p->ability_state.guerrilla_time >= GUERRILLA_CHARGE_TIME;
     if (p->ability_state.boosted_shot) p->ability_state.guerrilla_time = 0;
-    p->ammo--;
-    p->shoot_timer = FIRE_COOLDOWN;
+    p->weapon_mag[w]--;
+    p->ammo = p->weapon_mag[w];
+    p->shoot_timer = player_weapon_cooldown(w);
     return 1;
 }
 
@@ -672,6 +830,12 @@ void player_apply_class(Player *p, const CharacterClass *cls) {
         ? cls->visual_id : PRESET_FUZILEIRO;
     p->max_health = (cls->max_health > 0) ? cls->max_health : PLAYER_MAX_HEALTH;
     p->health = p->max_health;
+    memset(p->weapon_owned, 0, sizeof(p->weapon_owned));
+    memset(p->weapon_mag, 0, sizeof(p->weapon_mag));
+    memset(p->weapon_reserve, 0, sizeof(p->weapon_reserve));
+    p->weapon_owned[0] = 1;
+    p->weapon_mag[0] = player_weapon_mag_size(0);
+    p->weapon_reserve[0] = 0;
     p->ammo = (cls->start_ammo > 0) ? cls->start_ammo : 30;
     p->move_speed = (cls->move_speed > 0.5f) ? cls->move_speed : MOVE_SPEED;
     p->active_weapon = cls->start_weapon;
@@ -690,6 +854,8 @@ void player_init(Player *p, float x, float y, float angle) {
     p->score = 0;
     p->bob_phase = 0.0f;
     p->shoot_timer = 0.0f;
+    p->hurt_timer = 0.0f;
+    p->last_damage = 0;
 
     CharacterClass base_cls = player_get_preset_class(PRESET_FUZILEIRO);
     player_apply_class(p, &base_cls);
@@ -782,8 +948,8 @@ void player_handle_input(Player *p, const GameMap *map, float dt,
     }
 
     /* Recarregar municao */
-    if (IsKeyPressed(KEY_R) && p->ammo < 30) {
-        p->ammo = 30;
+    if (IsKeyPressed(KEY_R)) {
+        player_reload(p);
     }
 
     /* Disparo com clique esquerdo ou Espaco, limitado por FIRE_COOLDOWN (dt) */
@@ -911,27 +1077,192 @@ int player_render_weapon(const Player *p, const RendererApi *r) {
     }
     int rw = 0, rh = 0;
     r->get_grid_size(&rw, &rh);
+    if (rw <= 0 || rh <= 0) {
+        return 0;
+    }
+
     AsciiColor black = {0, 0, 0};
-    float swing = p->shoot_timer > 0.0f ? sinf(p->shoot_timer / 0.60f * PI_F) : 0.0f;
-    for (int y = rh / 3; y < rh; y++) {
-        float t = (float)(y - rh / 3) / (float)(rh * 2 / 3);
-        int center = (int)((float)rw * (0.68f - t * 0.18f - swing * 0.28f));
-        int width = (int)((float)rw * (0.016f + t * 0.045f));
-        if (t > 0.80f) width = (int)((float)rw * 0.09f);
-        if (t > 0.85f) width = (int)((float)rw * 0.015f);
-        for (int x = -width; x <= width; x++) {
-            int ax = abs(x);
-            float nx = (width > 0) ? ((float)ax / (float)width) : 0.0f;
-            int is_handle = (t > 0.85f);
-            int is_edge = (!is_handle && ax > width - 2);
-            float lum = is_handle ? (0.35f + 0.28f * (1.0f - nx))
-                      : is_edge   ? 0.92f
-                                  : (0.40f + 0.50f * (1.0f - nx));
-            char gch = r->sample_ramp(lum, center + x, y);
-            AsciiColor color = is_handle ? r->scale_rgb(82.0f, 55.0f, 50.0f, 0.72f + 0.28f * (1.0f - nx))
-                             : is_edge   ? (AsciiColor){225, 232, 245}
-                                         : r->scale_rgb(125.0f, 138.0f, 160.0f, 0.70f + 0.35f * (1.0f - nx));
-            r->set_cell(center + x, y, gch, color, black);
+    float aspect = (float)rw / (float)(rh > 0 ? rh : 1);
+    float time_now = r->get_time ? r->get_time() : 0.0f;
+    int swinging = (p->shoot_timer > 0.0f);
+    float prog = swinging ? (1.0f - fminf(1.0f, p->shoot_timer / 0.60f)) : 0.0f;
+
+    /* Fases do golpe da Matadora de Dragoes:
+     * 0.00..0.16: preparacao (puxa para cima/direita)
+     * 0.16..0.44: corte diagonal explosivo (direita-topo -> esquerda-baixo)
+     * 0.44..0.58: impacto pesado (pausa/recuo embaixo-esquerda)
+     * 0.58..1.00: retorno pesado para a guarda a direita */
+    float idle_bob_x = sinf(p->bob_phase) * 0.012f;
+    float idle_bob_y = fabsf(cosf(p->bob_phase)) * 0.016f + sinf(time_now * 3.0f) * 0.006f;
+
+    /* Angulo 0 = apontando para cima; negativo = inclinado p/ esquerda; positivo = p/ direita */
+    float piv_x = 0.72f + idle_bob_x;
+    float piv_y = 0.96f + idle_bob_y;
+    float ang = -0.22f;
+    float blade_len = 0.78f;
+
+    if (swinging) {
+        if (prog < 0.16f) {
+            float k = prog / 0.16f;
+            float e = k * k;
+            piv_x = 0.72f + 0.14f * e;
+            piv_y = 0.96f - 0.16f * e;
+            ang = -0.22f + 0.62f * e;
+            blade_len = 0.78f - 0.04f * e;
+        } else if (prog < 0.44f) {
+            float k = (prog - 0.16f) / 0.28f;
+            /* Curva rapida de aceleracao do golpe (ease-out cubico) */
+            float inv = 1.0f - k;
+            float e = 1.0f - inv * inv * inv;
+            piv_x = 0.86f - 0.72f * e;
+            piv_y = 0.80f + 0.24f * e;
+            ang = 0.40f - 2.35f * e;
+            blade_len = 0.74f + 0.18f * sinf(k * PI_F);
+        } else if (prog < 0.58f) {
+            float k = (prog - 0.44f) / 0.14f;
+            float shake = sinf(k * PI_F * 3.0f) * 0.012f * (1.0f - k);
+            piv_x = 0.14f + shake;
+            piv_y = 1.04f + 0.02f * sinf(k * PI_F);
+            ang = -1.95f - 0.06f * sinf(k * PI_F);
+            blade_len = 0.78f;
+        } else {
+            float k = (prog - 0.58f) / 0.42f;
+            float e = k * k * (3.0f - 2.0f * k); /* smoothstep */
+            piv_x = 0.14f + (0.72f - 0.14f) * e;
+            piv_y = 1.04f + (0.96f - 1.04f) * e;
+            ang = -1.95f + (-0.22f - (-1.95f)) * e;
+            blade_len = 0.78f;
+        }
+    }
+
+    /* 1) Rastro de corte em arco carmesim + aco incandescente durante o cleave */
+    if (swinging && prog >= 0.17f && prog <= 0.56f) {
+        float slash_k = (prog - 0.17f) / 0.39f;
+        float fade = (slash_k < 0.35f) ? (slash_k / 0.35f) : (1.0f - (slash_k - 0.35f) / 0.65f);
+        float head_t = fminf(1.0f, (prog - 0.16f) / 0.28f);
+        float tail_t = fmaxf(0.0f, head_t - 0.62f);
+
+        int sy0 = (int)((float)rh * 0.14f);
+        int sy1 = (int)((float)rh * 0.90f);
+        int sx0 = (int)((float)rw * 0.06f);
+        int sx1 = (int)((float)rw * 0.94f);
+        for (int y = sy0; y < sy1; y++) {
+            float ny = ((float)y + 0.5f) / (float)rh;
+            for (int x = sx0; x < sx1; x++) {
+                float nx = ((float)x + 0.5f) / (float)rw;
+                /* Arco diagonal varrendo de cima-direita (0.86, 0.22) para baixo-esquerda (0.14, 0.78) */
+                float arc_t = (0.88f - nx) / 0.76f;
+                if (arc_t < tail_t || arc_t > head_t) continue;
+                float curve_y = 0.22f + arc_t * 0.54f - sinf(arc_t * PI_F) * 0.14f;
+                float dy = ny - curve_y;
+                float thick = (0.045f + 0.085f * sinf(arc_t * PI_F)) * (0.45f + 0.55f * fade);
+                if (fabsf(dy) > thick) continue;
+
+                float edge_dist = fabsf(dy) / fmaxf(thick, 0.001f);
+                float trail_pos = (arc_t - tail_t) / fmaxf(head_t - tail_t, 0.01f);
+                float intensity = (1.0f - edge_dist * edge_dist) * (0.35f + 0.65f * trail_pos) * fade;
+                if (intensity < 0.14f) continue;
+
+                char sch = (edge_dist < 0.28f && trail_pos > 0.55f) ? '@'
+                         : (edge_dist < 0.58f ? r->sample_ramp(0.55f + 0.42f * intensity, x, y) : '/');
+                AsciiColor scol;
+                if (edge_dist < 0.30f && trail_pos > 0.45f) {
+                    scol = r->scale_rgb(255.0f, 238.0f, 230.0f, fminf(1.0f, intensity * 1.25f));
+                } else if (edge_dist < 0.62f) {
+                    scol = r->scale_rgb(240.0f, 45.0f, 38.0f, fminf(1.0f, intensity * 1.15f));
+                } else {
+                    scol = r->scale_rgb(135.0f, 16.0f, 22.0f, fminf(1.0f, intensity));
+                }
+                r->set_cell(x, y, sch, scol, black);
+            }
+        }
+    }
+
+    /* 2) Espada Matadora de Dragoes rotacionada em 2D real */
+    float dir_x = sinf(ang);
+    float dir_y = -cosf(ang);
+    float perp_x = cosf(ang);
+    float perp_y = sinf(ang);
+
+    for (int y = 0; y < rh; y++) {
+        float ny = ((float)y + 0.5f) / (float)rh;
+        float rel_y = ny - piv_y;
+        for (int x = 0; x < rw; x++) {
+            float nx = ((float)x + 0.5f) / (float)rw;
+            /* Compensa aspecto da tela para manter espessura uniforme em qualquer angulo */
+            float rel_x = (nx - piv_x) * (aspect / 1.65f);
+
+            float along = (rel_x * dir_x + rel_y * dir_y) / blade_len;
+            if (along < -0.22f || along > 1.02f) continue;
+
+            float across = rel_x * perp_x + rel_y * perp_y;
+            float abs_ac = fabsf(across);
+
+            int part = 0;
+            float half_w = 0.0f;
+            if (along < 0.0f) {
+                /* Cabo longo enrolado em couro + pomo pesado */
+                half_w = (along < -0.17f) ? 0.036f : 0.022f;
+                if (abs_ac <= half_w) part = 1;
+            } else if (along < 0.065f) {
+                /* Guarda-mao larga de ferro */
+                half_w = 0.115f - fabsf(along - 0.032f) * 0.45f;
+                if (abs_ac <= half_w) part = 2;
+            } else if (along <= 1.00f) {
+                /* Lamina colossal da Dragon Slayer: chapa larga + ponta triangular */
+                float base_w = 0.088f - (along - 0.065f) * 0.018f;
+                if (along > 0.84f) {
+                    float tip_k = (along - 0.84f) / 0.16f;
+                    half_w = base_w * (1.0f - tip_k);
+                } else {
+                    half_w = base_w;
+                }
+                if (abs_ac <= half_w && half_w > 0.002f) {
+                    part = 3;
+                }
+            }
+
+            if (part == 0) continue;
+
+            float u_across = (half_w > 0.001f) ? (abs_ac / half_w) : 0.0f;
+            char gch;
+            AsciiColor color;
+
+            if (part == 1) {
+                /* Empunhadura escura com faixas de couro */
+                int wrap = (((int)floorf((along + 0.25f) * 42.0f)) & 1);
+                float lum = 0.30f + 0.32f * (1.0f - u_across) + (wrap ? 0.10f : 0.0f);
+                gch = r->sample_ramp(lum, x, y);
+                color = r->scale_rgb(92.0f, 52.0f, 44.0f, 0.72f + 0.28f * (1.0f - u_across));
+            } else if (part == 2) {
+                /* Guarda de ferro forjado com detalhe central */
+                float lum = 0.45f + 0.38f * (1.0f - u_across);
+                gch = r->sample_ramp(lum, x, y);
+                color = r->scale_rgb(138.0f, 144.0f, 158.0f, 0.80f + 0.20f * (1.0f - u_across));
+            } else {
+                /* Lamina: nucleo de ferro bruto escuro + chanfros de aco brilhante nas bordas */
+                int is_edge = (u_across > 0.66f);
+                int is_ridge = (u_across < 0.16f);
+                float glint = (swinging && prog >= 0.16f && prog <= 0.48f) ? 0.20f : 0.0f;
+                if (is_edge) {
+                    float lum = fminf(1.0f, 0.84f + glint);
+                    gch = (u_across > 0.86f) ? '@' : r->sample_ramp(lum, x, y);
+                    if (swinging && prog >= 0.18f && prog <= 0.46f && u_across > 0.86f) {
+                        color = (AsciiColor){255, 195, 195};
+                    } else {
+                        color = (AsciiColor){228, 236, 248};
+                    }
+                } else if (is_ridge) {
+                    gch = '|';
+                    color = r->scale_rgb(165.0f, 174.0f, 190.0f, 0.85f);
+                } else {
+                    /* Ferro forjado escuro da Dragon Slayer com leve reflexo metalico */
+                    float lum = 0.30f + 0.34f * (1.0f - u_across) + glint * 0.5f;
+                    gch = r->sample_ramp(lum, x, y);
+                    color = r->scale_rgb(96.0f, 106.0f, 124.0f, 0.76f + 0.28f * (1.0f - u_across));
+                }
+            }
+            r->set_cell(x, y, gch, color, black);
         }
     }
     return 1;
@@ -942,12 +1273,33 @@ void player_get_weapon_hud_info(const Player *p, PlayerWeaponHudInfo *out) {
         return;
     }
     memset(out, 0, sizeof(*out));
-    if (p && p->ability_state.berserk_time > 0.0f) {
+    if (!p) {
+        return;
+    }
+    if (p->ability_state.berserk_time > 0.0f) {
         out->custom = 1;
         snprintf(out->label, sizeof(out->label), "ESPADA");
         snprintf(out->value, sizeof(out->value), "1.5m");
         out->bar_ratio = 1.0f - fminf(1.0f, p->shoot_timer / 0.60f);
+        return;
     }
+    int w = p->active_weapon;
+    if (w < 0 || w >= PLAYER_MAX_WEAPONS) w = 0;
+    int mag = player_weapon_mag_size(w);
+    int cur = p->weapon_mag[w];
+    out->custom = 1;
+    snprintf(out->label, sizeof(out->label), "%s", player_weapon_name(w));
+    if (w == 5) {
+        snprintf(out->value, sizeof(out->value), "MELEE");
+        out->bar_ratio = 1.0f;
+        return;
+    }
+    if (player_weapon_has_infinite_reserve(w)) {
+        snprintf(out->value, sizeof(out->value), "%02d/INF", cur);
+    } else {
+        snprintf(out->value, sizeof(out->value), "%02d/%03d", cur, p->weapon_reserve[w]);
+    }
+    out->bar_ratio = mag > 0 ? (float)cur / (float)mag : 0.0f;
 }
 
 void player_draw_ability_hud(const Player *p, int screen_w, int screen_h) {
