@@ -1,3 +1,5 @@
+/* player.c - classes, aparencia ASCII, movimentacao, armas e habilidades do jogador */
+
 #include "player.h"
 #include "raylib.h"
 #include <math.h>
@@ -5,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Paleta compartilhada de cores (indice de material -> RGBA) usada pelos sprites do jogador */
 CharacterColor player_get_material_color(int mat) {
     static const CharacterColor palette[] = {
         {0, 0, 0, 0}, {100, 105, 125, 255}, {255, 226, 213, 255},
@@ -25,6 +28,7 @@ CharacterColor player_get_material_color(int mat) {
     return palette[mat];
 }
 
+/* Retorna os parametros visuais (resolucao da grade, escala e descricao) de um preset */
 CharacterVisual player_get_visual(int visual_id) {
     static const CharacterVisual visuals[PRESET_CLASS_COUNT] = {
         {0, 18, 24, 1.0f, 0.49f, "Fuzileiro // Pronto para o combate"},
@@ -37,6 +41,7 @@ CharacterVisual player_get_visual(int visual_id) {
     return visuals[visual_id];
 }
 
+/* Testa se o ponto (x, y) cai dentro de uma elipse centrada em (cx, cy) */
 static int inside_oval(float x, float y, float cx, float cy, float rx, float ry) {
     float dx = (x - cx) / rx, dy = (y - cy) / ry;
     return dx * dx + dy * dy < 1.0f;
@@ -57,6 +62,7 @@ static const char *PART_OPTIONS[CHARACTER_PART_COUNT][6] = {
     {"Clara", "Media", "Morena", "Escura"}
 };
 
+/* Inicia uma aparencia customizada com valores padrao validos */
 void player_appearance_init(CharacterAppearance *a) {
     if (!a) return;
     memset(a, 0, sizeof(*a));
@@ -64,15 +70,23 @@ void player_appearance_init(CharacterAppearance *a) {
     a->choice[PART_BODY] = 1;
     a->choice[PART_HAIR] = 1;
 }
+
+/* Quantidade de opcoes disponiveis para uma peca de customizacao */
 int player_part_count(int part) {
     return part >= 0 && part < CHARACTER_PART_COUNT ? PART_COUNTS[part] : 0;
 }
+
+/* Nome legivel da categoria de peca para exibir no criador de personagem */
 const char *player_part_label(int part) {
     return player_part_count(part) ? PART_LABELS[part] : "";
 }
+
+/* Nome da opcao selecionada dentro de uma categoria */
 const char *player_part_option(int part, int choice) {
     return choice >= 0 && choice < player_part_count(part) ? PART_OPTIONS[part][choice] : "";
 }
+
+/* Confere se todas as escolhas de aparencia estao dentro dos limites do catalogo */
 int player_appearance_valid(const CharacterAppearance *a) {
     if (!a) return 0;
     if (!a->enabled) return 1;
@@ -81,12 +95,15 @@ int player_appearance_valid(const CharacterAppearance *a) {
         if (a->choice[i] < 0 || a->choice[i] >= PART_COUNTS[i]) return 0;
     return 1;
 }
+
+/* Usa sprite customizado se habilitado e valido; caso contrario usa o preset */
 CharacterVisual player_appearance_visual(int visual_id, const CharacterAppearance *a) {
     if (a && a->enabled && player_appearance_valid(a))
         return (CharacterVisual){1, 28, 36, 0.75f, 0.35f, "Personagem personalizado"};
     return player_get_visual(visual_id);
 }
 
+/* Amostra o indice de material na coordenada normalizada (x, y) do sprite customizado */
 int player_appearance_material(int visual_id, const CharacterAppearance *a, float x, float y, int back) {
     if (!a || !a->enabled || !player_appearance_valid(a))
         return player_character_material(visual_id, x, y, back);
@@ -171,6 +188,9 @@ int player_appearance_material(int visual_id, const CharacterAppearance *a, floa
     return mat;
 }
 
+/* --- Sprites procedurais dos personagens preset --- */
+
+/* Desenha a silhueta e detalhes da Kasane Teto (frente e costas) */
 int player_teto_material(float x, float y, int back_view) {
     if (y < 0.0f || y > 1.0f || fabsf(x) > 1.0f) return 0;
     int mat = 0;
@@ -292,6 +312,7 @@ int player_teto_material(float x, float y, int back_view) {
     return mat;
 }
 
+/* Desenha o Guts com capa preta, armadura de placas e a Dragonslayer nas costas */
 static int player_guts_material(float x, float y, int back_view) {
     if (y < 0 || y > 1 || fabsf(x) > 1) return 0;
     float ax = fabsf(x);
@@ -366,6 +387,7 @@ static int player_guts_material(float x, float y, int back_view) {
     return mat;
 }
 
+/* Desenha o Rambo com calca camuflada, faixa de municao e bandana vermelha */
 static int player_rambo_material(float x, float y, int back) {
     if (fabsf(x) > 1 || y < 0 || y > 1) return 0;
     float ax = fabsf(x);
@@ -424,6 +446,7 @@ static int player_rambo_material(float x, float y, int back) {
     return mat;
 }
 
+/* Despacha o desenho do sprite do preset escolhido (ou desenha o Arauto das Sombras) */
 int player_character_material(int preset, float x, float y, int back_view) {
     if (!player_get_visual(preset).custom_sprite) return 0;
     if (preset == PRESET_GUTS) return player_guts_material(x, y, back_view);
@@ -476,6 +499,7 @@ int player_character_material(int preset, float x, float y, int back_view) {
     return mat;
 }
 
+/* Mantem o angulo sempre no intervalo [0, 2*PI) */
 static float normalize_angle(float angle) {
     float two_pi = 2.0f * PI_F;
     while (angle < 0.0f) {
@@ -487,6 +511,7 @@ static float normalize_angle(float angle) {
     return angle;
 }
 
+/* Testa os 4 cantos da caixa de colisao do jogador para evitar atravessar paredes */
 static int is_position_blocked(const GameMap *map, float x, float y) {
     float r = PLAYER_RADIUS;
 
@@ -498,6 +523,7 @@ static int is_position_blocked(const GameMap *map, float x, float y) {
     return 0;
 }
 
+/* Devolve a configuracao base de uma das classes jogaveis pre-definidas */
 CharacterClass player_get_preset_class(int index) {
     static const CharacterClass PRESETS[PRESET_CLASS_COUNT] = {
         {"Fuzileiro", PLAYER_MAX_HEALTH, 30, MOVE_SPEED, 0, PRESET_FUZILEIRO, {0}, ABILITY_NONE},
@@ -513,6 +539,7 @@ CharacterClass player_get_preset_class(int index) {
     return PRESETS[index];
 }
 
+/* Atualiza contadores das habilidades, flash de dano e retorno do modo Berserk */
 void player_tick_ability(Player *p, float dt) {
     if (!p || dt <= 0) return;
     AbilityState *s = &p->ability_state;
@@ -526,12 +553,14 @@ void player_tick_ability(Player *p, float dt) {
     if (s->berserk_time > 0) {
         s->berserk_time = fmaxf(0, s->berserk_time - dt);
         if (s->berserk_time == 0) {
+            /* Devolve a arma anterior quando a armadura Berserker expira */
             p->active_weapon = s->saved_weapon;
             p->shoot_timer = 0;
         }
     }
 }
 
+/* Contabiliza abate para pontuacao e desbloqueio do Berserk do Guts */
 void player_register_kill(Player *p, float x, float y) {
     (void)x;
     (void)y;
@@ -541,6 +570,7 @@ void player_register_kill(Player *p, float x, float y) {
     p->score += 10;
 }
 
+/* Ativa a habilidade especial da classe ao apertar E; retorna 1 se disparou */
 int player_activate_ability(Player *p) {
     if (!p || p->health <= 0) return 0;
     AbilityState *s = &p->ability_state;
@@ -569,6 +599,7 @@ int player_activate_ability(Player *p) {
     return 0;
 }
 
+/* Checa se a Teto esta dentro da propria zona de coracoes ativa */
 static int player_inside_teto_zone(const Player *p) {
     const AbilityState *s = &p->ability_state;
     float dx = p->x - s->zone_x, dy = p->y - s->zone_y;
@@ -576,15 +607,18 @@ static int player_inside_teto_zone(const Player *p) {
            dx*dx + dy*dy <= TETO_ZONE_RADIUS*TETO_ZONE_RADIUS;
 }
 
+/* Velocidade atual considerando o bonus de +35% da zona da Teto */
 float player_effective_speed(const Player *p) {
     float speed = p->move_speed > 0.5f ? p->move_speed : MOVE_SPEED;
     return player_inside_teto_zone(p) ? speed * 1.35f : speed;
 }
 
+/* Dano ajustado pelo bonus de +25% dentro da zona da Teto */
 int player_attack_damage(const Player *p, int base_damage) {
     return player_inside_teto_zone(p) ? (int)roundf(base_damage * 1.25f) : base_damage;
 }
 
+/* Aplica dano no jogador (zera carga do Rambo e dobra o dano recebido durante Berserk) */
 void player_take_damage(Player *p, int damage) {
     if (!p || damage <= 0 || p->health <= 0) return;
     p->ability_state.guerrilla_time = 0;
@@ -594,6 +628,9 @@ void player_take_damage(Player *p, int damage) {
     p->last_damage = damage;
 }
 
+/* --- Tabela de armas, inventario e recarga --- */
+
+/* Capacidade do pente de cada arma (padrao e drops dos bosses) */
 int player_weapon_mag_size(int weapon_type) {
     switch (weapon_type) {
         case 0: return 10; /* Pistola */
@@ -609,6 +646,7 @@ int player_weapon_mag_size(int weapon_type) {
     }
 }
 
+/* Intervalo minimo entre disparos de cada arma em segundos */
 float player_weapon_cooldown(int weapon_type) {
     switch (weapon_type) {
         case 0: return 0.28f; /* Pistola */
@@ -624,6 +662,7 @@ float player_weapon_cooldown(int weapon_type) {
     }
 }
 
+/* Nome curto exibido no HUD inferior para cada arma */
 const char *player_weapon_name(int weapon_type) {
     switch (weapon_type) {
         case 0: return "PISTOLA";
@@ -639,10 +678,12 @@ const char *player_weapon_name(int weapon_type) {
     }
 }
 
+/* Somente a pistola inicial possui reserva infinita de balas */
 int player_weapon_has_infinite_reserve(int weapon_type) {
     return weapon_type == 0;
 }
 
+/* Entrega uma arma ou soma municao na reserva (1 = arma nova, 2 = municao extra) */
 int player_pickup_weapon(Player *p, int weapon_type, int ammo_amount) {
     if (!p || weapon_type < 0 || weapon_type >= PLAYER_MAX_WEAPONS || ammo_amount <= 0) {
         return 0;
@@ -666,6 +707,7 @@ int player_pickup_weapon(Player *p, int weapon_type, int ammo_amount) {
     return 2;
 }
 
+/* Recarrega o pente da arma ativa usando a reserva (nao funciona no Berserk nem na Maquita) */
 int player_reload(Player *p) {
     if (!p || p->health <= 0 || p->ability_state.berserk_time > 0.0f) {
         return 0;
@@ -698,6 +740,7 @@ int player_reload(Player *p) {
     return 1;
 }
 
+/* Troca diretamente para a arma indicada se o jogador ja a tiver coletado */
 int player_switch_weapon(Player *p, int weapon_type) {
     if (!p || p->ability_state.berserk_time > 0.0f) {
         return 0;
@@ -710,6 +753,7 @@ int player_switch_weapon(Player *p, int weapon_type) {
     return 1;
 }
 
+/* Avanca ou volta para a proxima arma possuida (roda do mouse / teclas de troca) */
 int player_cycle_weapon(Player *p, int dir) {
     if (!p || p->ability_state.berserk_time > 0.0f) {
         return 0;
@@ -731,6 +775,7 @@ int player_cycle_weapon(Player *p, int dir) {
     return 0;
 }
 
+/* Inicia um ataque/tiro consumindo municao e armando o cooldown e o tiro dobrado do Rambo */
 int player_begin_attack(Player *p) {
     if (!p || p->health <= 0 || p->shoot_timer > 0) return 0;
     if (p->ability_state.berserk_time > 0) {
@@ -762,6 +807,7 @@ int player_begin_attack(Player *p) {
     return 1;
 }
 
+/* Resolve o material de renderizacao do jogador (sobrepoe o elmo se estiver em Berserk) */
 int player_render_material(const Player *p, float x, float y, int back) {
     if (p->ability_state.berserk_time <= 0)
         return player_appearance_material(p->visual_id, &p->appearance, x, y, back);
@@ -780,20 +826,24 @@ int player_render_material(const Player *p, float x, float y, int back) {
     return mat;
 }
 
+/* Zera a lista de personagens customizados criados pelo usuario */
 void player_roster_init(CharacterRoster *roster) {
     if (roster) memset(roster, 0, sizeof(*roster));
 }
 
+/* Total de opcoes disponiveis no menu de selecao (presets + customizados) */
 int player_roster_count(const CharacterRoster *roster) {
     return PRESET_CLASS_COUNT + (roster ? roster->count : 0);
 }
 
+/* Retorna a classe do catalogo pelo indice unificado */
 CharacterClass player_roster_get(const CharacterRoster *roster, int index) {
     if (roster && index >= PRESET_CLASS_COUNT && index < player_roster_count(roster))
         return roster->custom[index - PRESET_CLASS_COUNT];
     return player_get_preset_class(index);
 }
 
+/* Valida, limpa espacos do nome e salva um novo personagem customizado no roster */
 int player_roster_add(CharacterRoster *roster, const CharacterClass *draft) {
     if (!roster || !draft || roster->count >= MAX_CUSTOM_CHARACTERS ||
         !player_appearance_valid(&draft->appearance) ||
@@ -817,6 +867,7 @@ int player_roster_add(CharacterRoster *roster, const CharacterClass *draft) {
     return PRESET_CLASS_COUNT + roster->count++;
 }
 
+/* Aplica os atributos, aparencia, habilidade e inventario inicial de uma classe no jogador */
 void player_apply_class(Player *p, const CharacterClass *cls) {
     if (!p || !cls) {
         return;
@@ -841,6 +892,7 @@ void player_apply_class(Player *p, const CharacterClass *cls) {
     p->active_weapon = cls->start_weapon;
 }
 
+/* Inicializa o jogador na posicao (x, y) olhando para angle, com a classe Fuzileiro */
 void player_init(Player *p, float x, float y, float angle) {
     if (!p) {
         return;
@@ -861,6 +913,7 @@ void player_init(Player *p, float x, float y, float angle) {
     player_apply_class(p, &base_cls);
 }
 
+/* Tenta mover em X e Y separado para deslizar nas paredes sem travar */
 int player_move(Player *p, const GameMap *map, float forward, float strafe) {
     if (!p || !map) {
         return 0;
@@ -882,6 +935,7 @@ int player_move(Player *p, const GameMap *map, float forward, float strafe) {
     return moved;
 }
 
+/* Gira a camera do jogador mantendo o angulo normalizado */
 void player_rotate(Player *p, float delta_angle) {
     if (!p) {
         return;
@@ -889,6 +943,7 @@ void player_rotate(Player *p, float delta_angle) {
     p->angle = normalize_angle(p->angle + delta_angle);
 }
 
+/* Processa teclado e mouse do jogador a cada frame (habilidade, movimento, tiro e pausa) */
 void player_handle_input(Player *p, const GameMap *map, float dt,
                          int *running, int *did_shoot) {
     if (!p || !map || !running || !did_shoot) {
@@ -1015,6 +1070,7 @@ static void player_draw_shadow_flame(const Player *p, const RendererApi *r,
     }
 }
 
+/* Desenha os efeitos visuais das habilidades ativas no mundo 3D (zona da Teto e Fogo Negro) */
 void player_render_abilities(const Player *p, const RendererApi *r) {
     if (!p || !r) {
         return;
@@ -1071,6 +1127,7 @@ void player_render_abilities(const Player *p, const RendererApi *r) {
     }
 }
 
+/* Renderiza a Dragonslayer em primeira pessoa durante o modo Berserk; retorna 1 se desenhou */
 int player_render_weapon(const Player *p, const RendererApi *r) {
     if (!p || !r || p->ability_state.berserk_time <= 0.0f) {
         return 0;
@@ -1268,6 +1325,7 @@ int player_render_weapon(const Player *p, const RendererApi *r) {
     return 1;
 }
 
+/* Preenche os textos e a barra de municao/cooldown mostrados no HUD inferior */
 void player_get_weapon_hud_info(const Player *p, PlayerWeaponHudInfo *out) {
     if (!out) {
         return;
@@ -1302,6 +1360,7 @@ void player_get_weapon_hud_info(const Player *p, PlayerWeaponHudInfo *out) {
     out->bar_ratio = mag > 0 ? (float)cur / (float)mag : 0.0f;
 }
 
+/* Desenha o painel de status da habilidade, contador de kills e borda vermelha do Berserk */
 void player_draw_ability_hud(const Player *p, int screen_w, int screen_h) {
     if (!p) {
         return;

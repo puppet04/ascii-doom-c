@@ -1,3 +1,5 @@
+/* test_main.c - suite de testes unitarios de mapa, fisica, personagens, combate e rede */
+
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -13,9 +15,11 @@
 #include "player.h"
 #include "entities.h"
 
+/* Contadores globais da execucao dos testes */
 static int tests_run = 0;
 static int tests_failed = 0;
 
+/* Macro simples de assercao que imprime o resultado e conta falhas sem abortar */
 #define ASSERT_TRUE(cond, msg)                                                \
     do {                                                                      \
         tests_run++;                                                          \
@@ -27,6 +31,7 @@ static int tests_failed = 0;
         }                                                                     \
     } while (0)
 
+/* Verifica dimensoes e paredes padrao do mapa embutido de fallback */
 static void test_map_default(void) {
     printf("\nTeste 1: Inicializacao do mapa padrao\n");
     GameMap map;
@@ -38,6 +43,7 @@ static void test_map_default(void) {
     ASSERT_TRUE(map_is_wall(&map, 1, 1) == 0, "Posicao interna (1,1) e livre");
 }
 
+/* Testa leitura de arquivo .txt e tratamento seguro quando o arquivo nao existe */
 static void test_map_file_loading(void) {
     printf("\nTeste 2: Carregamento de mapa via arquivo\n");
     GameMap map;
@@ -52,6 +58,7 @@ static void test_map_file_loading(void) {
     ASSERT_TRUE(map_is_wall(&map, 2, 2) == 0, "Corredor em (2,2) e livre");
 }
 
+/* Garante que coordenadas fora da grade retornem como parede sem invadir memoria */
 static void test_map_bounds(void) {
     printf("\nTeste 3: Seguranca de limites do mapa\n");
     GameMap map;
@@ -63,6 +70,7 @@ static void test_map_bounds(void) {
     ASSERT_TRUE(map_is_wall(&map, 5, MAP_HEIGHT) == 1, "Coordenada Y >= height tratada como parede");
 }
 
+/* Testa deslocamento livre e travamento contra paredes no mapa padrao */
 static void test_player_movement_and_collision(void) {
     printf("\nTeste 4: Movimentacao e colisao do jogador\n");
     GameMap map;
@@ -82,6 +90,7 @@ static void test_player_movement_and_collision(void) {
     ASSERT_TRUE(p.x >= 1.0f, "Colisao impede jogador de atravessar a parede X=0");
 }
 
+/* Garante que player_rotate mantem o angulo sempre no intervalo [0, 2*PI) */
 static void test_player_rotation(void) {
     printf("\nTeste 5: Rotacao e normalizacao de angulo\n");
     Player p;
@@ -94,6 +103,7 @@ static void test_player_rotation(void) {
     ASSERT_TRUE(p.angle >= 0.0f && p.angle < 2.0f * PI_F, "Angulo grande normalizado para [0, 2*PI)");
 }
 
+/* Testa modo offline e troca real de pacote NetPacket via UDP em 127.0.0.1 */
 static void test_network_udp_loopback(void) {
     printf("\nTeste 6: Rede offline e comunicacao UDP loopback\n");
     NetContext offline;
@@ -133,6 +143,7 @@ static void test_network_udp_loopback(void) {
     net_close(&host);
 }
 
+/* Verifica selecao da Kasane Teto, preservacao de spawn/id e fallback de indice invalido */
 static void test_teto_selection(void) {
     Player p;
     CharacterClass teto = player_get_preset_class(PRESET_KASANE_TETO);
@@ -156,6 +167,7 @@ static void test_teto_selection(void) {
                 "Silhueta fora dos limites e transparente");
 }
 
+/* Verifica atributos do Arauto das Sombras e detalhes da silhueta frontal/traseira */
 static void test_shadow_selection(void) {
     Player p;
     player_init(&p, 2.5f, 4.5f, 0.0f);
@@ -174,6 +186,7 @@ static void test_shadow_selection(void) {
                 "Trocar de volta para Teto restaura seus atributos");
 }
 
+/* Verifica selecao do Guts e desenho da espada na silhueta frontal e de costas */
 static void test_guts_selection(void) {
     Player p;
     player_init(&p, 2.5f, 4.5f, 0.0f);
@@ -190,6 +203,7 @@ static void test_guts_selection(void) {
                 "Silhueta de Guts respeita limites");
 }
 
+/* Valida metadados e cores de todos os personagens base e fallbacks de visual/material invalidos */
 static void test_character_visual_api(void) {
     Player p;
     player_init(&p, 2.5f, 4.5f, 0.0f);
@@ -227,6 +241,7 @@ static void test_character_visual_api(void) {
     ASSERT_TRUE(valid, "Todos os personagens possuem metadados e materiais validos");
 }
 
+/* Testa criacao de skins no CharacterRoster, validacao de nome/visual e limite de slots */
 static void test_character_creator(void) {
     CharacterRoster roster;
     player_roster_init(&roster);
@@ -260,6 +275,7 @@ static void test_character_creator(void) {
     ASSERT_TRUE(!strcmp(saved.name, "Fuzileiro"), "Selecao invalida preserva padrao");
 }
 
+/* Gera um hash FNV-1a da silhueta para comparar se trocar uma peca mudou o desenho */
 static unsigned appearance_fingerprint(const CharacterAppearance *a, int back) {
     unsigned hash = 2166136261u;
     for (int y = 0; y < 100; y++) for (int x = -80; x <= 80; x++) {
@@ -269,6 +285,7 @@ static unsigned appearance_fingerprint(const CharacterAppearance *a, int back) {
     return hash;
 }
 
+/* Testa todas as opcoes do criador modular e verifica que nao vaza para presets base */
 static void test_modular_appearance(void) {
     CharacterClass draft = player_get_preset_class(PRESET_FUZILEIRO);
     player_appearance_init(&draft.appearance);
@@ -318,6 +335,7 @@ static void test_modular_appearance(void) {
                 "Trocar para personagem base restaura seu visual original");
 }
 
+/* Monta uma sala limpa com 1 inimigo parado na frente do jogador para testes de combate */
 static void prepare_combat(Player *p, EnemyManager *mgr, GameMap *map, int preset) {
     map_init_default(map);
     for (int y=1;y<map->height-1;y++) for(int x=1;x<map->width-1;x++) map->tiles[y][x]='.';
@@ -332,6 +350,7 @@ static void prepare_combat(Player *p, EnemyManager *mgr, GameMap *map, int prese
     };
 }
 
+/* Testa projeteis do Imp (bola de fogo), Kushan (flecha) e Cacodemon (orbe teleguiado) */
 static void test_enemy_projectiles(void) {
     Player p; EnemyManager mgr; GameMap map;
     prepare_combat(&p,&mgr,&map,PRESET_FUZILEIRO);
@@ -403,6 +422,7 @@ static void test_enemy_projectiles(void) {
                 "Dano inimigo usa valor fixo sem escalar com a vida maxima da classe");
 }
 
+/* Testa queimadura de 5s do fogo negro do Arauto (tick de 1s, expiracao e morte) */
 static void test_shadow_burn(void) {
     Player p; EnemyManager mgr; GameMap map;
     prepare_combat(&p, &mgr, &map, PRESET_SHADOW_HERALD);
@@ -437,6 +457,7 @@ static void test_shadow_burn(void) {
                 "Nova onda inicia sem fogo residual");
 }
 
+/* Testa habilidades ativas (Teto, Arauto, Guts/Berserk), spawn de onda e fogo/armadilhas */
 static void test_character_abilities(void) {
     Player p; EnemyManager mgr; GameMap map;
     Weapon weapons[MAX_WEAPONS]; weapons_init_defaults(weapons);
@@ -568,6 +589,7 @@ static void test_character_abilities(void) {
                 "Ataque real da IA respeita vulnerabilidade do Berserk");
 }
 
+/* Testa a passiva Guerrilheiro do Rambo (carga em 5s, consumo ao atirar e perda ao levar dano) */
 static void test_guerrilla(void) {
     Player p; EnemyManager mgr; GameMap map; Weapon weapons[MAX_WEAPONS];
     weapons_init_defaults(weapons);
@@ -604,6 +626,7 @@ static void test_guerrilla(void) {
                 "Skin criada com visual Rambo nao ganha Guerrilheiro");
 }
 
+/* Verifica o bonus de +25% de dano apenas dentro da area criada pela Teto */
 static void test_teto_damage_bonus(void) {
     Player p; EnemyManager mgr; GameMap map;
     Weapon weapons[MAX_WEAPONS]; weapons_init_defaults(weapons);
@@ -624,6 +647,7 @@ static void test_teto_damage_bonus(void) {
     ASSERT_TRUE(player_attack_damage(&p,100)==100, "Outros personagens nao recebem bonus da Teto");
 }
 
+/* Testa kits medicos ('+', '1'-'4'), armadilhas escondidas ('^', '5'-'8') e bosses opcionais U/V/W/X */
 static void test_medkit_and_traps(void) {
     printf("\nTeste: Kit medico e armadilhas com minimapa\n");
     GameMap map;
@@ -722,6 +746,7 @@ static void test_medkit_and_traps(void) {
                 "Inimigo obrigatorio 'Z' continua bloqueando a saida 'E'");
 }
 
+/* Limpa o interior do mapa deixando apenas o contorno externo de paredes */
 static void clear_test_arena(GameMap *map) {
     map_init_default(map);
     for (int y = 1; y < map->height - 1; y++) {
@@ -731,6 +756,7 @@ static void clear_test_arena(GameMap *map) {
     }
 }
 
+/* Testa inventario, recarga infinita da pistola, drops, pickups de mapa, orbe, pathfinding e bosses */
 static void test_weapons_inventory_and_drops(void) {
     printf("\n[Teste 18] Arsenal, inventario, drops de inimigos e pickups de mapa\n");
     GameMap map;
@@ -868,6 +894,7 @@ static void test_weapons_inventory_and_drops(void) {
                 "Matar Boss Lanca-Chamas derruba Lanca-Chamas no chao com 10x carregador (400)");
 }
 
+/* Executa toda a suite de testes unitarios em sequencia e retorna 0 se passar tudo */
 int main(void) {
     printf("============================================================\n");
     printf("          SUITE DE TESTES - SECTOR 404 (404 NF)            \n");

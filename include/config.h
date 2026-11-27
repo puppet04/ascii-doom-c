@@ -1,3 +1,5 @@
+/* Configuracoes globais do jogo e constantes de fisica/tela */
+
 #ifndef CONFIG_H
 #define CONFIG_H
 
@@ -19,7 +21,7 @@
 /* Parametros matematicos e de camera */
 #define PI_F      3.14159265f
 #define FOV       (PI_F / 3.0f) /* 60 graus de campo de visao */
-#define MAX_DEPTH 16.0f
+#define MAX_DEPTH 16.0f         /* alcance maximo do raio */
 
 /* Parametros fisicos baseados em segundos (independentes de FPS via Delta Time) */
 #define MOVE_SPEED        4.2f    /* blocos por segundo */
@@ -28,11 +30,11 @@
 #define ROT_SPEED         2.6f    /* radianos por segundo no teclado */
 #define MOUSE_SENSITIVITY 0.0022f /* radianos por pixel do mouse */
 #define FIRE_COOLDOWN     0.25f   /* intervalo minimo entre disparos (s) */
-#define PLAYER_RADIUS     0.22f
+#define PLAYER_RADIUS     0.22f   /* raio de colisao do jogador com paredes */
 
 /* Configuracoes de rede e taxa de quadros */
-#define DEFAULT_PORT 5000
+#define DEFAULT_PORT 5000 /* porta UDP padrao do multiplayer LAN */
 #define TARGET_FPS   165
-#define MAX_SPRITES  64
+#define MAX_SPRITES  64   /* limite de sprites desenhados num mesmo frame */
 
 #endif /* CONFIG_H */

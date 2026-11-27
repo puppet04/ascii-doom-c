@@ -1,16 +1,26 @@
+/*
+ * Mapas e icone embutidos direto no .exe (gerados a partir de assets/).
+ * Assim da pra mandar so o sector404.exe pro amigo rodar mesmo sem a pasta
+ * assets/ junto; quando os arquivos existem no disco, eles tem prioridade.
+ */
+
 #include "embedded_assets.h"
 #include <string.h>
 
-typedef struct { const char *suffix; const char *data; } EmbeddedMapEntry;
+typedef struct {
+    const char *suffix; /* nome-base do mapa, ex: "level1.txt" */
+    const char *data;   /* texto completo do mapa */
+} EmbeddedMapEntry;
 
+/* Mapa 1: complexo inicial + arena do Boss U (Maquita) */
 static const char EMB_MAP_1[] =
     "##################\n"
     "########**########\n"
     "##......P.......################\n"
     "##..%%%....@@@..####FF.......FF#\n"
     "##..%........@..####F.........F#\n"
-    "##..%....K...@..####...........#\n"
-    "##.....####.....####.......^...#\n"
+    "##..%........@..####...........#\n"
+    "##.....####K....####.......^...#\n"
     "##..Z..####.....$,1$..........+#\n"
     "##.....####..I..####........U..#\n"
     "##.....####.....####..^........#\n"
@@ -20,9 +30,9 @@ static const char EMB_MAP_1[] =
     "##...K..........################\n"
     "##..............##\n"
     "########EE########\n"
-    "##################\n"
-    "\n";
+    "##################\n";
 
+/* Fase 2: Setor Urbano/Industrial + Pickup Shotgun (G) + Boss V (Revolver) */
 static const char EMB_MAP_2[] =
     "##################\n"
     "########**########\n"
@@ -36,7 +46,7 @@ static const char EMB_MAP_2[] =
     "##%%%......I.#####\n"
     "##...Y..@@......##\n"
     "##..##..@@..##..##\n"
-    "##/%%...@@...%%%##\n"
+    "##/%%...@@...%%G##\n"
     "##::%..D...M.%%%##\n"
     "##::%...^^...%%%##\n"
     "##3:%........%%%##\n"
@@ -55,9 +65,9 @@ static const char EMB_MAP_2[] =
     "#F..........F#\n"
     "#FF....+...FF#\n"
     "##############\n"
-    "\n"
     "\n";
 
+/* Fase 3: Corredores Metalicos + Pickup Sniper (S) */
 static const char EMB_MAP_3[] =
     "##################\n"
     "########**########\n"
@@ -66,7 +76,7 @@ static const char EMB_MAP_3[] =
     "##*#..........#*##\n"
     "##......%%......##\n"
     "##%%%%......%%%%##\n"
-    "##*.....##......*##\n"
+    "##*.....##.....S*##\n"
     "##..@@..K...@@..##\n"
     "##.#@....+...@#.##\n"
     "##.#@...FF...@#.##\n"
@@ -90,8 +100,9 @@ static const char EMB_MAP_3[] =
     "##..............####...........#\n"
     "##*....#..#....*####F.....^...F#\n"
     "########EE##########FF.......FF#\n"
-    "################################\n";
+    "################################";
 
+/* Fase 4: Fortaleza + Pickup Metralhadora (R) + Boss X (Lanca-Chamas) */
 static const char EMB_MAP_4[] =
     "################################\n"
     "#########**#####################\n"
@@ -107,7 +118,7 @@ static const char EMB_MAP_4[] =
     "#,$..#..A...#..##..@@@.@@@..##,#\n"
     "#,$*#.......#..##..@..B..@.*##,#\n"
     "#1#..###..###..##.......A...##,#\n"
-    "#$#*...K......*##...^..^...*##,#\n"
+    "#$#*..RK......*##...^..^...*##,#\n"
     "#5###################EE#######,#\n"
     "#$############################,#\n"
     "#5############################,#\n"
@@ -124,12 +135,12 @@ static const char EMB_MAP_4[] =
     "#########.......X......#########\n"
     "#########F............F#########\n"
     "#########FF....+.....FF#########\n"
-    "################################\n"
-    "\n";
+    "################################\n";
 
+/* Fase 5: Fortaleza Final + Pickup Arma Futurista (O) + Zodd (Q) */
 static const char EMB_MAP_5[] =
     "################################\n"
-    "#......P.......##..............#\n"
+    "#......P.......##O.............#\n"
     "#.#$#.#..####..##..####..#.@$@.#\n"
     "#.#,#.#.....#......#.....#.@,@.#\n"
     "#.#1#.#@@@@.#..##..#.@@@@#.@5@.#\n"
@@ -159,8 +170,9 @@ static const char EMB_MAP_5[] =
     "#.#$#.###..............###.....#\n"
     "#..^..^......^^..^^......^...^.#\n"
     "#EEEEEEEEEEEEEEEEEEEEEEEEEEEEEE#\n"
-    "################################\n";
+    "################################";
 
+/* Indice dos cinco mapas da campanha embutidos no binario. */
 static const EmbeddedMapEntry EMB_MAPS[] = {
     {"level1.txt", EMB_MAP_1},
     {"level2.txt", EMB_MAP_2},
@@ -169,10 +181,12 @@ static const EmbeddedMapEntry EMB_MAPS[] = {
     {"level5.txt", EMB_MAP_5},
 };
 
+/* Procura um mapa embutido pelo nome do arquivo (ignorando prefixo de pasta) */
 const char *embedded_map_lookup(const char *filename) {
     if (!filename) {
         return NULL;
     }
+    /* Localiza o ultimo separador de diretorio para extrair apenas "levelX.txt". */
     const char *base = filename;
     for (const char *p = filename; *p; p++) {
         if (*p == '/' || *p == '\\') {
@@ -187,6 +201,7 @@ const char *embedded_map_lookup(const char *filename) {
     return NULL;
 }
 
+/* Icone oficial do SECTOR 404 (256x256 RGBA em PNG) para a barra da janela. */
 static const unsigned char EMB_ICON_PNG[104343] = {
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
     0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x08, 0x06, 0x00, 0x00, 0x00, 0x5c, 0x72, 0xa8,
@@ -6712,6 +6727,7 @@ static const unsigned char EMB_ICON_PNG[104343] = {
     0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82
 };
 
+/* Devolve o PNG do icone embutido e o tamanho em bytes pra Raylib carregar */
 const unsigned char *embedded_icon_png_data(int *out_len) {
     if (out_len) {
         *out_len = (int)sizeof(EMB_ICON_PNG);

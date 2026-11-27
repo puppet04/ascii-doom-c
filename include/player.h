@@ -12,6 +12,7 @@
  * movimentacao com colisao por Delta Time, mouse look e disparos.
  */
 
+/* Cinco personagens base ja prontos para jogar no menu de selecao */
 #define PRESET_CLASS_COUNT 5
 #define PRESET_FUZILEIRO 0
 #define PRESET_KASANE_TETO 1
@@ -21,6 +22,8 @@
 
 /* Dados visuais independentes de Raylib; o renderer apenas os consome. */
 typedef struct { unsigned char r, g, b, a; } CharacterColor;
+
+/* Metadados de retrato e sprite usados pela tela de selecao e pelo HUD. */
 typedef struct {
     int custom_sprite; /* 0 usa o soldado original do motor. */
     int portrait_rows, portrait_cols;
@@ -28,16 +31,22 @@ typedef struct {
     const char *description;
 } CharacterVisual;
 
+/* Partes personalizaveis no criador de personagem modular. */
 typedef enum {
     PART_HEAD, PART_BODY, PART_HAIR, PART_OUTFIT,
     PART_HAIR_COLOR, PART_OUTFIT_COLOR, PART_SKIN, CHARACTER_PART_COUNT
 } CharacterPart;
+
+/* Conjunto de escolhas de pecas e cores de um avatar customizado. */
 typedef struct {
     int enabled;
     int choice[CHARACTER_PART_COUNT];
 } CharacterAppearance;
 
+/* Habilidade especial de cada personagem base (skins criadas ficam com ABILITY_NONE). */
 typedef enum { ABILITY_NONE, ABILITY_TETO, ABILITY_SHADOW, ABILITY_BERSERK, ABILITY_GUERRILLA } AbilityType;
+
+/* Parametros de duracao, raio e recarga das habilidades especiais */
 #define GUERRILLA_CHARGE_TIME 5.0f
 #define TETO_ZONE_DURATION 10.0f
 #define TETO_ZONE_RADIUS 3.0f
@@ -45,6 +54,8 @@ typedef enum { ABILITY_NONE, ABILITY_TETO, ABILITY_SHADOW, ABILITY_BERSERK, ABIL
 #define BERSERK_DURATION 10.0f
 #define BERSERK_KILLS 5
 #define BERSERK_WEAPON 4
+
+/* Temporizadores e contadores em tempo real da habilidade do jogador. */
 typedef struct {
     int kills, berserk_used, saved_weapon;
     float guerrilla_time;
@@ -54,6 +65,7 @@ typedef struct {
     float fireball_x, fireball_y, fireball_dx, fireball_dy, fireball_time;
 } AbilityState;
 
+/* Inicializacao, consulta de opcoes e validacao das pecas do avatar modular. */
 void player_appearance_init(CharacterAppearance *appearance);
 int player_part_count(int part);
 const char *player_part_label(int part);
@@ -63,6 +75,7 @@ CharacterVisual player_appearance_visual(int visual_id, const CharacterAppearanc
 int player_appearance_material(int visual_id, const CharacterAppearance *appearance,
                                float x, float y, int back_view);
 
+/* Definicao de uma classe/personagem jogavel (base ou criado pelo jogador). */
 typedef struct {
     char name[32];
     int max_health;
@@ -74,12 +87,14 @@ typedef struct {
     AbilityType ability;
 } CharacterClass;
 
+/* Lista de personagens customizados criados na sessao (sem substituir os 5 base). */
 #define MAX_CUSTOM_CHARACTERS 8
 typedef struct {
     CharacterClass custom[MAX_CUSTOM_CHARACTERS];
     int count;
 } CharacterRoster;
 
+/* Gerenciamento da lista de personagens customizados. */
 void player_roster_init(CharacterRoster *roster);
 int player_roster_count(const CharacterRoster *roster);
 CharacterClass player_roster_get(const CharacterRoster *roster, int index);
@@ -88,6 +103,7 @@ int player_roster_add(CharacterRoster *roster, const CharacterClass *draft);
 
 #define PLAYER_MAX_WEAPONS 9
 
+/* Estado completo do jogador na partida (posicao, camera, inventario, vida e habilidade). */
 typedef struct {
     int id;
     char class_name[32];
@@ -114,6 +130,7 @@ typedef struct {
     int last_damage;
 } Player;
 
+/* Consultas e controle do inventario de armas, recarga e troca de slot. */
 int player_weapon_mag_size(int weapon_type);
 float player_weapon_cooldown(int weapon_type);
 const char *player_weapon_name(int weapon_type);
@@ -123,6 +140,7 @@ int player_reload(Player *p);
 int player_switch_weapon(Player *p, int weapon_type);
 int player_cycle_weapon(Player *p, int direction);
 
+/* Atualizacao de cooldowns/duracoes, registro de kill, ativacao (tecla E) e combate. */
 void player_tick_ability(Player *p, float dt);
 void player_register_kill(Player *p, float x, float y);
 int player_activate_ability(Player *p);
@@ -140,15 +158,20 @@ typedef struct {
     float bar_ratio;
 } PlayerWeaponHudInfo;
 
+/* Preenche informacoes customizadas da arma para o cartao do HUD (ex.: Espada Berserk). */
 void player_get_weapon_hud_info(const Player *p, PlayerWeaponHudInfo *out);
+/* Desenha efeitos 3D das habilidades ativas (zona da Teto e bola negra do Arauto). */
 void player_render_abilities(const Player *p, const RendererApi *r);
 /* Retorna 1 se desenhou arma customizada em 1a pessoa (ex.: Espada Berserk), 0 para usar a padrao. */
 int player_render_weapon(const Player *p, const RendererApi *r);
+/* Desenha a barra/indicador de cooldown ou carga da habilidade no HUD. */
 void player_draw_ability_hud(const Player *p, int screen_w, int screen_h);
 
 /* Retorna um personagem; indices invalidos retornam Fuzileiro. */
 CharacterClass player_get_preset_class(int index);
+/* Retorna metadados de retrato e descricao de um visual_id. */
 CharacterVisual player_get_visual(int visual_id);
+/* Converte codigo de material da silhueta ASCII em cor RGBA. */
 CharacterColor player_get_material_color(int material);
 
 /* Silhueta ASCII da Teto: x em [-1,1], y em [0,1].
@@ -156,6 +179,7 @@ CharacterColor player_get_material_color(int material);
  * 6 sombra/iris, 7 branco dos olhos, 8 blush, 9 brilho do cabelo,
  * 15 metal, 18 meio-tom do cabelo, 19 tecido iluminado, 20 sombra da pele. */
 int player_teto_material(float x, float y, int back_view);
+/* Amostra o material da silhueta ASCII de qualquer um dos 5 personagens base. */
 int player_character_material(int preset, float x, float y, int back_view);
 
 /* Aplica os atributos de uma classe (base ou customizada) ao jogador. */

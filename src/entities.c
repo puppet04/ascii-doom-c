@@ -1,3 +1,5 @@
+/* entities.c - armas, inimigos, projeteis, drops e renderizacao de entidades */
+
 #include "entities.h"
 #include <math.h>
 #include <stdint.h>
@@ -5,15 +7,18 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Mantem qualquer angulo no intervalo [-PI, PI] para diferencas de direcao. */
 static float wrap_angle(float a) {
     while (a > PI_F) a -= 2.0f * PI_F;
     while (a < -PI_F) a += 2.0f * PI_F;
     return a;
 }
 
+/* Raio de colisao do inimigo com paredes e distancia minima entre inimigos. */
 #define ENEMY_WALL_RADIUS      0.22f
 #define ENEMY_SEPARATION_DIST  0.80f
 
+/* Verifica se os 4 cantos da caixa do inimigo ficam livres de parede. */
 static int enemy_can_occupy(const GameMap *map, float x, float y) {
     const float r = ENEMY_WALL_RADIUS;
     return !map_is_wall(map, (int)floorf(x - r), (int)floorf(y - r)) &&
@@ -22,6 +27,7 @@ static int enemy_can_occupy(const GameMap *map, float x, float y) {
            !map_is_wall(map, (int)floorf(x + r), (int)floorf(y + r));
 }
 
+/* Checa colisao de projetil com parede, permitindo raspar rente a quinas. */
 static int projectile_hits_wall(const GameMap *map, float x, float y, float dir_x, float dir_y) {
     int mx = (int)floorf(x);
     int my = (int)floorf(y);
@@ -48,6 +54,7 @@ static int projectile_hits_wall(const GameMap *map, float x, float y, float dir_
     return 1;
 }
 
+/* Testa linha de visada amostrando pontos ao longo do segmento entre dois pontos. */
 static int has_line_of_sight(const GameMap *map, float x0, float y0, float x1, float y1) {
     float dx = x1 - x0;
     float dy = y1 - y0;
@@ -101,6 +108,7 @@ static int enemy_has_clear_shot(const GameMap *map, float x0, float y0, float x1
     return 1;
 }
 
+/* Tabela padrao das 9 armas: dano, cadencia, alcance, tamanho do pente e municao infinita. */
 void weapons_init_defaults(Weapon out_weapons[MAX_WEAPONS]) {
     if (!out_weapons) {
         return;
@@ -123,6 +131,7 @@ void weapons_init_defaults(Weapon out_weapons[MAX_WEAPONS]) {
     }
 }
 
+/* Atributos base de cada tipo de inimigo (vida, movimento, ataque e projetil). */
 typedef struct {
     const char *name;
     char symbol;
@@ -140,9 +149,10 @@ typedef struct {
     float projectile_turn_rate;
 } EnemyStats;
 
-/* Projeteis: flecha 6, bola 3.1 e orbe 2.2; cerca de 40% mais lentos. */
-/* Precision is retained for compatibility with manually configured hitscan enemies. */
+/* Tabela principal de inimigos e bosses.
+ * Projeteis: flecha 6, bola 3.1 e orbe 2.2; precisao usada nos ataques hitscan. */
 static const EnemyStats ENEMY_STATS[ENEMY_TYPE_COUNT] = {
+    /* Inimigos legado (Z, D, I) */
     {"Z legado",          'Z',  40, 1.00f,  3, ENEMY_ATTACK_MELEE,      0.85f, 1.90f,  7.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
     /* Metralhadora: hitscan com alta cadencia de tiro, dano leve por disparo (alcance 6.8m). */
     {"D legado",          'D',  80, 1.45f,  1, ENEMY_ATTACK_HITSCAN,    6.80f, 0.36f, 12.0f, 0.58f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
@@ -173,12 +183,14 @@ static const EnemyStats ENEMY_STATS[ENEMY_TYPE_COUNT] = {
     {"Boss Lanca-Chamas", 'X', 800, 1.30f,  7, ENEMY_ATTACK_PROJECTILE, 6.20f, 0.65f, 13.0f, 0.95f, ENEMY_PROJECTILE_FIREBALL,   ENEMY_PROJECTILE_STRAIGHT,  4.6f, 0.0f}
 };
 
+/* Pools globais de projeteis, drops de armas no chao e orbes do jogador */
 static EnemyProjectile enemy_projectiles[MAX_ENEMY_PROJECTILES];
 static WeaponDrop weapon_drops[MAX_WEAPON_DROPS];
 static PlayerOrb player_orbs[MAX_PLAYER_ORBS];
-static float g_fire_damage_acc = 0.0f;
-static float g_fire_burn_timer = 0.0f;
+static float g_fire_damage_acc = 0.0f; /* acumulador fracionario pro dano de fogo por segundo */
+static float g_fire_burn_timer = 0.0f; /* tempo restante da queimadura no jogador */
 
+/* Getters dos pools para HUD, minimapa e envio de estado em rede */
 const EnemyProjectile *enemies_projectile_pool(void) {
     return enemy_projectiles;
 }
@@ -195,6 +207,7 @@ int enemies_player_is_burning(void) {
     return g_fire_burn_timer > 0.0f ? 1 : 0;
 }
 
+/* Busca as estatisticas do tipo informado (usa Z legado se vier indice invalido). */
 static const EnemyStats *enemy_stats_for_type(EnemyType type) {
     if ((int)type < 0 || type >= ENEMY_TYPE_COUNT) {
         return &ENEMY_STATS[ENEMY_LEGACY_Z];
@@ -202,6 +215,7 @@ static const EnemyStats *enemy_stats_for_type(EnemyType type) {
     return &ENEMY_STATS[type];
 }
 
+/* Monta uma instancia de inimigo pronta no mapa a partir da tabela base. */
 static Enemy enemy_create(EnemyType type, float x, float y) {
     const EnemyStats *stats = enemy_stats_for_type(type);
     Enemy enemy = {0};
@@ -221,6 +235,7 @@ static Enemy enemy_create(EnemyType type, float x, float y) {
     return enemy;
 }
 
+/* Zera o gerenciador de inimigos e limpa todos os pools de entidades. */
 void enemies_init_defaults(EnemyManager *mgr) {
     if (!mgr) {
         return;
@@ -234,10 +249,12 @@ void enemies_init_defaults(EnemyManager *mgr) {
     g_fire_burn_timer = 0.0f;
 }
 
+/* Bosses de arena (U, V, W, X) sao opcionais e nao travam a saida E do mapa. */
 static int is_optional_enemy_symbol(char symbol) {
     return (symbol == 'U' || symbol == 'V' || symbol == 'W' || symbol == 'X');
 }
 
+/* Converte o caractere do mapa ASCII no EnemyType correspondente. */
 static int enemy_type_from_symbol(char symbol, EnemyType *out_type) {
     for (int i = 0; i < ENEMY_TYPE_COUNT; i++) {
         if (ENEMY_STATS[i].symbol == symbol) {
@@ -250,12 +267,14 @@ static int enemy_type_from_symbol(char symbol, EnemyType *out_type) {
     return 0;
 }
 
+/* Conta todos os inimigos ativos (inclusive bosses opcionais). */
 int enemies_alive(const EnemyManager *mgr) {
     int count = 0;
     for (int i = 0; i < mgr->count; i++) if (mgr->enemies[i].active) count++;
     return count;
 }
 
+/* Conta apenas inimigos obrigatorios vivos que ainda seguram a saida fechada. */
 int enemies_required_alive(const EnemyManager *mgr) {
     int count = 0;
     for (int i = 0; i < mgr->count; i++) {
@@ -266,6 +285,7 @@ int enemies_required_alive(const EnemyManager *mgr) {
     return count;
 }
 
+/* Varre o mapa inteiro e spawna todos os inimigos marcados nos tiles. */
 void enemies_spawn_wave(EnemyManager *mgr, const GameMap *map, const Player *p) {
     if (!mgr) {
         return;
@@ -286,6 +306,7 @@ void enemies_spawn_wave(EnemyManager *mgr, const GameMap *map, const Player *p) 
             }
             float sx = (float)x + 0.5f;
             float sy = (float)y + 0.5f;
+            /* Se o centro do tile encostar numa parede vizinha, empurra um pouco pro lado livre. */
             if (!enemy_can_occupy(map, sx, sy)) {
                 static const float nudges[8][2] = {
                     {0.25f, 0.0f}, {-0.25f, 0.0f}, {0.0f, 0.25f}, {0.0f, -0.25f},
@@ -307,6 +328,7 @@ void enemies_spawn_wave(EnemyManager *mgr, const GameMap *map, const Player *p) 
     map_set_enemies_alive(enemies_required_alive(mgr));
 }
 
+/* Mapeia inimigos comuns que derrubam uma arma especial ao morrer. */
 static int enemy_weapon_drop_type(EnemyType type) {
     switch (type) {
         case ENEMY_DOOM_IMP:       return WEAPON_SHOTGUN;
@@ -317,6 +339,7 @@ static int enemy_weapon_drop_type(EnemyType type) {
     }
 }
 
+/* Coloca um drop de arma com municao fixa no chao (reaproveita slot 0 se lotar). */
 static void spawn_weapon_drop_with_ammo(int weapon_type, int ammo, float x, float y) {
     if (weapon_type <= WEAPON_PISTOL || weapon_type >= MAX_WEAPONS || ammo <= 0) {
         return;
@@ -339,6 +362,7 @@ static void spawn_weapon_drop_with_ammo(int weapon_type, int ammo, float x, floa
     weapon_drops[slot].y = y;
 }
 
+/* Gera um drop com quantidade aleatoria entre ~1/3 e 1 carregador inteiro. */
 static void spawn_weapon_drop(int weapon_type, float x, float y) {
     if (weapon_type <= WEAPON_PISTOL || weapon_type >= MAX_WEAPONS) {
         return;
@@ -352,6 +376,7 @@ static void spawn_weapon_drop(int weapon_type, float x, float y) {
     spawn_weapon_drop_with_ammo(weapon_type, ammo, x, y);
 }
 
+/* Retorna a arma exclusiva derrubada por cada um dos 4 chefes de arena. */
 static int enemy_boss_reward_weapon(EnemyType type) {
     switch (type) {
         case ENEMY_BOSS_MAQUITA:  return WEAPON_MAQUITA;
@@ -362,6 +387,7 @@ static int enemy_boss_reward_weapon(EnemyType type) {
     }
 }
 
+/* Aplica dano no inimigo; quando a vida zera, contabiliza kill e solta o drop. */
 static void damage_enemy(Enemy *e, Player *p, int damage) {
     if (!e->active) return;
     e->health -= damage;
@@ -383,6 +409,7 @@ static void damage_enemy(Enemy *e, Player *p, int damage) {
     }
 }
 
+/* Dispara um projetil inimigo em direcao ao jogador com deslocamento angular opcional. */
 static int enemy_spawn_projectile_angled(const Enemy *enemy, const Player *player,
                                          const EnemyStats *stats, float angle_offset) {
     int slot = -1;
@@ -418,6 +445,7 @@ static int enemy_spawn_projectile_angled(const Enemy *enemy, const Player *playe
     return 1;
 }
 
+/* Cria o padrao de disparo do inimigo (simples ou em cone de 3 tiros). */
 static int enemy_spawn_projectile(const Enemy *enemy, const Player *player,
                                   const EnemyStats *stats) {
     if (enemy->type == ENEMY_DOOM_IMP) {
@@ -440,6 +468,7 @@ static int enemy_spawn_projectile(const Enemy *enemy, const Player *player,
     return enemy_spawn_projectile_angled(enemy, player, stats, 0.0f);
 }
 
+/* Avanca projeteis inimigos em subpassos curtos pra nao atravessar paredes finas. */
 static void enemy_projectiles_update(const GameMap *map, Player *player, float dt) {
     for (int i = 0; i < MAX_ENEMY_PROJECTILES; i++) {
         EnemyProjectile *projectile = &enemy_projectiles[i];
@@ -452,6 +481,7 @@ static void enemy_projectiles_update(const GameMap *map, Player *player, float d
         float hit_radius = projectile->kind == ENEMY_PROJECTILE_ARROW ? 0.12f : 0.30f;
 
         for (int step = 0; step < steps && projectile->active; step++) {
+            /* Orbe teleguiado gira gradualmente na direcao do jogador. */
             if (projectile->path == ENEMY_PROJECTILE_HOMING) {
                 float target_angle = atan2f(player->y - projectile->y,
                                             player->x - projectile->x);
@@ -464,6 +494,7 @@ static void enemy_projectiles_update(const GameMap *map, Player *player, float d
                 projectile->dx = cosf(angle);
                 projectile->dy = sinf(angle);
             } else if (projectile->path == ENEMY_PROJECTILE_WAVERING) {
+                /* Oscila levemente para os lados ao longo do trajeto. */
                 float angle = projectile->turn_rate * sinf(projectile->age * 6.0f) * step_dt;
                 float dx = projectile->dx * cosf(angle) - projectile->dy * sinf(angle);
                 projectile->dy = projectile->dx * sinf(angle) + projectile->dy * cosf(angle);
@@ -485,6 +516,7 @@ static void enemy_projectiles_update(const GameMap *map, Player *player, float d
             float collision_radius = hit_radius + PLAYER_RADIUS;
             if (dx * dx + dy * dy <= collision_radius * collision_radius) {
                 player_take_damage(player, projectile->damage);
+                /* Jato rapido de fogo do Boss 4 deixa o jogador queimando por 0.5s. */
                 if (projectile->kind == ENEMY_PROJECTILE_FIREBALL &&
                     projectile->path == ENEMY_PROJECTILE_STRAIGHT &&
                     projectile->speed > 4.0f) {
@@ -496,6 +528,7 @@ static void enemy_projectiles_update(const GameMap *map, Player *player, float d
     }
 }
 
+/* Atualiza a bola de fogo da habilidade do Arauto e aplica queimadura sombria ao acertar. */
 void enemies_update_fireball(EnemyManager *mgr, const GameMap *map, Player *p, float dt) {
     AbilityState *s = &p->ability_state;
     if (!s->fireball_active || dt <= 0 || p->health <= 0) return;
@@ -529,6 +562,7 @@ void enemies_update_fireball(EnemyManager *mgr, const GameMap *map, Player *p, f
     if (s->fireball_time <= 0) s->fireball_active=0;
 }
 
+/* Checa 5 pontos ao redor do jogador pra disparar armadilhas, fogo, medkits e armas do mapa. */
 static void update_map_fire_hazards(const GameMap *map, Player *player, float dt) {
     map_update_traps(dt);
 
@@ -571,6 +605,7 @@ static void update_map_fire_hazards(const GameMap *map, Player *player, float dt
         }
     }
 
+    /* Acumula 10 de dano por segundo enquanto o jogador estiver em chamas. */
     if (in_fire || g_fire_burn_timer > 0.0f) {
         g_fire_damage_acc += 10.0f * dt;
         int dmg = (int)g_fire_damage_acc;
@@ -583,6 +618,7 @@ static void update_map_fire_hazards(const GameMap *map, Player *player, float dt
     }
 }
 
+/* Recolhe armas caidas no chao quando o jogador entra no raio de coleta. */
 static void weapon_drops_update(Player *player) {
     if (!player || player->health <= 0) {
         return;
@@ -600,6 +636,7 @@ static void weapon_drops_update(Player *player) {
     }
 }
 
+/* Lanca o orbe teleguiado da Arma Futurista na direcao da mira do jogador. */
 static int spawn_player_orb(const Player *player, int damage) {
     if (!player) return 0;
     int slot = -1;
@@ -626,6 +663,7 @@ static int spawn_player_orb(const Player *player, int damage) {
     return 1;
 }
 
+/* Move os orbes da Arma Futurista e curva a trajetoria para o inimigo visivel mais perto. */
 static void player_orbs_update(EnemyManager *mgr, const GameMap *map, Player *player, float dt) {
     for (int i = 0; i < MAX_PLAYER_ORBS; i++) {
         PlayerOrb *orb = &player_orbs[i];
@@ -688,6 +726,7 @@ static void player_orbs_update(EnemyManager *mgr, const GameMap *map, Player *pl
     }
 }
 
+/* Gera um campo de distancias via BFS partindo do tile do jogador para guiar todos os inimigos. */
 static void enemy_build_flow_field(const GameMap *map, int goal_x, int goal_y,
                                    int dist_grid[MAP_HEIGHT][MAP_WIDTH]) {
     for (int y = 0; y < MAP_HEIGHT; y++) {
@@ -730,6 +769,7 @@ static void enemy_build_flow_field(const GameMap *map, int goal_x, int goal_y,
     }
 }
 
+/* Loop principal de IA: movimenta inimigos via flow-field BFS, evita empilhamento e executa ataques. */
 void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float dt) {
     if (!mgr || !map || !player || dt <= 0.0f || player->health <= 0) {
         return;
@@ -749,6 +789,7 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
             continue;
         }
 
+        /* Processa dano continuo de queimadura (bola sombria do Arauto ou fogo). */
         if (e->burn_time > 0) {
             e->burn_tick += fminf(dt, e->burn_time);
             e->burn_time = fmaxf(0, e->burn_time - dt);
@@ -783,6 +824,7 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
         float preferred_distance = is_ranged
             ? attack_range * 0.75f : attack_range * 0.90f;
 
+        /* Forca de separacao para impedir que varios inimigos fiquem exatamente no mesmo ponto. */
         float sep_x = 0.0f;
         float sep_y = 0.0f;
         for (int j = 0; j < mgr->count; j++) {
@@ -794,6 +836,7 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
             float d2 = odx * odx + ody * ody;
             if (d2 < ENEMY_SEPARATION_DIST * ENEMY_SEPARATION_DIST) {
                 if (d2 < 0.0001f) {
+                    /* Se dois inimigos estiverem sobrepostos, usa angulo aureo por indice pra desempatar. */
                     float ang = (float)(i * 2.39996f);
                     sep_x += cosf(ang) * 0.6f;
                     sep_y += sinf(ang) * 0.6f;
@@ -812,6 +855,7 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
         float slide_dir_y = dy;
         if (dist < aggro_range && (dist > preferred_distance || !can_shoot)) {
             float move_speed = e->speed;
+            /* Pinky e Apostolo aceleram quando chegam perto para dar investida. */
             if ((e->type == ENEMY_DOOM_PINKY || e->type == ENEMY_BERSERK_APOSTLE) &&
                 dist <= 3.2f) {
                 move_speed *= e->type == ENEMY_DOOM_PINKY ? 2.2f : 1.9f;
@@ -893,6 +937,7 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
             if (fy > 1.0f - margin && map_is_wall(map, tx, ty + 1)) vy -= (fy - (1.0f - margin)) * 2.2f * dt;
         }
 
+        /* Tenta aplicar movimento em X e Y separado para deslizar ao encostar em paredes. */
         if (vx != 0.0f || vy != 0.0f) {
             float nx = e->x + vx;
             float ny = e->y + vy;
@@ -927,6 +972,7 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
             }
         }
 
+        /* Executa o ataque quando esta no alcance, com visada limpa e cooldown zerado. */
         if (dist <= attack_range && e->attack_timer <= 0.0f && can_shoot) {
             if (e->attack_kind == ENEMY_ATTACK_PROJECTILE) {
                 (void)enemy_spawn_projectile(e, player, stats);
@@ -946,6 +992,7 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
     map_set_enemies_alive(enemies_required_alive(mgr));
 }
 
+/* Resolve o disparo ou golpe corpo a corpo do jogador contra os inimigos ativos. */
 int enemies_check_hit(EnemyManager *mgr, const GameMap *map,
                       Player *player, const Weapon *weapon) {
     if (!mgr || !map || !player || !weapon || player->health <= 0) {
@@ -956,6 +1003,7 @@ int enemies_check_hit(EnemyManager *mgr, const GameMap *map,
     player->ability_state.boosted_shot = 0; /* Consumido mesmo se o tiro errar. */
     int berserk = player->ability_state.berserk_time > 0;
 
+    /* Arma Futurista lanca um orbe teleguiado em vez de acerto instantaneo. */
     if (!berserk && weapon->type == WEAPON_FUTURISTIC) {
         int orb_dmg = player_attack_damage(player, weapon->damage) * multiplier;
         return spawn_player_orb(player, orb_dmg);
@@ -1052,6 +1100,7 @@ int enemies_check_hit(EnemyManager *mgr, const GameMap *map,
         return hits > 0 ? 1 : 0;
     }
 
+    /* Armas hitscan de alvo unico (Pistola, Sniper, Metralhadora, Tommy Gun) ou golpe Berserk. */
     int best_idx = -1;
     float best_dist = berserk ? 1.5f : weapon->range;
     float aim_limit = berserk ? 0.45f
@@ -1081,7 +1130,7 @@ int enemies_check_hit(EnemyManager *mgr, const GameMap *map,
 
     if (best_idx >= 0) {
         Enemy *target = &mgr->enemies[best_idx];
-        /* Berserk hits hard, but a single swing must not erase a boss. */
+        /* Berserk bate muito forte (4x), mas um golpe so nao pode apagar um boss inteiro. */
         damage_enemy(target, player, berserk
             ? player_attack_damage(player, weapon->damage) * 4
             : player_attack_damage(player, weapon->damage) * multiplier);
@@ -1092,14 +1141,14 @@ int enemies_check_hit(EnemyManager *mgr, const GameMap *map,
 }
 
 
-/* ============================================================================
- * ARTE ASCII, SCALE2X MIPMAPS E RENDERIZACAO DOS INIMIGOS (MODULO ENTITIES)
- * ============================================================================ */
+/* --- Arte ASCII, mipmaps Scale2x e renderizacao dos inimigos --- */
 
+/* Dimensoes dos sprites ASCII legados usados como fallback */
 #define ENEMY_ART_WIDTH 9
 #define ENEMY_ART_HEIGHT 12
 #define ENEMY_ART_MAX_HEIGHT 13
 
+/* Molde legado de sprite em grade pequena com paleta fixa de 5 cores */
 typedef struct {
     char label;
     float width_ratio;
@@ -1108,6 +1157,7 @@ typedef struct {
     AsciiColor palette[5];
 } EnemyDesign;
 
+/* Desenhos legados (9x12 / 9x13) mantidos como referencia de proporcao e fallback */
 static const EnemyDesign ENEMY_DESIGNS[] = {
     {'Z', 0.60f, 0.92f, {
         "....^....", "...###...", "..#+++#..", "..#*@*#..",
@@ -1167,6 +1217,7 @@ static const EnemyDesign ENEMY_DESIGNS[] = {
     }, {{40,10,15}, {90,20,28}, {14,5,8}, {210,170,60}, {255,220,110}}}
 };
 
+/* Sprite generico caso apareca algum simbolo desconhecido */
 static const EnemyDesign ENEMY_DESIGN_FALLBACK = {
     '?', 0.62f, 1.0f, {
         "....^....", "...###...", "..#+++#..", "..#*@*#..",
@@ -1175,6 +1226,7 @@ static const EnemyDesign ENEMY_DESIGN_FALLBACK = {
     }, {{170,150,170}, {205,185,205}, {65,55,70}, {255,210,230}, {225,195,220}}
 };
 
+/* Procura o sprite legado pelo caractere do inimigo. */
 static const EnemyDesign *enemy_design_for_label(char label) {
     int design_count = (int)(sizeof(ENEMY_DESIGNS) / sizeof(ENEMY_DESIGNS[0]));
     for (int i = 0; i < design_count; i++) {
@@ -1183,6 +1235,7 @@ static const EnemyDesign *enemy_design_for_label(char label) {
     return &ENEMY_DESIGN_FALLBACK;
 }
 
+/* Mapeia o caractere do sprite legado para um indice na paleta de 5 cores. */
 static int enemy_art_color_index(char glyph) {
     switch (glyph) {
         case '#': return 0;
@@ -1197,6 +1250,7 @@ static int enemy_art_color_index(char glyph) {
     }
 }
 
+/* Mapeia os tokens especificos do sprite legado do Imp ('M'). */
 static int imp_art_color_index(char token) {
     switch (token) {
         case 'B': return 0;
@@ -1208,6 +1262,7 @@ static int imp_art_color_index(char token) {
     }
 }
 
+/* Converte o token interno do Imp no glifo ASCII exibido na tela. */
 static char imp_art_glyph(char token) {
     switch (token) {
         case 'B': return '#';
@@ -1223,12 +1278,14 @@ static char imp_art_glyph(char token) {
 #define REDESIGN_ART_MAX_HEIGHT 20
 #define REDESIGN_IMP_HEIGHT_SCALE 1.10f
 
+/* Estilo de um token na grade redesenhada (glifo, cor e se brilha ao atirar). */
 typedef struct {
     char glyph;
     AsciiColor color;
     unsigned char brighten;
 } EnemyArtStyle;
 
+/* Descricao completa de um sprite redesenhado (grade 15x18 a 17x20 + proporcoes no mundo). */
 typedef struct {
     char label;
     int width;
@@ -1591,6 +1648,7 @@ static const EnemyVisualDesign ENEMY_VISUAL_DESIGNS[] = {
 
 #undef ENEMY_STYLE
 
+/* Busca o sprite redesenhado correspondente ao simbolo do inimigo. */
 static const EnemyVisualDesign *enemy_visual_design_for_label(char label) {
     int design_count = (int)(sizeof(ENEMY_VISUAL_DESIGNS) / sizeof(ENEMY_VISUAL_DESIGNS[0]));
     for (int i = 0; i < design_count; i++) {
@@ -1599,6 +1657,7 @@ static const EnemyVisualDesign *enemy_visual_design_for_label(char label) {
     return NULL;
 }
 
+/* Parametros de cache para ampliar sprites com Scale2x (4x) e gerar mipmaps 1/2 e 1/4. */
 #define SPRITE_UPSCALE 4
 #define SPRITE_SOURCE_MAX_WIDTH 17
 #define SPRITE_SOURCE_MAX_HEIGHT 20
@@ -1616,12 +1675,14 @@ enum {
     ENEMY_SPRITE_CACHE_COUNT = ENEMY_VISUAL_DESIGN_COUNT + 2
 };
 
+/* Celula ja resolvida de um sprite (glifo, token original e cor RGB). */
 typedef struct {
     char glyph;
     char token;
     AsciiColor color;
 } EnemyRenderCell;
 
+/* Cache com o sprite ampliado em 4x e versoes reduzidas para distancias maiores. */
 typedef struct {
     int source_width;
     int source_height;
@@ -1647,6 +1708,7 @@ static unsigned char clamp_u8_local(float v) {
     return (unsigned char)v;
 }
 
+/* Ajusta o brilho de uma cor RGB mantendo dentro de um limite seguro. */
 static AsciiColor scale_rgb_local(unsigned char r, unsigned char g, unsigned char b, float factor) {
     if (factor < 0.0f) factor = 0.0f;
     if (factor > 1.35f) factor = 1.35f;
@@ -1658,6 +1720,7 @@ static AsciiColor scale_rgb_local(unsigned char r, unsigned char g, unsigned cha
     return c;
 }
 
+/* Converte uma posicao (x, y) da grade ASCII de origem em uma celula renderizavel. */
 static EnemyRenderCell enemy_source_cell(char label, const EnemyVisualDesign *visual,
                                          const EnemyDesign *source, int x, int y) {
     EnemyRenderCell cell = {0};
@@ -1689,6 +1752,7 @@ static EnemyRenderCell enemy_source_cell(char label, const EnemyVisualDesign *vi
     return cell;
 }
 
+/* Le uma celula da grade com checagem de limites (retorna vazio fora da borda). */
 static EnemyRenderCell enemy_pixel_at(const EnemyRenderCell *pixels, int width,
                                       int height, int stride, int x, int y) {
     if (x < 0 || x >= width || y < 0 || y >= height) {
@@ -1705,6 +1769,7 @@ static int enemy_pixels_equal(EnemyRenderCell a, EnemyRenderCell b) {
            a.color.b == b.color.b;
 }
 
+/* Algoritmo Scale2x (EPX): dobra a resolucao suavizando degraus diagonais sem borrar. */
 static void enemy_scale2x(const EnemyRenderCell *source, int width, int height,
                           int source_stride, EnemyRenderCell *dest, int dest_stride) {
     for (int y = 0; y < height; y++) {
@@ -1733,6 +1798,7 @@ static void enemy_scale2x(const EnemyRenderCell *source, int width, int height,
     }
 }
 
+/* Faz media de cor num bloco [x0..x1, y0..y1] e escolhe o glifo mais perto do centro. */
 static EnemyRenderCell enemy_box_filter(const EnemyRenderCell *source, int source_width,
                                         int source_height, int source_stride,
                                         int x0, int y0, int x1, int y1) {
@@ -1775,6 +1841,7 @@ static EnemyRenderCell enemy_box_filter(const EnemyRenderCell *source, int sourc
     return selected;
 }
 
+/* Gera um nivel de mipmap reduzindo o sprite por um fator inteiro (2 ou 4). */
 static void enemy_generate_mip(const EnemyRenderCell *source, int source_width,
                                int source_height, int source_stride, int factor,
                                EnemyRenderCell *dest, int dest_stride,
@@ -1793,7 +1860,9 @@ static void enemy_generate_mip(const EnemyRenderCell *source, int source_width,
     }
 }
 
+/* Adiciona iluminacao de borda, contorno escuro ao redor e gera os mipmaps 1/2 e 1/4. */
 static void enemy_finish_sprite_cache(EnemySpriteCache *cache) {
+    /* Destaca bordas de cima/esquerda e escurece bordas de baixo/direita pra dar volume. */
     for (int y = 1; y < cache->full_height - 1; y++) {
         for (int x = 1; x < cache->full_width - 1; x++) {
             EnemyRenderCell *cell = &cache->full[y][x];
@@ -1806,6 +1875,7 @@ static void enemy_finish_sprite_cache(EnemySpriteCache *cache) {
         }
     }
 
+    /* Preenche celulas vazias adjacentes ao corpo com um contorno escuro. */
     for (int y = 0; y < cache->full_height; y++) {
         for (int x = 0; x < cache->full_width; x++) {
             EnemyRenderCell *cell = &cache->full[y][x];
@@ -1841,6 +1911,7 @@ static void enemy_finish_sprite_cache(EnemySpriteCache *cache) {
         SPRITE_MIP_QUARTER_MAX_WIDTH, &cache->quarter_width, &cache->quarter_height);
 }
 
+/* Monta o sprite cache aplicando Scale2x duas vezes (1x -> 2x -> 4x). */
 static void enemy_build_sprite_cache(EnemySpriteCache *cache, char label,
                                      int width, int height,
                                      const EnemyVisualDesign *visual,
@@ -1871,6 +1942,7 @@ static void enemy_build_sprite_cache(EnemySpriteCache *cache, char label,
     enemy_finish_sprite_cache(cache);
 }
 
+/* Pre-calcula todos os caches de sprites uma unica vez na primeira renderizacao. */
 static void enemy_sprite_pipeline_init(void) {
     if (enemy_sprite_pipeline_ready) return;
 
@@ -1896,6 +1968,7 @@ static const EnemySpriteCache *enemy_sprite_cache_for_label(char label) {
     return &enemy_sprite_caches[ENEMY_FALLBACK_CACHE_INDEX];
 }
 
+/* Escolhe o nivel de mipmap (full, half ou quarter) conforme o tamanho projetado na tela. */
 static const EnemyRenderCell *enemy_select_sprite_mip(const EnemySpriteCache *cache,
                                                       int target_width, int target_height,
                                                       int *width, int *height, int *stride) {
@@ -1921,6 +1994,7 @@ static const EnemyRenderCell *enemy_select_sprite_mip(const EnemySpriteCache *ca
     return pixels;
 }
 
+/* Amostra o mipmap nas coordenadas (u, v), aplicando box filter quando reduzindo. */
 static EnemyRenderCell enemy_sample_sprite_mip(const EnemyRenderCell *pixels,
                                                int texture_width, int texture_height,
                                                int texture_stride, float u, float v,
@@ -1955,6 +2029,7 @@ static EnemyRenderCell enemy_sample_sprite_mip(const EnemyRenderCell *pixels,
                             x0, y0, x1, y1);
 }
 
+/* Contexto passado ao callback de amostragem de sprite do renderizador. */
 typedef struct {
     char label;
     int shooting;
@@ -1969,12 +2044,14 @@ typedef struct {
     const RendererApi *api;
 } EnemyRenderCtx;
 
+/* Testa se o ponto (x, y) cai dentro de uma elipse centrada em (cx, cy). */
 static int enemy_inside_oval(float x, float y, float cx, float cy, float rx, float ry) {
     float dx = (x - cx) / rx;
     float dy = (y - cy) / ry;
     return dx * dx + dy * dy < 1.0f;
 }
 
+/* Material usado na geracao procedural (cor base, glifo fixo e se brilha no escuro). */
 typedef struct {
     AsciiColor color;
     char forced_glyph; /* '\0' = usa rampa ASCII densa com sombreamento */
@@ -2431,6 +2508,7 @@ static int enemy_procedural_material(char label, float x, float y, int shooting,
     return 0;
 }
 
+/* Callback de amostragem chamado pelo renderer para cada celula do sprite de um inimigo. */
 static int enemy_sprite_sampler(float u, float v, int sx, int sy,
                                 int sprite_w, int sprite_h,
                                 float dist, float fog, float time_now,
@@ -2455,6 +2533,7 @@ static int enemy_sprite_sampler(float u, float v, int sx, int sy,
                                     fmaxf(0.75f, fog));
             return 1;
         }
+        /* Sombreamento cilindrico suave usando a normal aproximada da superficie. */
         float nz = sqrtf(fmaxf(0.22f, 1.0f - px * px * 0.48f - (py - 0.45f) * (py - 0.45f) * 0.25f));
         float lum = (0.48f + 0.44f * nz) * fog;
         float boost = ctx->shooting ? 1.18f : 1.0f;
@@ -2463,6 +2542,7 @@ static int enemy_sprite_sampler(float u, float v, int sx, int sy,
                                 (0.72f + 0.34f * nz) * fog * boost);
         return 1;
     }
+    /* Apenas o sprite desconhecido '?' cai no fallback em cache Scale2x. */
     if (ctx->label != '?') {
         return 0;
     }
@@ -2592,6 +2672,7 @@ static void entities_draw_shadow_flame(const Player *p, const RendererApi *r,
     }
 }
 
+/* Dados passados ao sampler de sprite para desenhar uma arma caida no chao. */
 typedef struct {
     int weapon_type;
     const RendererApi *api;
@@ -2611,6 +2692,7 @@ static int weapon_drop_sampler(float u, float v, int sx, int sy,
                                            fog, time_now, ctx->api, out_ch, out_col);
 }
 
+/* Renderiza os orbes teleguiados do jogador e os drops de armas no chao. */
 static void entities_render_drops_and_orbs(const Player *player, const RendererApi *r) {
     /* Orbes teleguiados disparados pela Arma Futurista do jogador (com rastro de plasma) */
     for (int i = 0; i < MAX_PLAYER_ORBS; i++) {
@@ -2652,6 +2734,7 @@ static void entities_render_drops_and_orbs(const Player *player, const RendererA
     }
 }
 
+/* Renderiza inimigos ordenados por profundidade, projeteis, drops e efeitos de queimadura. */
 void entities_render(const EnemyManager *mgr, const Player *player, const RendererApi *r) {
     if (!mgr || !player || !r) {
         return;
@@ -2694,6 +2777,7 @@ void entities_render(const EnemyManager *mgr, const Player *player, const Render
         const EnemyDesign *legacy = visual ? NULL : enemy_design_for_label(e->symbol);
         const EnemySpriteCache *cache = enemy_sprite_cache_for_label(e->symbol);
 
+        /* Bosses de arena (U, V, W, X) usam escala maior para destacar na sala. */
         int is_arena_boss = is_optional_enemy_symbol(e->symbol);
         RenderSpriteSpec spec;
         spec.world_x = e->x;
@@ -2708,6 +2792,7 @@ void entities_render(const EnemyManager *mgr, const Player *player, const Render
         spec.min_h = 6;
         spec.min_fog = 0.65f;
 
+        /* Mostra flash de disparo logo apos o inimigo atacar (primeiros ~28% do cooldown). */
         int shooting = (e->attack_timer > 0.0f && e->attack_cooldown > 0.0f &&
                         e->attack_timer > e->attack_cooldown * 0.72f);
 
@@ -2734,6 +2819,7 @@ void entities_render(const EnemyManager *mgr, const Player *player, const Render
         if (!projectile->active) continue;
 
         if (projectile->kind == ENEMY_PROJECTILE_ARROW) {
+            /* Orienta a ponteira da flecha conforme a direcao relativa a camera. */
             int sx, sy;
             float depth;
             if (!r->project_point(player, projectile->x, projectile->y, 0.32f,
@@ -2780,6 +2866,7 @@ void entities_render(const EnemyManager *mgr, const Player *player, const Render
                 }
             }
         } else {
+            /* Orbe de energia do Cacodemon */
             r->draw_world_orb(player, projectile->x, projectile->y, 0.46f,
                               0.095f, 3, 16,
                               'O', (AsciiColor){155, 255, 255},
@@ -2790,7 +2877,7 @@ void entities_render(const EnemyManager *mgr, const Player *player, const Render
 
     entities_render_drops_and_orbs(player, r);
 
-    /* Chamas de queimadura (burn DOT do Arauto) renderizadas via RendererApi */
+    /* Chamas de queimadura (burn DOT do Arauto ou Lanca-Chamas) renderizadas via RendererApi */
     float burn_now = r->get_time();
     for (int i = 0; i < mgr->count; i++) {
         const Enemy *e = &mgr->enemies[i];

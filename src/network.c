@@ -13,26 +13,21 @@
 #endif
 
 /*
- * ============================================================================
- * MODULO 4: MULTIPLAYER LAN / UDP NAO-BLOQUEANTE (ATE 4 JOGADORES - ESTRELA)
- * ============================================================================
- * Arquitetura de rede sem travas (FIONBIO):
- *   1. Isolamento: <winsock2.h>/<windows.h> ficam restritos a este arquivo para
- *      evitar conflito de nomes da Win32 API com a biblioteca grafica Raylib.
- *   2. Topologia estrela (1 Host + ate 3 Clientes = 4 jogadores):
- *      - O Host atribui um slot fixo (1..3) para cada cliente pela tupla (IP, porta),
- *        permitindo jogar tanto pela LAN quanto com ate 4 janelas em 127.0.0.1.
- *      - No lobby, o Host difunde NetLobbyRosterPacket (skins, nomes, pronto, modo, fase).
- *      - Na partida, Clientes enviam NetMatchInputPacket e o Host retransmite o
- *        estado global de todos os participantes em NetMatchSnapshotPacket.
- *   3. Co-op & PvP sem perda de acertos:
- *      - Dano PvP e mortes usam contadores cumulativos monotonicos por par
- *        (atacante -> vitima), garantindo entrega mesmo com perda/reordenacao UDP.
- *   4. Compatibilidade 1v1:
- *      - net_send_state / net_receive_state (NetPacket) permanecem intactas para
- *        preservar 100% os testes unitarios legados.
+ * network.c - Multiplayer LAN (UDP nao-bloqueante) e Online (WebSocket relay)
+ *
+ * - <winsock2.h>/<windows.h>/<winhttp.h> ficam isolados aqui para nao dar
+ *   conflito de nomes da Win32 API com a biblioteca grafica Raylib.
+ * - Rede em estrela com 1 Host (slot 0) e ate 3 Clientes (slots 1..3).
+ *   Na LAN, clientes sao identificados por (IP, porta), o que tambem permite
+ *   abrir varias janelas na mesma maquina em 127.0.0.1.
+ * - Dano PvP e kills usam contadores cumulativos por par (atacante -> vitima)
+ *   para nao perder acertos se algum pacote UDP atrasar ou sumir.
+ * - A API antiga 1v1 (net_send_state / net_receive_state) segue intacta para
+ *   manter os testes unitarios funcionando.
  */
 
+/* Relogio de alta resolucao (em segundos) que nao sofre saltos se o horario
+ * do Windows mudar; usado para timeouts e guarda de reconexao. */
 static double net_monotonic_sec(void) {
 #ifdef _WIN32
     static LARGE_INTEGER freq = {0};
@@ -47,6 +42,8 @@ static double net_monotonic_sec(void) {
 #endif
 }
 
+/* Mistura PID, tick e contador de alta resolucao para gerar um ID unico
+ * por processo/chamada sem depender de rand(). */
 static unsigned int net_next_unique_id(void) {
     static unsigned int seq = 0u;
     seq++;
@@ -62,6 +59,8 @@ static unsigned int net_next_unique_id(void) {
 #endif
 }
 
+/* Retorna um identificador estavel para esta instancia do jogo (cacheado na 1a vez)
+ * usado pelo host para reconhecer o jogador se ele reconectar no meio da partida. */
 unsigned int net_get_local_client_id(void) {
     static unsigned int cached_id = 0u;
     if (cached_id == 0u) {
@@ -78,19 +77,19 @@ static int net_should_continue_recv_err(void) {
     return (err == WSAECONNRESET || err == WSAEMSGSIZE);
 }
 
-/* ============================================================================
- * TRANSPORTE ONLINE VIA WEBSOCKET RELAY (WINHTTP NATIVO DO WINDOWS, ZERO DLL EXTRA)
- * ============================================================================ */
+/* --- Transporte online via WebSocket relay (WinHTTP nativo do Windows) --- */
 
 #define RELAY_QUEUE_CAP  64
 #define RELAY_MAX_FRAME  2048
 
+/* Item das filas circulares RX/TX entre as threads do WinHTTP e o loop do jogo. */
 typedef struct {
     unsigned int peer_id;
     int len;
     unsigned char data[RELAY_MAX_FRAME];
 } RelayQueuedPkt;
 
+/* Estado interno da conexao WebSocket com o servidor relay (protegido por cs). */
 typedef struct {
     NetMode mode;
     char url[160];
@@ -100,9 +99,9 @@ typedef struct {
     volatile LONG stop_flag;
 
     CRITICAL_SECTION cs;
-    HANDLE tx_event;
-    HANDLE worker_thread;
-    HANDLE tx_thread;
+    HANDLE tx_event;      /* acorda a thread de envio assim que entra pacote em tx_q */
+    HANDLE worker_thread; /* conecta e faz loop bloqueante de leitura no WebSocket */
+    HANDLE tx_thread;     /* drena tx_q enviando frames binarios pelo WebSocket */
 
     HINTERNET h_session;
     HINTERNET h_connect;
@@ -119,6 +118,8 @@ typedef struct {
     int tx_count;
 } NetRelayState;
 
+/* Mapeia peer_id (24 bits) do relay para IP 10.x.x.x e porta ficticios,
+ * permitindo reutilizar a mesma logica de slots baseada em (ip, porta) da LAN. */
 static unsigned int relay_peer_to_ip(unsigned int peer_id) {
     return htonl(0x0A000000u | (peer_id & 0x00FFFFFFu));
 }
@@ -132,6 +133,7 @@ static unsigned int relay_ip_to_peer(unsigned int ip) {
     return ntohl(ip) & 0x00FFFFFFu;
 }
 
+/* Empilha pacote recebido pela thread WebSocket na fila circular RX. */
 static int relay_enqueue_rx(NetRelayState *st, unsigned int peer_id, const void *data, int len) {
     if (!st || !data || len <= 0 || len > RELAY_MAX_FRAME) {
         return 0;
@@ -152,6 +154,7 @@ static int relay_enqueue_rx(NetRelayState *st, unsigned int peer_id, const void 
     return 1;
 }
 
+/* Retira o proximo pacote da fila RX (nao-bloqueante para o loop principal do jogo). */
 static int relay_dequeue_rx(NetRelayState *st, void *buf, int max_len,
                             unsigned int *out_ip, unsigned short *out_port) {
     if (!st || !buf || max_len <= 0) {
@@ -172,6 +175,7 @@ static int relay_dequeue_rx(NetRelayState *st, void *buf, int max_len,
     return len;
 }
 
+/* Coloca pacote na fila de envio do relay e acorda a thread TX via evento. */
 static int relay_enqueue_tx(NetRelayState *st, unsigned int target_peer, const void *data, int len) {
     if (!st || !data || len <= 0 || len > RELAY_MAX_FRAME) {
         return 0;
@@ -197,6 +201,7 @@ static int relay_enqueue_tx(NetRelayState *st, unsigned int target_peer, const v
     return len;
 }
 
+/* Quebra a URL do servidor relay em host, porta, prefixo de rota e flag TLS. */
 static int relay_parse_url(const char *url, char *out_host, int host_sz,
                            int *out_port, char *out_prefix, int prefix_sz, int *out_tls) {
     if (!url || !out_host || !out_port || !out_prefix || !out_tls) {
@@ -253,6 +258,7 @@ static int relay_parse_url(const char *url, char *out_host, int host_sz,
     return 1;
 }
 
+/* Atualiza o status do relay e guarda uma mensagem legivel para a interface. */
 static void relay_set_error(NetRelayState *st, NetRelayStatus status, const char *msg) {
     if (!st) return;
     EnterCriticalSection(&st->cs);
@@ -263,6 +269,8 @@ static void relay_set_error(NetRelayState *st, NetRelayStatus status, const char
     InterlockedExchange(&st->status, (LONG)status);
 }
 
+/* Thread dedicada a esvaziar tx_q enviando frames binarios pelo WebSocket.
+ * Cada frame leva 4 bytes little-endian com o peer_id de destino antes dos dados. */
 static DWORD WINAPI relay_tx_thread_proc(LPVOID param) {
     NetRelayState *st = (NetRelayState *)param;
     unsigned char wire_buf[4 + RELAY_MAX_FRAME];
@@ -306,6 +314,8 @@ static DWORD WINAPI relay_tx_thread_proc(LPVOID param) {
     return 0;
 }
 
+/* Thread principal do relay: abre sessao WinHTTP, faz handshake HTTP -> WebSocket,
+ * sobe a thread de envio e fica lendo mensagens binarias ate desconectar. */
 static DWORD WINAPI relay_worker_thread_proc(LPVOID param) {
     NetRelayState *st = (NetRelayState *)param;
     char host[160] = "";
@@ -330,6 +340,7 @@ static DWORD WINAPI relay_worker_thread_proc(LPVOID param) {
         return 0;
     }
 
+    /* Tenta automatic proxy primeiro e cai para default proxy em versoes antigas do Windows */
     HINTERNET hSession = WinHttpOpen(L"SECTOR404/1.0",
                                      WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                      WINHTTP_NO_PROXY_NAME,
@@ -381,6 +392,7 @@ static DWORD WINAPI relay_worker_thread_proc(LPVOID param) {
                         WINHTTP_HEADER_NAME_BY_INDEX,
                         &status_code, &sc_size, WINHTTP_NO_HEADER_INDEX);
 
+    /* WebSocket exige HTTP 101 Switching Protocols; 404/409 indicam sala inexistente ou cheia */
     if (status_code != 101) {
         WinHttpCloseHandle(hRequest);
         if (status_code == 404) {
@@ -410,6 +422,7 @@ static DWORD WINAPI relay_worker_thread_proc(LPVOID param) {
     InterlockedExchange(&st->status, (LONG)NET_RELAY_READY);
     st->tx_thread = CreateThread(NULL, 0, relay_tx_thread_proc, st, 0, NULL);
 
+    /* Loop de leitura RX: junta fragmentos se precisar e extrai peer_id (4 bytes) + payload */
     unsigned char msg_buf[4 + RELAY_MAX_FRAME];
     int msg_len = 0;
     while (InterlockedCompareExchange(&st->stop_flag, 0, 0) == 0) {
@@ -441,6 +454,7 @@ static DWORD WINAPI relay_worker_thread_proc(LPVOID param) {
         }
     }
 
+    /* Se caiu sem stop_flag e somos cliente, injeta um LOBBY_LEAVE local para avisar o jogo */
     if (InterlockedCompareExchange(&st->stop_flag, 0, 0) == 0) {
         if (st->mode == NET_MODE_CLIENT) {
             NetCtrlPacket leave_pkt;
@@ -454,6 +468,7 @@ static DWORD WINAPI relay_worker_thread_proc(LPVOID param) {
     return 0;
 }
 
+/* Camada unica de envio: manda pela fila do WebSocket relay ou via sendto UDP. */
 static int net_transport_send(NetContext *net, unsigned int ip, unsigned short port,
                               const void *data, int len) {
     if (!net || !net->initialized || !data || len <= 0) {
@@ -462,6 +477,7 @@ static int net_transport_send(NetContext *net, unsigned int ip, unsigned short p
     if (net->transport == NET_TRANSPORT_RELAY) {
         NetRelayState *st = (NetRelayState *)(uintptr_t)net->relay_handle;
         if (!st) return 0;
+        /* Cliente sempre envia para peer 0 (host); host extrai peer_id do IP ficticio */
         unsigned int target_peer = (net->mode == NET_MODE_HOST) ? relay_ip_to_peer(ip) : 0u;
         return (relay_enqueue_tx(st, target_peer, data, len) == len) ? 1 : 0;
     }
@@ -477,6 +493,7 @@ static int net_transport_send(NetContext *net, unsigned int ip, unsigned short p
     return (sent == len) ? 1 : 0;
 }
 
+/* Camada unica de leitura nao-bloqueante: tira da fila RX do relay ou faz recvfrom UDP. */
 static int net_transport_recv(NetContext *net, void *buf, int max_len,
                               unsigned int *out_ip, unsigned short *out_port) {
     if (!net || !net->initialized || !buf || max_len <= 0) {
@@ -488,6 +505,7 @@ static int net_transport_recv(NetContext *net, void *buf, int max_len,
     }
 
     SOCKET s = (SOCKET)net->sock_handle;
+    /* Tenta ate 8 vezes caso chegue algum WSAECONNRESET de porta fechada */
     for (int tries = 0; tries < 8; tries++) {
         struct sockaddr_in sender;
         int sender_len = (int)sizeof(sender);
@@ -507,6 +525,8 @@ static int net_transport_recv(NetContext *net, void *buf, int max_len,
 }
 #endif
 
+/* Recalcula quantos jogadores estao ativos e espelha o 1o cliente nos campos
+ * antigos (peer_ip, remote_name, etc.) para manter compatibilidade com 1v1. */
 static void net_recompute_host_summary(NetContext *net) {
     if (!net) {
         return;
@@ -547,6 +567,7 @@ static void net_recompute_host_summary(NetContext *net) {
     }
 }
 
+/* Procura o slot (1..3) associado a um endereco (ip, porta) ja conhecido. */
 static int net_find_client_slot_by_addr(const NetContext *net, unsigned int ip, unsigned short port) {
     for (int s = 1; s < NET_MAX_PLAYERS; s++) {
         if (net->slots[s].active &&
@@ -559,6 +580,7 @@ static int net_find_client_slot_by_addr(const NetContext *net, unsigned int ip, 
     return -1;
 }
 
+/* Retorna o slot existente do peer (atualizando last_seen) ou aloca o proximo vago. */
 static int net_find_or_alloc_client_slot(NetContext *net, unsigned int ip,
                                          unsigned short port, double now) {
     int existing = net_find_client_slot_by_addr(net, ip, port);
@@ -583,6 +605,7 @@ static int net_find_or_alloc_client_slot(NetContext *net, unsigned int ip,
     return -1;
 }
 
+/* Libera o slot de um cliente remoto que saiu ou deu timeout. */
 static void net_clear_slot(NetContext *net, int s) {
     if (!net || s < 1 || s >= NET_MAX_PLAYERS) {
         return;
@@ -592,6 +615,8 @@ static void net_clear_slot(NetContext *net, int s) {
     net_recompute_host_summary(net);
 }
 
+/* Guarda o endereco de quem acabou de sair por 0.8s para ignorar pacotes atrasados
+ * que ainda estavam no buffer UDP e evitar recriar o slot sem querer. */
 static void net_mark_peer_left(NetContext *net, unsigned int ip, unsigned short port, double now) {
     if (!net || ip == 0u) {
         return;
@@ -616,6 +641,7 @@ static void net_mark_peer_left(NetContext *net, unsigned int ip, unsigned short 
     net->left_guards[idx].ignore_until = now + 0.8;
 }
 
+/* Remove o bloqueio temporario quando o cliente volta explicitamente pelo lobby/rejoin. */
 static void net_clear_left_guard(NetContext *net, unsigned int ip, unsigned short port) {
     if (!net) {
         return;
@@ -627,6 +653,7 @@ static void net_clear_left_guard(NetContext *net, unsigned int ip, unsigned shor
     }
 }
 
+/* Verifica se esse (ip, porta) pediu para sair ha menos de 0.8s. */
 static int net_is_peer_recently_left(const NetContext *net, unsigned int ip, unsigned short port, double now) {
     if (!net) {
         return 0;
@@ -640,6 +667,8 @@ static int net_is_peer_recently_left(const NetContext *net, unsigned int ip, uns
     return 0;
 }
 
+/* Procura o estado salvo de um jogador para restaurar se ele cair e voltar:
+ * tenta primeiro por client_id e depois por (IP + nome) fora de 127.0.0.1. */
 static int host_find_saved_idx(const NetContext *net, unsigned int client_id,
                                unsigned int ip, const char *name) {
     if (!net) {
@@ -683,6 +712,8 @@ static int host_find_saved_idx(const NetContext *net, unsigned int client_id,
     return -1;
 }
 
+/* Salva ou atualiza o ultimo estado conhecido de um cliente (posicao, vida,
+ * municao, pontos e contadores PvP) para eventual reconexao na partida. */
 static void host_upsert_saved_player_from_input(NetContext *net, int cs,
                                                 const NetMatchInputPacket *in_pkt,
                                                 unsigned int ip) {
@@ -743,6 +774,7 @@ static void host_upsert_saved_player_from_input(NetContext *net, int cs,
     sv->applied_pvp_dmg = in_pkt->applied_pvp_dmg;
 }
 
+/* Aloca slot para cliente que reconectou, dando preferencia ao slot antigo dele. */
 static int host_alloc_slot_for_rejoin(NetContext *net, unsigned int ip,
                                       unsigned short port, int preferred_slot,
                                       double now) {
@@ -781,6 +813,8 @@ static int host_alloc_slot_for_rejoin(NetContext *net, unsigned int ip,
 }
 
 #ifdef _WIN32
+/* Envia a lista atual de jogadores do lobby para um slot especifico,
+ * informando your_slot para o cliente saber quem ele e na tabela. */
 static void host_send_roster_to_slot(NetContext *net, int s, int level_idx,
                                      const char *map_name, int game_started) {
     if (!net || s < 1 || s >= NET_MAX_PLAYERS ||
@@ -809,6 +843,8 @@ static void host_send_roster_to_slot(NetContext *net, int s, int level_idx,
 }
 #endif
 
+/* Consolida a matriz de dano PvP e kills sempre mantendo o maior valor cumulativo
+ * por par (atacante -> vitima), assim pacotes atrasados ou fora de ordem nao zeram hits. */
 static void host_recompute_pvp_totals(NetContext *net) {
     if (!net) {
         return;
@@ -827,6 +863,7 @@ static void host_recompute_pvp_totals(NetContext *net) {
         }
     }
 
+    /* Soma quanto de dano cada vitima v ja recebeu de todos os outros jogadores */
     for (int v = 0; v < NET_MAX_PLAYERS; v++) {
         int sum_dmg = 0;
         for (int a = 0; a < NET_MAX_PLAYERS; a++) {
@@ -837,6 +874,7 @@ static void host_recompute_pvp_totals(NetContext *net) {
         net->total_dmg_to_slot[v] = sum_dmg;
     }
 
+    /* Soma quantas kills cada atacante a acumulou contra todas as vitimas */
     for (int a = 0; a < NET_MAX_PLAYERS; a++) {
         int sum_kills = 0;
         for (int v = 0; v < NET_MAX_PLAYERS; v++) {
@@ -850,6 +888,8 @@ static void host_recompute_pvp_totals(NetContext *net) {
 }
 
 #ifdef _WIN32
+/* Monta o snapshot global da partida (todos os slots + totais PvP) e envia
+ * uma copia com your_slot preenchido para cada cliente ativo. */
 static int host_broadcast_match_snapshot(NetContext *net) {
     if (!net || net->mode != NET_MODE_HOST || !net->initialized) {
         return 0;
@@ -884,6 +924,8 @@ static int host_broadcast_match_snapshot(NetContext *net) {
     return (sent_count > 0) ? 1 : 0;
 }
 
+/* Envia pacote de restauracao para quem reconectou com a partida em andamento.
+ * No UDP manda 3 vezes para diminuir risco de perda; no relay basta 1. */
 static void host_send_restore_to_addr(NetContext *net, unsigned int ip, unsigned short port,
                                       int slot, unsigned int client_id,
                                       const NetSavedPlayerState *saved) {
@@ -910,6 +952,7 @@ static void host_send_restore_to_addr(NetContext *net, unsigned int ip, unsigned
 }
 #endif
 
+/* Marca a transicao do lobby para a partida e reseta os timers de timeout dos peers. */
 void net_begin_match(NetContext *net, int level_idx, const char *map_name) {
     if (!net) {
         return;
@@ -971,6 +1014,7 @@ int net_init(NetContext *net, NetMode mode, const char *ip, int port) {
         return 0;
     }
 
+    /* Coloca o socket em modo nao-bloqueante para o loop do jogo nunca travar esperando rede */
     u_long non_blocking = 1;
     if (ioctlsocket(s, FIONBIO, &non_blocking) != 0) {
         closesocket(s);
@@ -982,6 +1026,7 @@ int net_init(NetContext *net, NetMode mode, const char *ip, int port) {
     net->initialized = 1;
 
     if (mode == NET_MODE_HOST) {
+        /* Escuta em todas as interfaces locais (LAN, loopback e VPN) na porta configurada */
         struct sockaddr_in local_addr;
         memset(&local_addr, 0, sizeof(local_addr));
         local_addr.sin_family = AF_INET;
@@ -1118,6 +1163,7 @@ int net_send_match_state(NetContext *net, const Player *local_player, int shooti
 
 #ifdef _WIN32
     if (net->mode == NET_MODE_HOST) {
+        /* Host preenche o proprio slot 0 e ja envia o snapshot para todos os clientes */
         NetPlayerSlot *self = &net->slots[0];
         self->active = 1;
         self->player_id = 1;
@@ -1136,6 +1182,7 @@ int net_send_match_state(NetContext *net, const Player *local_player, int shooti
         self->ammo = local_player->ammo;
         self->active_weapon = local_player->active_weapon;
         self->score = local_player->score;
+        /* No PvP as kills vem da matriz global; no Co-op vem das kills de monstros */
         if (net->game_mode != NET_GAME_PVP) {
             self->kills = local_player->ability_state.kills;
         }
@@ -1147,6 +1194,7 @@ int net_send_match_state(NetContext *net, const Player *local_player, int shooti
         return 0;
     }
 
+    /* Cliente espelha seu estado no slot local antes de mandar o pacote ao host */
     int my_slot = net->local_slot;
     if (my_slot >= 1 && my_slot < NET_MAX_PLAYERS) {
         NetPlayerSlot *ls = &net->slots[my_slot];
@@ -1205,9 +1253,9 @@ int net_send_match_state(NetContext *net, const Player *local_player, int shooti
 #endif
 }
 
-/* Recebe e processa todos os pacotes UDP da partida multi-jogador sem bloquear.
- * Host atualiza tabela de slots + eventos PvP + expira clientes mudos (> 5s).
- * Cliente aplica snapshots mantendo suavemente sua propria posicao local. */
+/* Recebe e processa todos os pacotes da partida sem bloquear (ate 64 por frame).
+ * Host atualiza tabela de slots + eventos PvP + expira clientes mudos (3s UDP / 6s relay).
+ * Cliente aplica snapshots mantendo sua propria posicao e vida locais sem rollback. */
 int net_receive_match_state(NetContext *net) {
     if (!net || net->mode == NET_MODE_OFFLINE || !net->initialized) {
         return 0;
@@ -1235,6 +1283,7 @@ int net_receive_match_state(NetContext *net) {
 
         if (bytes == (int)sizeof(NetMatchInputPacket) && rx.input.magic == NET_INPUT_MAGIC) {
             if (net->mode == NET_MODE_HOST) {
+                /* Ignora pacotes atrasados de quem acabou de sair */
                 if (net_is_peer_recently_left(net, sip, sport, now)) {
                     continue;
                 }
@@ -1264,6 +1313,7 @@ int net_receive_match_state(NetContext *net) {
                         slot->kills = rx.input.ability_state.kills;
                     }
 
+                    /* Atualiza matriz cumulativa de dano PvP e kills sempre pegando o maior valor */
                     for (int v = 0; v < NET_MAX_PLAYERS; v++) {
                         if (v != cs && rx.input.outgoing_pvp_dmg[v] > net->remote_pvp_dmg_matrix[cs][v]) {
                             net->remote_pvp_dmg_matrix[cs][v] = rx.input.outgoing_pvp_dmg[v];
@@ -1276,6 +1326,7 @@ int net_receive_match_state(NetContext *net) {
                         }
                     }
 
+                    /* Salva estado do cliente para permitir rejoin no mesmo ponto se ele cair */
                     host_upsert_saved_player_from_input(net, cs, &rx.input, sip);
                     net_recompute_host_summary(net);
                     net->remote_state.player_id = slot->player_id;
@@ -1292,6 +1343,7 @@ int net_receive_match_state(NetContext *net) {
                 if (rx.snap.your_slot >= 1 && rx.snap.your_slot < NET_MAX_PLAYERS) {
                     net->local_slot = rx.snap.your_slot;
                 }
+                /* Preserva posicao/vida locais para nao dar puxao na tela com snapshot antigo */
                 int my_slot = net->local_slot;
                 NetPlayerSlot preserved = {0};
                 int keep_local = (my_slot >= 1 && my_slot < NET_MAX_PLAYERS && net->slots[my_slot].has_pos);
@@ -1340,6 +1392,7 @@ int net_receive_match_state(NetContext *net) {
         } else if (bytes == (int)sizeof(NetCtrlPacket) && rx.ctrl.magic == NET_CTRL_MAGIC) {
             if (net->mode == NET_MODE_HOST) {
                 if (rx.ctrl.msg_type == NET_MSG_DISCOVER_REQ) {
+                    /* Responde descoberta mesmo com a partida ja rodando (in_game = 1) */
                     NetCtrlPacket reply;
                     memset(&reply, 0, sizeof(reply));
                     reply.magic = NET_CTRL_MAGIC;
@@ -1361,6 +1414,7 @@ int net_receive_match_state(NetContext *net) {
                         /* Cliente ainda em transicao do lobby para a partida */
                         host_send_roster_to_slot(net, existing, net->remote_level, NULL, 1);
                     } else {
+                        /* Novo jogador entrando no meio ou ex-jogador voltando: restaura se houver save */
                         int sv_idx = host_find_saved_idx(net, rx.ctrl.client_id, sip, rx.ctrl.player_name);
                         const NetSavedPlayerState *saved = (sv_idx >= 0) ? &net->saved_players[sv_idx] : NULL;
                         int cs = host_alloc_slot_for_rejoin(net, sip, sport,
@@ -1403,6 +1457,7 @@ int net_receive_match_state(NetContext *net) {
                                 slot->health = 100;
                                 slot->max_health = 100;
                                 slot->has_pos = 0;
+                                /* Zera historico PvP do slot para o recem-chegado nao herdar dano velho */
                                 for (int k = 0; k < NET_MAX_PLAYERS; k++) {
                                     net->remote_pvp_dmg_matrix[cs][k] = 0;
                                     net->remote_pvp_dmg_matrix[k][cs] = 0;
@@ -1429,6 +1484,7 @@ int net_receive_match_state(NetContext *net) {
                     }
                 }
             } else if (rx.ctrl.msg_type == NET_MSG_LOBBY_LEAVE) {
+                /* Host avisou que encerrou a partida */
                 net->connected = 0;
                 net->host_disconnected = 1;
                 for (int i = 0; i < NET_MAX_PLAYERS; i++) {
@@ -1442,6 +1498,7 @@ int net_receive_match_state(NetContext *net) {
         }
     }
 
+    /* No relay online o timeout e maior (6s) para aguentar oscilacao da internet */
     double match_timeout = (net->transport == NET_TRANSPORT_RELAY) ? 6.0 : 3.0;
     if (net->mode == NET_MODE_HOST) {
         int pruned = 0;
@@ -1469,6 +1526,8 @@ int net_receive_match_state(NetContext *net) {
 #endif
 }
 
+/* Descobre o IPv4 local principal conectando um socket UDP para 8.8.8.8:53
+ * (nao envia nada na rede, apenas faz o SO escolher a rota padrao). */
 void net_get_local_ipv4(char *out_ip, int out_size) {
     if (!out_ip || out_size <= 0) {
         return;
@@ -1506,6 +1565,7 @@ void net_get_local_ipv4(char *out_ip, int out_size) {
     }
 
     if (!found) {
+        /* Fallback se nao houver rota padrao para internet (ex.: LAN isolada): consulta hostname */
         char hostname[128] = "";
         if (gethostname(hostname, (int)sizeof(hostname)) == 0) {
             struct addrinfo hints;
@@ -1545,6 +1605,8 @@ static int ip_route_priority(const char *ip) {
     return 1;
 }
 
+/* Lista todos os IPv4 ativos do PC (LAN + VPN tipo Radmin) separados por " | "
+ * usando SIO_GET_INTERFACE_LIST e ignorando loopback e 169.254.x.x. */
 void net_get_all_local_ipv4s(char *out_buf, int out_size) {
     if (!out_buf || out_size <= 0) {
         return;
@@ -1615,6 +1677,7 @@ void net_get_all_local_ipv4s(char *out_buf, int out_size) {
 #endif
 }
 
+/* Atualiza o slot 0 com nome, skin, aparencia, modo de jogo e fase escolhidos pelo host. */
 void net_host_update_local_slot(NetContext *net, const char *name, int char_idx,
                                 int visual_id, const CharacterAppearance *app,
                                 int game_mode, int level_idx) {
@@ -1637,6 +1700,7 @@ void net_host_update_local_slot(NetContext *net, const char *name, int char_idx,
     net_recompute_host_summary(net);
 }
 
+/* Remove do lobby clientes que pararam de responder alem do tempo limite. */
 void net_lobby_prune_stale(NetContext *net, double timeout_sec) {
     if (!net || net->mode != NET_MODE_HOST || timeout_sec <= 0.0) {
         return;
@@ -1649,6 +1713,7 @@ void net_lobby_prune_stale(NetContext *net, double timeout_sec) {
     }
 }
 
+/* Envia a lista atual de jogadores do lobby para todos os clientes conectados. */
 int net_broadcast_lobby_roster(NetContext *net, int level_idx, const char *map_name,
                                int game_started) {
     if (!net || net->mode != NET_MODE_HOST || !net->initialized) {
@@ -1677,6 +1742,7 @@ int net_broadcast_lobby_roster(NetContext *net, int level_idx, const char *map_n
 #endif
 }
 
+/* No host faz broadcast do roster; no cliente manda seu estado de lobby para o host. */
 int net_send_lobby_state(NetContext *net, const NetCtrlPacket *pkt) {
     if (!net || !pkt || net->mode == NET_MODE_OFFLINE || !net->initialized) {
         return 0;
@@ -1703,6 +1769,7 @@ int net_send_lobby_state(NetContext *net, const NetCtrlPacket *pkt) {
 #endif
 }
 
+/* Envia aviso explicito de saida da sala ou partida (repete 3x no UDP para nao perder). */
 int net_send_lobby_leave(NetContext *net) {
     if (!net || net->mode == NET_MODE_OFFLINE || !net->initialized) {
         return 0;
@@ -1751,10 +1818,10 @@ int net_send_lobby_leave(NetContext *net) {
 #endif
 }
 
-/* ============================================================================
- * LOBBY MULTIPLAYER (ATE 4 JOGADORES) E DESCOBERTA AUTOMATICA NA LAN
- * ============================================================================ */
+/* --- Lobby multiplayer (ate 4 jogadores) e descoberta automatica na LAN --- */
 
+/* Drena pacotes pendentes enquanto o jogador esta no lobby:
+ * trata roster, inicio antecipado da partida, restore de rejoin, discover e leave. */
 int net_poll_lobby(NetContext *net, const NetCtrlPacket *host_offer, int *peer_left_out) {
     if (peer_left_out) {
         *peer_left_out = 0;
@@ -1805,6 +1872,7 @@ int net_poll_lobby(NetContext *net, const NetCtrlPacket *host_offer, int *peer_l
                 received_any = 1;
             }
         } else if (bytes == (int)sizeof(NetMatchSnapshotPacket) && rx.snap.magic == NET_SNAP_MAGIC) {
+            /* Se o host ja comecou a partida e mandou snapshot, o cliente entra direto */
             if (net->mode == NET_MODE_CLIENT) {
                 net->connected = 1;
                 if (rx.snap.your_slot >= 1 && rx.snap.your_slot < NET_MAX_PLAYERS) {
@@ -1830,6 +1898,7 @@ int net_poll_lobby(NetContext *net, const NetCtrlPacket *host_offer, int *peer_l
                 received_any = 1;
             }
         } else if (bytes == (int)sizeof(NetRestoreStatePacket) && rx.restore.magic == NET_RESTORE_MAGIC) {
+            /* Resposta do host ao entrar em uma partida em andamento (com ou sem estado salvo) */
             if (net->mode == NET_MODE_CLIENT) {
                 net->connected = 1;
                 net->host_disconnected = 0;
@@ -1977,6 +2046,7 @@ int net_discovery_open(unsigned long long *out_sock) {
 #endif
 }
 
+/* Envia um pacote DISCOVER_REQ avulso para um IP/broadcast especifico. */
 static void send_probe_to_ip(unsigned long long sock_handle, const char *ip_str, int port) {
 #ifdef _WIN32
     SOCKET s = (SOCKET)sock_handle;
@@ -2013,6 +2083,7 @@ void net_discovery_send_probe(unsigned long long sock_handle, int port) {
     send_probe_to_ip(sock_handle, "127.0.0.1", port);
     send_probe_to_ip(sock_handle, "255.255.255.255", port);
 
+    /* Consulta todas as interfaces ativas e calcula o broadcast exato da sub-rede */
     SOCKET s = (SOCKET)sock_handle;
     INTERFACE_INFO ifaces[16];
     DWORD bytes_ret = 0;
@@ -2050,6 +2121,7 @@ void net_discovery_send_probe(unsigned long long sock_handle, int port) {
         }
     }
 
+    /* Se o WSAIoctl falhar por algum motivo, chuta um /24 no IP local (.255) */
     if (!probed_via_ioctl) {
         char local_ip[64] = "";
         net_get_local_ipv4(local_ip, (int)sizeof(local_ip));
@@ -2105,6 +2177,7 @@ int net_discovery_poll(unsigned long long sock_handle, NetDiscoveredRoom *rooms,
             continue;
         }
 
+        /* Agrupa respostas pelo host_session_id para nao duplicar host com varias placas de rede */
         int idx = -1;
         int is_new = 0;
         for (int i = 0; i < *room_count; i++) {
@@ -2123,6 +2196,7 @@ int net_discovery_poll(unsigned long long sock_handle, NetDiscoveredRoom *rooms,
             is_new = 1;
         }
         if (idx >= 0) {
+            /* Prefere ficar com o IP de maior prioridade (127.0.0.1 > LAN > VPN) */
             if (is_new ||
                 ip_route_priority(ip_str) >= ip_route_priority(rooms[idx].ip) ||
                 (now - rooms[idx].last_seen) > 1.5) {
@@ -2142,6 +2216,7 @@ int net_discovery_poll(unsigned long long sock_handle, NetDiscoveredRoom *rooms,
         }
     }
 
+    /* Remove salas que nao responderam nos ultimos 3 segundos */
     int write_i = 0;
     for (int i = 0; i < *room_count; i++) {
         if ((now - rooms[i].last_seen) <= 3.0) {
@@ -2159,6 +2234,7 @@ int net_discovery_poll(unsigned long long sock_handle, NetDiscoveredRoom *rooms,
 #endif
 }
 
+/* Fecha o socket de descoberta LAN e libera a contagem do Winsock. */
 void net_discovery_close(unsigned long long *sock_handle) {
     if (!sock_handle || *sock_handle == 0) {
         return;
@@ -2170,6 +2246,7 @@ void net_discovery_close(unsigned long long *sock_handle) {
     *sock_handle = 0;
 }
 
+/* Encerra a conexao ativa (fecha socket UDP ou para as threads e handles WinHTTP do relay). */
 void net_close(NetContext *net) {
     if (!net) {
         return;
@@ -2194,6 +2271,7 @@ void net_close(NetContext *net) {
             if (st->tx_event) {
                 SetEvent(st->tx_event);
             }
+            /* Fecha handles WinHTTP antes do WaitForSingleObject para destravar WinHttpWebSocketReceive */
             if (st->h_ws) {
                 WinHttpCloseHandle(st->h_ws);
                 st->h_ws = NULL;
@@ -2236,6 +2314,7 @@ void net_close(NetContext *net) {
     net->has_peer_addr = 0;
 }
 
+/* Gera codigo curto de 4 caracteres sem letras/numeros confusos (sem O/0/I/1). */
 void net_generate_room_code(char *out_code, int out_size) {
     if (!out_code || out_size <= 1) {
         return;
@@ -2250,6 +2329,7 @@ void net_generate_room_code(char *out_code, int out_size) {
     out_code[len] = '\0';
 }
 
+/* Resolve a URL do relay na ordem: SECTOR404_RELAY_URL, relay_url.txt e URL padrao. */
 void net_get_relay_url(char *out_url, int out_size) {
     if (!out_url || out_size <= 0) {
         return;
@@ -2282,11 +2362,14 @@ void net_get_relay_url(char *out_url, int out_size) {
     snprintf(out_url, (size_t)out_size, "%s", NET_DEFAULT_RELAY_URL);
 }
 
+/* Inicia uma sessao online via WebSocket relay, limpando o codigo da sala
+ * e disparando a thread em background para conectar sem travar o menu. */
 int net_init_relay(NetContext *net, NetMode mode, const char *relay_url, const char *room_code) {
     if (!net || mode == NET_MODE_OFFLINE) {
         return 0;
     }
 
+    /* Mantem apenas caracteres alfanumericos em maiuscula para o codigo da sala */
     char clean_code[16] = "";
     if (room_code) {
         int out_i = 0;
@@ -2326,6 +2409,7 @@ int net_init_relay(NetContext *net, NetMode mode, const char *relay_url, const c
         net->slots[0].ready = 1;
         net->slots[0].client_id = net->local_client_id;
     } else {
+        /* Cliente aponta para o peer ficticio 0 (que representa o host no servidor relay) */
         net->has_peer_addr = 1;
         net->peer_ip = relay_peer_to_ip(0u);
         net->peer_port = relay_peer_to_port(0u);
@@ -2358,6 +2442,7 @@ int net_init_relay(NetContext *net, NetMode mode, const char *relay_url, const c
 #endif
 }
 
+/* Consulta de forma segura o estado atual do tunel WebSocket e eventual mensagem de erro. */
 NetRelayStatus net_relay_get_status(const NetContext *net, char *err_out, int err_size) {
     if (err_out && err_size > 0) {
         err_out[0] = '\0';

@@ -1,9 +1,12 @@
+/* map.c - carregamento de fases, colisao de tiles, armadilhas, pickups e minimapa */
+
 #include "map.h"
 #include "embedded_assets.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
 
+/* Arena padrao usada caso nenhum arquivo de fase ou mapa embutido seja encontrado */
 static const char *DEFAULT_MAP_LAYOUT[MAP_HEIGHT] = {
     "################################",
     "#..............................#",
@@ -39,6 +42,7 @@ static const char *DEFAULT_MAP_LAYOUT[MAP_HEIGHT] = {
     "################################"
 };
 
+/* Estado global do nivel atual: spawn, camera do minimapa e objetos interativos */
 static int g_enemies_alive = 0;
 static int g_current_level = 1;
 static int g_minimap_cam_x = 0;
@@ -51,21 +55,26 @@ static float g_trap_timer[MAP_HEIGHT][MAP_WIDTH];
 static unsigned char g_medkit_used[MAP_HEIGHT][MAP_WIDTH];
 static unsigned char g_weapon_pickup_used[MAP_HEIGHT][MAP_WIDTH];
 
+/* Tempo em segundos que uma armadilha de piso fica acesa apos ser pisada */
 #define TRAP_ACTIVE_DURATION 3.0f
 
+/* Limpa o estado e os timers de todas as armadilhas de fogo */
 void map_reset_traps(void) {
     memset(g_trap_active, 0, sizeof(g_trap_active));
     memset(g_trap_timer, 0, sizeof(g_trap_timer));
 }
 
+/* Marca todos os kits medicos do mapa como disponiveis novamente */
 void map_reset_medkits(void) {
     memset(g_medkit_used, 0, sizeof(g_medkit_used));
 }
 
+/* Restaura todos os pickups de arma do mapa */
 void map_reset_weapon_pickups(void) {
     memset(g_weapon_pickup_used, 0, sizeof(g_weapon_pickup_used));
 }
 
+/* Inicializa o mapa com a arena padrao e reseta o estado da fase */
 void map_init_default(GameMap *map) {
     if (!map) {
         return;
@@ -90,6 +99,7 @@ void map_init_default(GameMap *map) {
     }
 }
 
+/* Carrega um mapa .txt do disco (ou da copia embutida no binario se nao achar arquivo) */
 int map_load_from_file(GameMap *map, const char *filename) {
     if (!map || !filename) {
         return 0;
@@ -97,6 +107,7 @@ int map_load_from_file(GameMap *map, const char *filename) {
 
     FILE *fp = fopen(filename, "r");
     if (!fp) {
+        /* Tenta um nivel acima caso o executavel rode dentro de build/ */
         char parent_path[256];
         snprintf(parent_path, sizeof(parent_path), "../%s", filename);
         fp = fopen(parent_path, "r");
@@ -115,6 +126,8 @@ int map_load_from_file(GameMap *map, const char *filename) {
     map_reset_traps();
     map_reset_medkits();
     map_reset_weapon_pickups();
+
+    /* Extrai o numero da fase a partir do nome (ex: level3.txt) */
     const char *lvl_ptr = strstr(filename, "level");
     if (lvl_ptr) {
         int lvl = 0;
@@ -134,6 +147,7 @@ int map_load_from_file(GameMap *map, const char *filename) {
                 break;
             }
         } else {
+            /* Le linha por linha direto da string embutida quando nao ha FILE* */
             if (!emb || *emb == '\0') {
                 break;
             }
@@ -159,6 +173,7 @@ int map_load_from_file(GameMap *map, const char *filename) {
         for (int col = 0; col < MAP_WIDTH; col++) {
             if ((size_t)col < len) {
                 if (line[col] == 'P') {
+                    /* Marca a posicao inicial do jogador e deixa o chao livre por baixo */
                     g_spawn_x = (float)col + 0.5f;
                     g_spawn_y = (float)row + 0.5f;
                     g_spawn_pending = 1;
@@ -244,10 +259,12 @@ static MapLevelInfo MAP_LEVELS[] = {
 };
 static const int MAP_LEVEL_TOTAL = (int)(sizeof(MAP_LEVELS) / sizeof(MAP_LEVELS[0]));
 
+/* Total de fases registradas no catalogo */
 int map_level_count(void) {
     return MAP_LEVEL_TOTAL;
 }
 
+/* Garante que o indice de fase fique dentro dos limites do catalogo */
 int map_level_clamp(int index) {
     if (MAP_LEVEL_TOTAL <= 0) return 0;
     if (index < 0) return 0;
@@ -255,10 +272,12 @@ int map_level_clamp(int index) {
     return index;
 }
 
+/* Devolve os metadados e spawns da fase escolhida */
 const MapLevelInfo *map_level_get(int index) {
     return &MAP_LEVELS[map_level_clamp(index)];
 }
 
+/* Carrega a fase pelo indice (funcao customizada, arquivo .txt ou mapa padrao) */
 void map_load_level(int index, GameMap *map) {
     if (!map) {
         return;
@@ -272,6 +291,7 @@ void map_load_level(int index, GameMap *map) {
     }
     if (entry->file_path && map_load_from_file(map, entry->file_path)) {
         g_current_level = clamped + 1;
+        /* Se o .txt tinha um 'P', sobrescreve o spawn1 padrao do catalogo */
         if (g_spawn_pending) {
             MAP_LEVELS[clamped].spawn1_x = g_spawn_x;
             MAP_LEVELS[clamped].spawn1_y = g_spawn_y;
@@ -281,17 +301,20 @@ void map_load_level(int index, GameMap *map) {
     map_init_default(map);
 }
 
+/* Flags auxiliares para o raycaster e para evitar spawn de inimigos em corredores secretos */
 static int g_last_tile_passable = 0;
 static int g_spawning_enemies = 0;
 static int g_minimap_secret_floor = 0;
 static int g_minimap_secret_x = -1;
 static int g_minimap_secret_y = -1;
 
+/* Pisos secretos usam simbolos especiais para parecerem parede no minimapa */
 static int is_secret_floor(char tile) {
     return (tile == ',' || tile == ';' || tile == ':' || tile == '_' ||
             (tile >= '1' && tile <= '9'));
 }
 
+/* Retorna 1 se o caractere do mapa representa o ponto de spawn de algum inimigo ou boss */
 int map_is_enemy_spawn_char(char tile) {
     switch (tile) {
         case 'Z':
@@ -315,18 +338,22 @@ int map_is_enemy_spawn_char(char tile) {
     }
 }
 
+/* Tiles de armadilha que disparam fogo quando o jogador passa por cima */
 int map_is_trap_tile(char tile) {
     return (tile == '^' || tile == '5' || tile == '6' || tile == '7' || tile == '8');
 }
 
+/* Tiles de kit medico no chao (incluindo variantes escondidas em corredores secretos) */
 int map_is_medkit_tile(char tile) {
     return (tile == '+' || tile == '1' || tile == '2' || tile == '3' || tile == '4');
 }
 
+/* Qualquer tile que pode queimar o jogador (armadilha ou fogo continuo) */
 int map_is_hazard_tile(char tile) {
     return (map_is_trap_tile(tile) || tile == 'F' || tile == '9');
 }
 
+/* Verifica se a armadilha na celula (x, y) esta ativa no momento */
 int map_is_trap_triggered(int x, int y) {
     if (x < 0 || x >= MAP_WIDTH || y < 0 || y >= MAP_HEIGHT) {
         return 0;
@@ -334,6 +361,7 @@ int map_is_trap_triggered(int x, int y) {
     return g_trap_active[y][x] != 0;
 }
 
+/* Dispara a armadilha da celula e reinicia o temporizador de chamas */
 void map_trigger_trap(int x, int y) {
     if (x < 0 || x >= MAP_WIDTH || y < 0 || y >= MAP_HEIGHT) {
         return;
@@ -342,6 +370,7 @@ void map_trigger_trap(int x, int y) {
     g_trap_timer[y][x] = TRAP_ACTIVE_DURATION;
 }
 
+/* Atualiza o tempo restante de todas as armadilhas acesas */
 void map_update_traps(float dt) {
     if (dt <= 0.0f) {
         return;
@@ -359,6 +388,7 @@ void map_update_traps(float dt) {
     }
 }
 
+/* Retorna 1 se ha fogo ativo na celula (seja chama fixa F/9 ou armadilha disparada) */
 int map_is_fire_active_at(const GameMap *map, int x, int y) {
     char tile = map_get_raw_tile(map, x, y);
     if (tile == 'F' || tile == '9') {
@@ -370,6 +400,7 @@ int map_is_fire_active_at(const GameMap *map, int x, int y) {
     return 0;
 }
 
+/* Retorna 1 se existe um kit medico ainda nao coletado na celula */
 int map_is_medkit_active_at(const GameMap *map, int x, int y) {
     if (!map || x < 0 || x >= MAP_WIDTH || y < 0 || y >= MAP_HEIGHT) {
         return 0;
@@ -378,6 +409,7 @@ int map_is_medkit_active_at(const GameMap *map, int x, int y) {
     return map_is_medkit_tile(tile) && g_medkit_used[y][x] == 0;
 }
 
+/* Consome o kit medico da celula se estiver disponivel; retorna 1 em caso de coleta */
 int map_try_collect_medkit(const GameMap *map, int x, int y) {
     if (!map_is_medkit_active_at(map, x, y)) {
         return 0;
@@ -386,6 +418,7 @@ int map_try_collect_medkit(const GameMap *map, int x, int y) {
     return 1;
 }
 
+/* Converte o caractere do mapa para o id da arma correspondente (-1 se nao for arma) */
 int map_weapon_tile_type(char tile) {
     switch (tile) {
         case 'G': return 1; /* WEAPON_SHOTGUN */
@@ -396,6 +429,7 @@ int map_weapon_tile_type(char tile) {
     }
 }
 
+/* Verifica se ha um pickup de arma ativo (nao coletado) na celula */
 int map_is_weapon_pickup_active_at(const GameMap *map, int x, int y) {
     if (!map || x < 0 || x >= MAP_WIDTH || y < 0 || y >= MAP_HEIGHT) {
         return 0;
@@ -404,6 +438,7 @@ int map_is_weapon_pickup_active_at(const GameMap *map, int x, int y) {
     return map_weapon_tile_type(tile) >= 0 && g_weapon_pickup_used[y][x] == 0;
 }
 
+/* Coleta a arma da celula e devolve o tipo em out_weapon_type */
 int map_try_collect_weapon_pickup(const GameMap *map, int x, int y, int *out_weapon_type) {
     if (!map_is_weapon_pickup_active_at(map, x, y)) {
         return 0;
@@ -416,6 +451,7 @@ int map_try_collect_weapon_pickup(const GameMap *map, int x, int y, int *out_wea
     return 1;
 }
 
+/* Mapeia tiles especiais (spawns, itens, passagens secretas) para o char visual equivalente */
 char map_get_wall_equivalent(char tile) {
     if (tile == 'P' || map_is_enemy_spawn_char(tile) ||
         tile == '^' || tile == 'F' || tile == '+' ||
@@ -431,23 +467,28 @@ char map_get_wall_equivalent(char tile) {
     }
 }
 
+/* Ativa o modo de spawn para impedir que inimigos nasçam dentro de salas secretas */
 void map_begin_enemy_spawn(void) {
     g_spawning_enemies = 1;
 }
 
+/* Encerra o modo de spawn de inimigos */
 void map_end_enemy_spawn(void) {
     g_spawning_enemies = 0;
 }
 
+/* Atualiza a flag global que controla se a saida E ainda esta trancada */
 int map_set_enemies_alive(int count) {
     g_enemies_alive = (count > 0) ? 1 : 0;
     return count;
 }
 
+/* Informa se ainda existem inimigos obrigatorios vivos na fase */
 int map_are_enemies_alive(void) {
     return g_enemies_alive;
 }
 
+/* Paredes falsas ($, &, /) sempre deixam passar; a saida E abre quando nao ha inimigos vivos */
 int map_is_passable_wall(char tile) {
     if (tile == 'E') {
         return !g_enemies_alive;
@@ -455,10 +496,12 @@ int map_is_passable_wall(char tile) {
     return (tile == '$' || tile == '&' || tile == '/');
 }
 
+/* Retorna se o ultimo tile consultado por map_get_tile era parede falsa atravessavel */
 int map_last_tile_is_passable(void) {
     return g_last_tile_passable;
 }
 
+/* Porcentagem de clareamento para dar uma pista sutil nas paredes atravessaveis */
 static int passable_lighten_pct(char tile) {
     switch (tile) {
         case '#': return 9;
@@ -468,16 +511,19 @@ static int passable_lighten_pct(char tile) {
     }
 }
 
+/* Clareia um canal de cor RGB de acordo com o tipo da parede falsa */
 unsigned char map_lighten_channel_for_tile(char tile, unsigned char c) {
     int pct = passable_lighten_pct(tile);
     int v = (int)c + ((255 - (int)c) * pct) / 100;
     return (unsigned char)((v > 255) ? 255 : v);
 }
 
+/* Versao generica de clareamento sem especificar o caractere da parede */
 unsigned char map_lighten_channel(unsigned char c) {
     return map_lighten_channel_for_tile('\0', c);
 }
 
+/* Le o caractere cru do mapa; fora dos limites trata como parede '#' */
 char map_get_raw_tile(const GameMap *map, int x, int y) {
     if (!map || x < 0 || x >= map->width || y < 0 || y >= map->height) {
         return '#';
@@ -485,6 +531,7 @@ char map_get_raw_tile(const GameMap *map, int x, int y) {
     return map->tiles[y][x];
 }
 
+/* Le o tile ja convertido para visualizacao e guarda flags de parede falsa e piso secreto */
 char map_get_tile(const GameMap *map, int x, int y) {
     char raw = map_get_raw_tile(map, x, y);
     g_last_tile_passable = (raw == '$' || raw == '&' || raw == '/');
@@ -498,6 +545,7 @@ char map_get_tile(const GameMap *map, int x, int y) {
     return map_get_wall_equivalent(raw);
 }
 
+/* Aplica no jogador a posicao 'P' lida do arquivo de mapa, se houver uma pendente */
 void map_apply_pending_spawn(float *player_x, float *player_y) {
     if (!player_x || !player_y || !g_spawn_pending) {
         return;
@@ -507,6 +555,7 @@ void map_apply_pending_spawn(float *player_x, float *player_y) {
     g_spawn_pending = 0;
 }
 
+/* Verifica colisao fisica: retorna 1 se a celula bloqueia movimento e tiros */
 int map_is_wall(const GameMap *map, int x, int y) {
     if (!map || x < 0 || x >= map->width || y < 0 || y >= map->height) {
         return 1;
@@ -523,6 +572,7 @@ int map_is_wall(const GameMap *map, int x, int y) {
     return (tile != '.' && tile != ' ' && !map_is_passable_wall(tile));
 }
 
+/* Verifica visibilidade no raycaster/minimapa (inclui paredes falsas e esconde pisos secretos) */
 int map_is_visible_wall(const GameMap *map, int x, int y) {
     char tile = map_get_raw_tile(map, x, y);
     g_last_tile_passable = 0;
@@ -541,6 +591,7 @@ int map_is_visible_wall(const GameMap *map, int x, int y) {
             map_weapon_tile_type(tile) < 0);
 }
 
+/* Checa se o mapa possui pelo menos um portal de saida E */
 int map_has_exit_tile(const GameMap *map) {
     if (!map) {
         return 0;
@@ -555,10 +606,12 @@ int map_has_exit_tile(const GameMap *map) {
     return 0;
 }
 
+/* Verifica se a coordenada continua (x, y) cai dentro de um tile de saida E */
 static int is_exit_at(const GameMap *map, float x, float y) {
     return (map_get_raw_tile(map, (int)floorf(x), (int)floorf(y)) == 'E');
 }
 
+/* Avanca para a proxima fase se o jogador tocar na saida E sem inimigos vivos (retorna -1 no fim) */
 int map_try_advance_level(GameMap *map, float *player_x, float *player_y, float *player_angle) {
     if (!map || !player_x || !player_y || !player_angle || g_enemies_alive) {
         return 0;
@@ -566,6 +619,7 @@ int map_try_advance_level(GameMap *map, float *player_x, float *player_y, float 
 
     float px = *player_x;
     float py = *player_y;
+    /* Testa o centro e 4 pontos ao redor para facilitar a entrada no portal */
     if (!is_exit_at(map, px, py) &&
         !is_exit_at(map, px + 0.15f, py) &&
         !is_exit_at(map, px - 0.15f, py) &&
@@ -584,6 +638,7 @@ int map_try_advance_level(GameMap *map, float *player_x, float *player_y, float 
         return 1;
     }
 
+    /* Fallback para fases extras alem do catalogo (ex: level6.txt) */
     char next_path[128];
     snprintf(next_path, sizeof(next_path), "assets/maps/level%d.txt", g_current_level + 1);
     if (map_load_from_file(map, next_path)) {
@@ -597,6 +652,7 @@ int map_try_advance_level(GameMap *map, float *player_x, float *player_y, float 
     return -1;
 }
 
+/* Limita a janela da camera do minimapa dentro das bordas do mapa */
 static int clamp_minimap_cam(int val, int map_dim) {
     int max_cam = map_dim - MINIMAP_VIEW_SIZE;
     if (max_cam < 0) {
@@ -611,6 +667,7 @@ static int clamp_minimap_cam(int val, int map_dim) {
     return val;
 }
 
+/* Recorta um sub-mapa centrado ao redor do jogador para desenhar no minimapa */
 void map_build_minimap_view(const GameMap *src, GameMap *dst, float *player_x, float *player_y) {
     if (!src || !dst || !player_x || !player_y) {
         return;
@@ -653,6 +710,7 @@ void map_build_minimap_view(const GameMap *src, GameMap *dst, float *player_x, f
     *player_y -= (float)g_minimap_cam_y;
 }
 
+/* Converte uma posicao do mundo para coordenadas locais do minimapa; retorna 1 se visivel */
 int map_to_minimap_coords(float *x, float *y) {
     if (!x || !y) {
         return 0;
@@ -663,6 +721,7 @@ int map_to_minimap_coords(float *x, float *y) {
             *y >= 0.0f && *y < (float)MINIMAP_VIEW_SIZE) ? 1 : 0;
 }
 
+/* Versao para minimapa da checagem de fogo ativo, somando o deslocamento da camera */
 int map_is_fire_active_minimap(const GameMap *mm_map, int mx, int my) {
     char tile = map_get_raw_tile(mm_map, mx, my);
     if (tile == 'F') {
@@ -674,6 +733,7 @@ int map_is_fire_active_minimap(const GameMap *mm_map, int mx, int my) {
     return 0;
 }
 
+/* Versao para minimapa da checagem de kit medico disponivel */
 int map_is_medkit_active_minimap(const GameMap *mm_map, int mx, int my) {
     char tile = map_get_raw_tile(mm_map, mx, my);
     if (tile != '+') {
@@ -688,10 +748,9 @@ int map_is_medkit_active_minimap(const GameMap *mm_map, int mx, int my) {
 }
 
 
-/* ============================================================================
- * HOOKS E RENDERIZACAO DE CHAO, PAREDES, KITS MEDICOS E CHAMAS (MODULO MAPA)
- * ============================================================================ */
+/* --- Hooks de renderizacao de chao, paredes, kits medicos e chamas --- */
 
+/* Escala uma cor RGB por factor mantendo cada canal dentro de [0, 255] */
 static AsciiColor map_scale_rgb_local(float r, float g, float b, float factor) {
     if (factor < 0.0f) factor = 0.0f;
     if (factor > 1.35f) factor = 1.35f;
@@ -705,6 +764,7 @@ static AsciiColor map_scale_rgb_local(float r, float g, float b, float factor) {
     return c;
 }
 
+/* Ajusta cor e brilho de paredes especiais (saida E liberada e paredes falsas) */
 void map_wall_style_hook(const void *map_ptr, int mx, int my, char tile,
                          AsciiColor *io_color, float *io_fog_dist,
                          int *io_is_edge, int *io_side) {
@@ -713,6 +773,7 @@ void map_wall_style_hook(const void *map_ptr, int mx, int my, char tile,
         return;
     }
     if (tile == 'E' && !map_are_enemies_alive()) {
+        /* Quando todos os inimigos morreram, a saida brilha em branco ate de longe */
         *io_color = (AsciiColor){255, 255, 255};
         *io_fog_dist = -50.0f;
         *io_is_edge = 0;
@@ -727,6 +788,7 @@ void map_wall_style_hook(const void *map_ptr, int mx, int my, char tile,
     }
 }
 
+/* Desenha detalhes diretamente no piso (grelha das armadilhas de fogo e base dos kits) */
 int map_floor_decal_hook(const void *map_ptr, int mx, int my,
                          float fu, float fv, float row_dist,
                          char *out_ch, AsciiColor *out_col) {
@@ -790,6 +852,7 @@ int map_floor_decal_hook(const void *map_ptr, int mx, int my,
     return 0;
 }
 
+/* Define icone e cor de fogo, medkits e pickups de arma no minimapa */
 int map_minimap_tile_hook(const void *mm_map_ptr, int mx, int my,
                           char *out_ch, AsciiColor *out_col) {
     const GameMap *mm_map = (const GameMap *)mm_map_ptr;
@@ -815,12 +878,14 @@ int map_minimap_tile_hook(const void *mm_map_ptr, int mx, int my,
     return 0;
 }
 
+/* Contexto passado aos callbacks de sprite de chamas, kits e armas no chao */
 typedef struct {
     float seed;
     int weapon_type;
     const RendererApi *api;
 } HazardRenderCtx;
 
+/* Desenha proceduralmente em ASCII o sprite de cada arma coletavel no chao */
 int map_sample_weapon_pickup_sprite(int weapon_type, float u, float v, int sx, int sy,
                                     float fog, float time_now, const RendererApi *r,
                                     char *out_ch, AsciiColor *out_col) {
@@ -1052,6 +1117,7 @@ int map_sample_weapon_pickup_sprite(int weapon_type, float u, float v, int sx, i
     return 1;
 }
 
+/* Callback do renderer para amostrar o sprite da arma selecionada no contexto */
 static int map_weapon_pickup_sampler(float u, float v, int sx, int sy,
                                      int sprite_w, int sprite_h,
                                      float dist, float fog, float time_now,
@@ -1066,6 +1132,7 @@ static int map_weapon_pickup_sampler(float u, float v, int sx, int sy,
                                            fog, time_now, ctx->api, out_ch, out_col);
 }
 
+/* Desenha a maleta branca com cruz vermelha dos kits medicos no mundo 3D */
 static int map_medkit_sampler(float u, float v, int sx, int sy,
                               int sprite_w, int sprite_h,
                               float dist, float fog, float time_now,
@@ -1099,6 +1166,7 @@ static int map_medkit_sampler(float u, float v, int sx, int sy,
     return 1;
 }
 
+/* Desenha chama animada usando senoides e seed por celula para variar o tremor */
 static int map_flame_sampler(float u, float v, int sx, int sy,
                              int sprite_w, int sprite_h,
                              float dist, float fog, float time_now,
@@ -1136,6 +1204,7 @@ static int map_flame_sampler(float u, float v, int sx, int sy,
     return 1;
 }
 
+/* Varre o grid do mapa e envia sprites de fogo, kits medicos e armas para o renderer */
 void map_render_hazards(const GameMap *map, const void *player_ptr,
                         const RendererApi *r) {
     if (!map || !player_ptr || !r) {

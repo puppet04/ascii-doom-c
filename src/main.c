@@ -1,3 +1,5 @@
+/* main.c - ponto de entrada, menus, lobby multiplayer (LAN/Online) e loop da partida */
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,10 +19,9 @@ __declspec(dllexport) unsigned long NvOptimusEnablement = 0x00000001;
 __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 #endif
 
-/* ============================================================================
- * ESTRUTURAS LOCAIS DE MENU, CONFIGURACOES E KEYBINDS (EXCLUSIVO DE main.c)
- * ============================================================================ */
+/* --- Configuracoes locais, resolucao e keybinds (exclusivo de main.c) --- */
 
+/* Paginas possiveis na navegacao do menu principal */
 typedef enum {
     MENU_PAGE_MAIN = 0,
     MENU_PAGE_SINGLEPLAYER = 1,
@@ -31,6 +32,7 @@ typedef enum {
     MENU_PAGE_CREATE = 6
 } MenuPage;
 
+/* Mapeamento de teclas configuraveis e sensibilidade do mouse */
 typedef struct {
     int move_forward;
     int move_backward;
@@ -59,6 +61,7 @@ static const ResPreset RES_PRESETS[] = {
 };
 static const int RES_PRESET_COUNT = (int)(sizeof(RES_PRESETS) / sizeof(RES_PRESETS[0]));
 
+/* Estado persistido em memoria enquanto o jogo esta aberto (video, binds, roster e fase) */
 typedef struct {
     MenuKeyBinds binds;
     int fps_cap;
@@ -72,6 +75,7 @@ typedef struct {
     CharacterRoster roster;
 } AppConfig;
 
+/* Preenche os controles padrao (WASD + Q/setas + Shift + R + Espaco) */
 static void binds_init_default(MenuKeyBinds *b) {
     if (!b) return;
     b->move_forward  = KEY_W;
@@ -86,6 +90,7 @@ static void binds_init_default(MenuKeyBinds *b) {
     b->mouse_sens    = MOUSE_SENSITIVITY;
 }
 
+/* Inicializa configuracoes de video, roster de personagens e opcoes padrao */
 static void app_config_init(AppConfig *cfg) {
     if (!cfg) return;
     binds_init_default(&cfg->binds);
@@ -114,6 +119,7 @@ static const char *style_to_label(int style) {
     return (style == ASCII_STYLE_SOLID) ? "ESTILO 2: MICRO-ASCII" : "ESTILO 1: SOBREPOSTO";
 }
 
+/* Calcula o fator de densidade ASCII para o menu/showcase conforme a qualidade e tamanho da janela */
 static float calc_effective_density_scale(int quality, int sw, int sh) {
     float s;
     float wf = ((float)sw / 1280.0f < (float)sh / 720.0f)
@@ -138,6 +144,7 @@ static float calc_effective_density_scale(int quality, int sw, int sh) {
     return s;
 }
 
+/* Controle de janela borderless e limpeza de screenshots automaticos do Raylib (F12) */
 static int g_borderless_mode = 0;
 static int g_borderless_unfocused_shrunk = 0;
 static int g_f12_cleanup_frames = 0;
@@ -146,6 +153,7 @@ static int g_saved_win_y = 80;
 static int g_saved_win_w = 1280;
 static int g_saved_win_h = 720;
 
+/* Remove arquivos screenshotXXX.png que o Raylib grava sozinho quando aperta F12 */
 static void cleanup_raylib_screenshots(void) {
     char path[32];
     for (int i = 0; i <= 15; i++) {
@@ -179,7 +187,7 @@ static void toggle_borderless_window(void) {
             RestoreWindow();
         }
         SetWindowState(FLAG_WINDOW_UNDECORATED);
-        /* +1px de altura evita promoção WGL Exclusive Fullscreen que trava o Alt+Tab no Windows */
+        /* +1px de altura evita promocao WGL Exclusive Fullscreen que trava o Alt+Tab no Windows */
         SetWindowSize(mw, mh + 1);
         SetWindowPosition((int)mp.x, (int)mp.y);
         g_borderless_mode = 1;
@@ -194,6 +202,7 @@ static void toggle_borderless_window(void) {
     }
 }
 
+/* Mantem o cursor solto ao perder foco/Alt+Tab e ajusta a janela sem bordas quando desfocada */
 static int sync_window_focus_and_borderless(void) {
     int focused = IsWindowFocused();
     int sys_mod = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT) ||
@@ -234,6 +243,7 @@ static int sync_window_focus_and_borderless(void) {
     return win_active;
 }
 
+/* Aplica uma resolucao da lista, saindo do modo sem bordas/maximizado e centralizando no monitor */
 static void apply_window_resolution(int res_idx) {
     if (res_idx < 0 || res_idx >= RES_PRESET_COUNT) return;
     if (g_borderless_mode) {
@@ -264,11 +274,13 @@ static void apply_window_resolution(int res_idx) {
     }
 }
 
+/* Calcula largura minima de um botao para o texto caber com folga */
 static int calc_fit_w(const char *txt, int font_sz, int min_w, float sc) {
     int w = MeasureText(txt, font_sz) + (int)(26.0f * sc);
     return (w > min_w) ? w : min_w;
 }
 
+/* Converte o codigo de tecla do Raylib para texto legivel na tela de configuracoes */
 static const char *key_to_label(int key) {
     static const char *LETTERS[26] = {
         "A","B","C","D","E","F","G","H","I","J","K","L","M",
@@ -312,13 +324,7 @@ static const char *key_to_label(int key) {
     }
 }
 
-/* ============================================================================
- * LOGICA DO JOGO E INPUT COM KEYBINDS CUSTOMIZAVEIS
- * ============================================================================ */
-
-/* ============================================================================
- * REGISTRADORES DA BIBLIOTECA GRAFICA E FUNCOES AUXILIARES DO MENU / PARTIDA
- * ============================================================================ */
+/* --- Hooks do renderer e controle de jogo com keybinds customizaveis --- */
 
 /* Conecta os hooks do modulo map.c (chao, paredes especiais 'E'/'$' e minimapa)
  * dentro da biblioteca renderer, sem criar dependencia entre renderer e map.c. */
@@ -352,6 +358,7 @@ static void draw_sliding_minimap(const GameMap *map, const Player *player,
     renderer_draw_minimap(&mm_map, &mm_player, mm_sprites, mm_cnt);
 }
 
+/* Roda 1 frame em modo texto/headless para validar o renderer em testes automatizados */
 static int run_single_test_frame(void) {
     GameMap map;
     Player player;
@@ -387,6 +394,7 @@ static int run_single_test_frame(void) {
     return 0;
 }
 
+/* Processa mouse look, movimentacao, sprint, recarga, troca de arma e tiro usando as binds atuais */
 static void handle_custom_input(Player *p, const GameMap *map, const MenuKeyBinds *b,
                                 float dt, int *running, int *did_shoot,
                                 float *pitch_offset) {
@@ -403,6 +411,7 @@ static void handle_custom_input(Player *p, const GameMap *map, const MenuKeyBind
         }
     }
 
+    /* So aplica giro por mouse quando o cursor estiver travado na janela */
     if (IsCursorHidden()) {
         Vector2 md = GetMouseDelta();
         if (md.x != 0.0f) {
@@ -430,6 +439,7 @@ static void handle_custom_input(Player *p, const GameMap *map, const MenuKeyBind
     if (IsKeyDown(b->move_right)) str += 1.0f;
 
     if (fwd != 0.0f || str != 0.0f) {
+        /* Normaliza o vetor pra andar na diagonal na mesma velocidade */
         float mag = sqrtf(fwd * fwd + str * str);
         fwd /= mag;
         str /= mag;
@@ -460,9 +470,7 @@ static void handle_custom_input(Player *p, const GameMap *map, const MenuKeyBind
     (void)running;
 }
 
-/* ============================================================================
- * DESENHO DE UI AUTORAL (ARENA CYBER + PERSONAGEM + LOGO EM ASCII ULTRA-DENSO PURO)
- * ============================================================================ */
+/* --- Helpers matematicos e desenho de UI/showcase em ASCII --- */
 
 static unsigned char clamp_u8(float v) {
     if (v < 0.0f) return 0;
@@ -544,6 +552,7 @@ static int draw_chamfer_button(int x, int y, int w, int h, int bevel,
     return (hover && IsMouseButtonPressed(MOUSE_BUTTON_LEFT));
 }
 
+/* Botao retangular simples para submenus, setas e acoes rapidas */
 static int draw_small_button(int x, int y, int w, int h, const char *label,
                              int font_size, Color base_col, Color active_col) {
     Vector2 m = GetMousePosition();
@@ -577,6 +586,7 @@ typedef struct {
     float glyph_sz;
 } ShowcaseLayout;
 
+/* Calcula grade e posicao do boneco showcase a direita da tela */
 static ShowcaseLayout calc_showcase_layout(int sw, int sh, float sc, int page, int quality) {
     ShowcaseLayout L;
     float dscale = calc_effective_density_scale(quality, sw, sh);
@@ -611,7 +621,8 @@ static ShowcaseLayout calc_showcase_layout(int sw, int sh, float sc, int page, i
     return L;
 }
 
-/* Avalia geometria 2.5D continua de qualquer personagem ou skin no espaco canonico gx in [-34..34], gy in [0..86] */
+/* Avalia geometria 2.5D continua de qualquer personagem ou skin no espaco canonico gx in [-34..34], gy in [0..86].
+ * Se for skin customizada, delega o corpo para player_appearance_material; senao desenha a armadura do Fuzileiro. */
 static int showcase_character = PRESET_FUZILEIRO;
 static CharacterAppearance showcase_appearance;
 static char showcase_name[32] = "Fuzileiro";
@@ -892,6 +903,7 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
 
     ClearBackground((Color){5, 7, 11, 255});
 
+    /* Reaproveita o buffer em cache (~30 Hz) se janela, pagina, estilo e boneco nao mudaram */
     int bg_dirty = (bg_c_gw != bg_gw || bg_c_gh != bg_gh || bg_c_page != page ||
                     bg_c_sw != sw || bg_c_sh != sh || bg_c_solid != solid ||
                     fabsf(t - bg_c_t) >= 0.033f || bg_c_t < 0.0f);
@@ -973,6 +985,7 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
         int in_showcase_y = (page != MENU_PAGE_LOBBY && py_c >= (float)L.y0 && py_c <= L_y1);
         float sy = in_showcase_y ? ((py_c - (float)L.y0) * inv_L_h) * 86.0f : 0.0f;
 
+        /* Linha brilhante do horizonte, pulando celulas cobertas pelo personagem showcase */
         if (fabsf(yn - horizon) < 0.0080f) {
             for (int c = 0; c < bg_gw; c++) {
                 int cell_idx = r * bg_gw + c;
@@ -994,6 +1007,7 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
             continue;
         }
 
+        /* Metade superior: pilares industriais com faixa neon pulsante, brasas subindo e nevoa */
         if (yn < horizon) {
             float dy_h = horizon - yn;
             float row_glow_y = expf(-dy_h * 11.2f);
@@ -1171,6 +1185,7 @@ static void draw_cyber_arena_backdrop(Font font, int sw, int sh, float sc, float
     renderer_draw_ascii_buffer(bg_buf, bg_gw, bg_gh, bg_gw, 0.0f, 0.0f, (float)sw, (float)sh);
 }
 
+/* Mapa de bits 5x7 usado para montar as letras do logo SECTOR 404 */
 static const char *glyph_rows_5x7(char ch, int row) {
     static const char *A[7] = {".###.","##.##","##.##","#####","##.##","##.##","##.##"};
     static const char *S[7] = {".####","##...","##...",".###.","...##","...##","####."};
@@ -1220,6 +1235,7 @@ static void draw_dense_ascii_word(Font font, const char *word, int x, int y,
 
     if (grid_w <= LOGO_BUF_W && grid_h <= LOGO_BUF_H) {
         (void)font;
+        /* Cache separado para as duas palavras do logo (SECTOR no slot 0, 404 no slot 1) */
         static AsciiCell word_cache[2][LOGO_BUF_H * LOGO_BUF_W];
         static char wc_word[2][16] = {"", ""};
         static int wc_sub[2] = {-1, -1};
@@ -1460,6 +1476,7 @@ static void build_character_ascii_quad(int visual_id, const CharacterAppearance 
                 continue;
             }
 
+            /* Iluminacao direcional + especular + brilho de borda (rim) a partir da normal 2.5D */
             float nx = nx_grid[r][c];
             float ny = ny_grid[r][c];
             float nz = sqrtf(fmaxf(0.08f, 1.0f - nx * nx * 0.62f - ny * ny * 0.45f));
@@ -1487,6 +1504,7 @@ static void build_character_ascii_quad(int visual_id, const CharacterAppearance 
                 cr = 118.0f; cg = 136.0f; cb = 158.0f;
             }
 
+            /* Skins customizadas usam a paleta do modulo player e saem direto sem sombreado metalico */
             if (is_custom_skin && mat != 5) {
                 static const char *SKIN_RAMP = "#%8&BWM@";
                 CharacterColor color = player_get_material_color(mat);
@@ -1661,10 +1679,9 @@ static void draw_dense_character_showcase(Font font, int sw, int sh, float sc, f
              (Color){255, 205, 105, 255});
 }
 
-/* ============================================================================
- * SISTEMA DE MENU COM SUB-TELAS (PRINCIPAL, MULTIPLAYER, PERSONALIZAR, CONFIG)
- * ============================================================================ */
+/* --- Telas de menu, configuracoes e criador de personagem --- */
 
+/* Diminui a fonte ate o texto caber dentro de max_w sem cortar */
 static int fit_menu_font(const char *text, int base_sz, int min_sz, int max_w) {
     int sz = base_sz;
     if (!text || max_w <= 0) return min_sz;
@@ -1674,6 +1691,7 @@ static int fit_menu_font(const char *text, int base_sz, int min_sz, int max_w) {
     return sz;
 }
 
+/* Quebra o texto em ate max_lines linhas respeitando max_w e retorna a altura usada */
 static int draw_wrapped_text(const char *text, int x, int y, int max_w,
                              int font_sz, int line_gap, int max_lines, Color col) {
     if (!text || text[0] == '\0' || max_lines <= 0 || max_w <= 0) {
@@ -1744,6 +1762,7 @@ static int draw_wrapped_text(const char *text, int x, int y, int max_w,
     return row * font_sz + (row - 1) * line_gap;
 }
 
+/* Captura a proxima tecla apertada para rebind, bloqueando ESC e atalhos globais (E, F2..F12) */
 static void update_bind_capture(AppConfig *cfg, int *listening_bind) {
     if (!cfg || !listening_bind || *listening_bind < 0) {
         return;
@@ -1773,6 +1792,8 @@ static void update_bind_capture(AppConfig *cfg, int *listening_bind) {
     }
 }
 
+/* Painel compartilhado entre menu principal (alinhado a esquerda) e pause (centralizado).
+ * Retorna 1 quando o usuario clica no botao de voltar. */
 static int draw_settings_panel(AppConfig *cfg, int panel_x, int panel_y,
                                int max_h, int sw, float sc, int pad_x,
                                int center_x, int *settings_tab,
@@ -1974,6 +1995,7 @@ static int draw_settings_panel(AppConfig *cfg, int panel_x, int panel_y,
             if (cfg->binds.mouse_sens < 0.0100f) cfg->binds.mouse_sens += 0.0003f;
         }
     } else {
+        /* Aba 1: lista dos 9 keybinds remapeaveis (clique na tecla para aguardar nova tecla) */
         const char *bind_labels[9] = {
             "Mover Frente", "Mover Tras", "Mover Esquerda", "Mover Direita",
             "Girar Esquerda", "Girar Direita", "Correr (Sprint)",
@@ -2028,7 +2050,8 @@ static int draw_settings_panel(AppConfig *cfg, int panel_x, int panel_y,
     return clicked_back;
 }
 
-/* Criador usa apenas dados do modulo player; nenhuma regra visual no renderer. */
+/* Criador usa apenas dados do modulo player; nenhuma regra visual no renderer.
+ * Retorna 1 para salvar, -1 para cancelar e 0 enquanto o usuario ainda edita. */
 static int draw_character_creator(CharacterClass *draft, int x, int y, int w, int h,
                                    float sc, int *editing, const char *error) {
     int pad = (int)(18 * sc), row = h / 11;
@@ -2040,6 +2063,7 @@ static int draw_character_creator(CharacterClass *draft, int x, int y, int w, in
     Rectangle name_box = {(float)(x + pad), (float)(y + row), (float)(w - 2 * pad), (float)bh};
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) *editing = CheckCollisionPointRec(GetMousePosition(), name_box);
     if (*editing) {
+        /* Aceita texto UTF-8 ate 24 bytes e trata backspace por codepoint para acentos */
         int ch;
         while ((ch = GetCharPressed()) > 0) {
             size_t len = strlen(draft->name);
@@ -2153,6 +2177,7 @@ static void draw_level_minimap_preview(int box_x, int box_y, int box_size,
     }
 }
 
+/* Copia string de IP garantindo terminador nulo mesmo se truncar */
 static void copy_ip_str(char *dst, size_t dst_size, const char *src) {
     if (!dst || dst_size == 0) return;
     size_t j = 0;
@@ -2165,6 +2190,7 @@ static void copy_ip_str(char *dst, size_t dst_size, const char *src) {
     dst[j] = '\0';
 }
 
+/* Fecha o socket de broadcast/descoberta LAN e limpa a lista de salas */
 static void stop_lan_discovery(int *disc_active, unsigned long long *disc_sock, int *disc_count) {
     if (disc_active && *disc_active) {
         net_discovery_close(disc_sock);
@@ -2175,6 +2201,7 @@ static void stop_lan_discovery(int *disc_active, unsigned long long *disc_sock, 
     }
 }
 
+/* Envia pacote de saida e fecha o socket do lobby antes de voltar ao menu */
 static void leave_mp_lobby(int *lobby_active, NetContext *lobby_net) {
     if (lobby_active && *lobby_active) {
         net_send_lobby_leave(lobby_net);
@@ -2183,6 +2210,8 @@ static void leave_mp_lobby(int *lobby_active, NetContext *lobby_net) {
     }
 }
 
+/* Loop das telas de menu (principal, singleplayer, multiplayer LAN/Online, lobby, skins e config).
+ * Retorna: 1=Singleplayer, 2=Host MP, 3=Client MP, 4=Sair. */
 static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                            int *port_out, NetContext *net_out, const char *status_msg) {
     const char *main_items[5] = {
@@ -2302,6 +2331,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             snprintf(my_pkt.player_name, sizeof(my_pkt.player_name), "%s", my_cls.name);
             snprintf(my_pkt.map_name, sizeof(my_pkt.map_name), "%s", cur_lvl->name);
 
+            /* No modo Online (Relay), acompanha a conexao TLS/WebSocket antes de trocar pacotes */
             int is_relay = (lobby_net.transport == NET_TRANSPORT_RELAY);
             char relay_err[128] = "";
             NetRelayStatus relay_st = is_relay
@@ -2318,6 +2348,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                 continue;
             }
 
+            /* Host responde probes de sala e envia roster a cada 80ms; cliente manda seu estado e detecta queda */
             int peer_left = 0;
             int got_lobby = net_poll_lobby(&lobby_net, (is_host && !is_relay) ? &my_pkt : NULL, &peer_left);
             if (got_lobby) {
@@ -2434,6 +2465,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                 return 1;
             }
         } else if (page == MENU_PAGE_MULTIPLAYER && mp_editing_ip) {
+            /* Campo de IP LAN aceita apenas digitos e pontos */
             int ch = GetCharPressed();
             while (ch > 0) {
                 size_t len = strlen(ip_buf);
@@ -2452,6 +2484,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                 mp_editing_ip = 0;
             }
         } else if (page == MENU_PAGE_MULTIPLAYER && mp_editing_code) {
+            /* Campo de codigo da sala online aceita 3 a 8 caracteres alfanumericos (converte pra maiuscula) */
             int ch = GetCharPressed();
             while (ch > 0) {
                 size_t len = strlen(room_code_buf);
@@ -2474,7 +2507,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             }
         }
 
-        /* ======================== DESENHO DO FRAME ======================== */
+        /* --- Renderizacao do frame do menu --- */
         renderer_set_visual_style(cfg->ascii_style);
         BeginDrawing();
         CharacterClass preview = (page == MENU_PAGE_CREATE)
@@ -2678,6 +2711,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
             int half_bw = (pw - pad_x * 2 - cgap) / 2;
             int cbf = fit_menu_font("CRIAR SALA ONLINE", btn_font - 3, 10, half_bw - 18);
 
+            /* Botoes lado a lado: hospedar na rede local (UDP) ou no servidor relay online */
             if (draw_small_button(left_x + pad_x, host_btn_y, half_bw, host_btn_h,
                                   "CRIAR SALA LAN", cbf,
                                   (Color){175, 76, 26, 255}, (Color){228, 104, 38, 255})) {
@@ -3235,6 +3269,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                         net_host_update_local_slot(&lobby_net, local_cls.name, cfg->selected_character,
                                                    local_cls.visual_id, &local_cls.appearance,
                                                    cfg->mp_game_mode, cfg->selected_level);
+                        /* Dispara o sinal de inicio varias vezes pra garantir entrega em UDP sem perda */
                         for (int k = 0; k < 6; k++) {
                             net_broadcast_lobby_roster(&lobby_net, cfg->selected_level, mp_lvl->name, 1);
                         }
@@ -3264,6 +3299,7 @@ static int run_menu_screen(AppConfig *cfg, char *ip_buf, size_t ip_size,
                 }
             }
         } else if (page == MENU_PAGE_CUSTOMIZE) {
+            /* Lista paginada (4 por pagina) das classes pre-definidas e skins criadas */
             int pw = (int)(490.0f * sc);
             int ph = footer_top - content_y;
             int row_h = (ph - (int)(155 * sc)) / 5;
@@ -3532,6 +3568,7 @@ static void compute_mp_spawn_points(const GameMap *map, float base_x, float base
     }
 }
 
+/* Faz raymarch simples a cada 0.08 unidades para conferir se nao ha parede entre dois jogadores */
 static int mp_has_line_of_sight(const GameMap *map, float x0, float y0, float x1, float y1) {
     float dx = x1 - x0;
     float dy = y1 - y0;
@@ -3755,6 +3792,7 @@ static void draw_player_damage_overlay(int sw, int sh, float hurt_timer, int las
     }
 }
 
+/* Moldura pulsante de fogo e chamas ASCII no rodape do viewport enquanto o jogador queima */
 static void draw_player_burning_overlay(int sw, int sh) {
     int hud_h = (int)((float)sh * 0.145f);
     if (hud_h < 82) hud_h = 82;
@@ -3826,6 +3864,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
     Player player;
     NetContext net;
 
+    /* Reaproveita a conexao ja aberta no lobby (ou inicia uma nova se chamado direto) */
     if (existing_net && existing_net->initialized && mode != NET_MODE_OFFLINE) {
         net = *existing_net;
         existing_net->relay_handle = 0;
@@ -3842,6 +3881,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         }
         net.remote_level = level_idx;
     }
+    /* Zera acumuladores de dano e kills PvP antes de anunciar inicio da partida */
     net.applied_pvp_dmg = 0;
     memset(net.outgoing_pvp_dmg, 0, sizeof(net.outgoing_pvp_dmg));
     memset(net.killed_by_counts, 0, sizeof(net.killed_by_counts));
@@ -3882,6 +3922,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
 
     CharacterClass selected_class = player_roster_get(&cfg->roster, cfg->selected_character);
     int restored_rejoin = 0;
+    /* Se o cliente caiu e voltou para a mesma sala, restaura skin, posicao, vida e score salvos no host */
     if (mode == NET_MODE_CLIENT && net.has_restore_state && net.restore_state.valid) {
         const NetSavedPlayerState *sv = &net.restore_state;
         int total_r = player_roster_count(&cfg->roster);
@@ -3974,6 +4015,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         int win_active = sync_window_focus_and_borderless();
         int alt_down = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
 
+        /* Pausa sozinho e solta o mouse se o jogador trocar de janela */
         if (!IsWindowFocused() && !paused) {
             paused = 1;
             pause_subpage = 0;
@@ -3987,6 +4029,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
         float sc = fminf((float)sw / 1280.0f, (float)sh / 720.0f);
         if (sc < 0.48f) sc = 0.48f;
 
+        /* Limita dt a 0.1s para evitar saltos de colisao caso o frame trave */
         float dt = GetFrameTime();
         if (dt > 0.1f) {
             dt = 0.1f;
@@ -4035,6 +4078,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
 
         int did_shoot = 0;
         if (!paused) {
+            /* TAB solta ou trava o mouse; V alterna camera 1a/3a pessoa */
             if (IsKeyPressed(KEY_TAB) && !alt_down) {
                 mouse_locked = !mouse_locked;
                 if (mouse_locked && win_active) {
@@ -4066,6 +4110,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
 
         if (!paused) {
             if (did_shoot) {
+                /* Em PvP checa acerto contra jogadores; em Co-op/Singleplayer acerta inimigos do mapa */
                 if (is_pvp) {
                     if (check_pvp_player_hit(&map, &player, &net, weapons, my_slot)) {
                         pvp_hit_timer = 0.22f;
@@ -4081,6 +4126,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
                 enemies_update(&enemies, &map, &player, dt);
                 int alive = map_set_enemies_alive(enemies_required_alive(&enemies));
                 if (!is_multiplayer) {
+                    /* No singleplayer, zerar inimigos libera o portal 'E' e avanca de fase ao entrar nele */
                     if (map_has_exit_tile(&map) && alive == 0) {
                         wave_timer = 3.0f;
                     }
@@ -4132,6 +4178,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
             }
             is_pvp = (net.game_mode == NET_GAME_PVP);
 
+            /* Aplica apenas o incremento de dano PvP novo recebido pelo host desde o ultimo frame */
             if (running && is_pvp && net.total_dmg_to_slot[my_slot] > net.applied_pvp_dmg) {
                 int delta = net.total_dmg_to_slot[my_slot] - net.applied_pvp_dmg;
                 net.applied_pvp_dmg = net.total_dmg_to_slot[my_slot];
@@ -4168,6 +4215,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
                 compute_mp_spawn_points(&map, base_sx, base_sy, net.game_mode, mp_sx, mp_sy, mp_sang);
                 int pick = my_slot;
                 if (is_pvp) {
+                    /* Escolhe o ponto de respawn mais longe dos outros jogadores vivos */
                     float best_r_d2 = -1.0f;
                     for (int cand = 0; cand < NET_MAX_PLAYERS; cand++) {
                         float min_d2 = 1e9f;
@@ -4196,6 +4244,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
             }
         }
 
+        /* Monta a lista de sprites dos jogadores remotos (com cor de time positiva no Co-op ou negativa no PvP) */
         SpriteEntity mp_sprites[NET_MAX_PLAYERS];
         int mp_count = 0;
         SpriteEntity mm_markers[MAX_SPRITES];
@@ -4231,6 +4280,7 @@ static void run_game_session(NetMode mode, const char *host_ip, int port,
             }
         }
 
+        /* Ordem fixa de desenho no grid ASCII: paredes -> inimigos -> remotos -> armadilhas -> habilidades -> minimapa -> arma -> HUD */
         const RendererApi *r_api = renderer_get_api();
         renderer_set_visual_style(cfg->ascii_style);
         renderer_set_ascii_density(cfg->ascii_quality, sw, sh);

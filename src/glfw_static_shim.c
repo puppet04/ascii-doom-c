@@ -1,14 +1,14 @@
 /*
  * Ponte de linkagem estatica para MSYS2 UCRT64 (libraylib.a + libglfw3.a).
- * O pacote libraylib.a do MSYS2 referencia os simbolos __imp_glfw* (dllimport),
- * enquanto libglfw3.a exporta os simbolos estaticos glfw*. Este arquivo mapeia
- * cada __imp_glfw* diretamente para a funcao estatica embutida no .exe,
- * eliminando qualquer dependencia de libraylib.dll ou glfw3.dll.
+ * A libraylib.a do MSYS2 pede os simbolos __imp_glfw* (como se fossem de DLL),
+ * mas a libglfw3.a entrega os simbolos estaticos glfw*. Aqui a gente liga cada
+ * __imp_glfw* direto na funcao estatica pra gerar um .exe portatil sem DLLs.
  */
 #define GLFW_STATIC_IMP(fn) \
     extern void fn(void); \
     void (*const __imp_##fn)(void) = fn
 
+/* Cada linha cria um ponteiro constante __imp_ para a funcao real da GLFW */
 GLFW_STATIC_IMP(glfwCreateStandardCursor);
 GLFW_STATIC_IMP(glfwCreateWindow);
 GLFW_STATIC_IMP(glfwDefaultWindowHints);

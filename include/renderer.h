@@ -41,7 +41,8 @@ void renderer_set_floor_hook(RendererFloorHookFn hook);
 void renderer_set_wall_hook(RendererWallStyleHookFn hook);
 void renderer_set_minimap_hook(RendererMinimapHookFn hook);
 
-/* Desenha qualquer grade AsciiCell 2D arbitaria em 1 draw call via GPU Shader (ex.: logos, fundo, HUD). */
+/* Desenha qualquer grade AsciiCell 2D arbitaria em 1 draw call via GPU Shader (ex.: logos, fundo, HUD).
+ * row_stride e o numero de celulas por linha no buffer de origem (>= width). */
 void renderer_draw_ascii_buffer(const AsciiCell *cells, int width, int height,
                                 int row_stride, float dst_x, float dst_y,
                                 float dst_w, float dst_h);
@@ -63,6 +64,7 @@ typedef enum {
 
 /* Seleciona o estilo visual de renderizacao (0=Estilo 1 Sobreposto, 1=Estilo 2 Micro-ASCII). */
 void renderer_set_visual_style(int style_mode);
+/* Retorna o estilo visual ativo no momento (0 = classico sobreposto, 1 = micro-ASCII). */
 int renderer_get_visual_style(void);
 
 /* Ajusta dinamicamente a densidade da malha ASCII conforme qualidade (0..4) e resolucao da janela. */

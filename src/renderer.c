@@ -1,3 +1,5 @@
+/* renderer.c - raycaster 2.5D em ASCII, sprites com z-buffer, armas, HUD e renderizacao GPU */
+
 #include "renderer.h"
 #include "embedded_assets.h"
 #include "raylib.h"
@@ -27,6 +29,7 @@
 #define EYE_FLOOR_H 0.50f
 #define EYE_CEIL_H  1.18f
 
+/* Grade ASCII atual, buffers de profundidade por coluna/celula e fonte da Raylib */
 static int r_width = 320;
 static int r_height = 160;
 static int current_quality_mode = ASCII_QUALITY_AUTO;
@@ -84,11 +87,8 @@ static RendererMinimapHookFn g_minimap_hook = NULL;
 static const char *DENSE_RAMP = "=-+*xX#%8&BWM@";
 static const int DENSE_RAMP_LEN = 14;
 
-/*
- * Shaders GLSL 330 especializados por estilo (menor pressao de registradores em iGPUs antigas):
- * - ASCII_FS_MICRO_CODE  : Estilo 2 (Micro-ASCII puro 1.0x, zero loop/branch, zero fundo pintado)
- * - ASCII_FS_CLASSIC_CODE: Estilo 1 (Sobreposto 1.72x com vizinhanca 2x2)
- */
+/* --- Shaders GLSL 330 usados na GPU (um por estilo visual) --- */
+/* Estilo 2 (Micro-ASCII): 1 celula = 1 glifo 1.0x sem loop, lendo cor em RGB e indice do caractere no alpha */
 static const char *ASCII_FS_MICRO_CODE =
     "#version 330\n"
     "in vec2 fragTexCoord;\n"
@@ -116,6 +116,7 @@ static const char *ASCII_FS_MICRO_CODE =
     "    finalColor = vec4(cell.rgb * fragColor.rgb, mask * fragColor.a);\n"
     "}\n";
 
+/* Estilo 1 (Classico): mistura os 4 vizinhos 2x2 com sobreposicao de 1.72x pra deixar os glifos maiores e mais cheios */
 static const char *ASCII_FS_CLASSIC_CODE =
     "#version 330\n"
     "in vec2 fragTexCoord;\n"
@@ -162,11 +163,13 @@ static const char *ASCII_FS_CLASSIC_CODE =
     "    finalColor = vec4(outRgb * fragColor.rgb, outA * fragColor.a);\n"
     "}\n";
 
+/* Converte a cor do material do personagem para o tipo Color da Raylib */
 static Color character_color(int material) {
     CharacterColor c = player_get_material_color(material);
     return (Color){c.r, c.g, c.b, c.a};
 }
 
+/* Helpers inline para montar, limitar e escalar cores sem estourar 0..255 */
 static inline AsciiColor make_color(unsigned char r, unsigned char g, unsigned char b) {
     AsciiColor c = {r, g, b};
     return c;
@@ -196,6 +199,7 @@ static inline int fast_floor_i(float v) {
     return (v < (float)i) ? (i - 1) : i;
 }
 
+/* Onda triangular rapida em [-1, +1] usada para gerar textura procedural sem seno/cosseno */
 static inline float fast_tri_wave(float v) {
     float f = v - (float)fast_floor_i(v);
     return (f < 0.5f) ? (4.0f * f - 1.0f) : (3.0f - 4.0f * f);
@@ -212,6 +216,7 @@ static inline float bayer4x4(int x, int y) {
     return BAYER_OFF[y & 3][x & 3];
 }
 
+/* Escolhe um caractere da rampa ASCII somando o dithering Bayer pra suavizar degrades */
 static inline char sample_dense_ramp(float lum, int x, int y) {
     float v = clamp_f01(lum + bayer4x4(x, y));
     int idx = (int)(v * (float)(DENSE_RAMP_LEN - 1) + 0.5f);
@@ -220,6 +225,7 @@ static inline char sample_dense_ramp(float lum, int x, int y) {
     return DENSE_RAMP[idx];
 }
 
+/* Alterna entre o estilo classico sobreposto e o micro-ASCII compacto */
 void renderer_set_visual_style(int style_mode) {
     current_visual_style = (style_mode == ASCII_STYLE_SOLID)
         ? ASCII_STYLE_SOLID
@@ -230,6 +236,7 @@ int renderer_get_visual_style(void) {
     return current_visual_style;
 }
 
+/* Grava uma celula direto na grade (usado por efeitos de HUD/arma sem teste de profundidade) */
 static void set_cell(int x, int y, char ch, AsciiColor fg, AsciiColor bg) {
     if (x < 0 || x >= r_width || y < 0 || y >= r_height) {
         return;
@@ -239,6 +246,7 @@ static void set_cell(int x, int y, char ch, AsciiColor fg, AsciiColor bg) {
     screen_grid[y][x].bg = bg;
 }
 
+/* So grava a celula se estiver na frente da parede (z_buffer) e de outro sprite (cell_depth) */
 static void set_cell_if_closer(int x, int y, float depth, char ch, AsciiColor fg, AsciiColor bg) {
     if (x < 0 || x >= r_width || y < 0 || y >= r_height) {
         return;
@@ -252,6 +260,7 @@ static void set_cell_if_closer(int x, int y, float depth, char ch, AsciiColor fg
     screen_grid[y][x].bg = bg;
 }
 
+/* Texto curto mostrado no HUD para a densidade atual */
 static const char *quality_short_label(int quality_mode) {
     switch (quality_mode) {
         case ASCII_QUALITY_LEVE:  return "BAIXO";
@@ -262,6 +271,7 @@ static const char *quality_short_label(int quality_mode) {
     }
 }
 
+/* Registra callbacks externos para customizar piso, paredes e minimapa */
 void renderer_set_floor_hook(RendererFloorHookFn hook) {
     g_floor_hook = hook;
 }
@@ -274,6 +284,7 @@ void renderer_set_minimap_hook(RendererMinimapHookFn hook) {
     g_minimap_hook = hook;
 }
 
+/* No modo AUTO, acompanha a media do tempo de frame para reduzir ou restaurar a resolucao da grade */
 void renderer_update_auto_perf(float frame_dt) {
     if (current_quality_mode != ASCII_QUALITY_AUTO) {
         auto_perf_scale = 1.0f;
@@ -315,6 +326,7 @@ void renderer_update_auto_perf(float frame_dt) {
     }
 }
 
+/* Define r_width e r_height conforme a qualidade escolhida, o estilo visual e o tamanho da janela */
 void renderer_set_ascii_density(int quality_mode, int screen_w, int screen_h) {
     if (quality_mode < ASCII_QUALITY_AUTO || quality_mode > ASCII_QUALITY_ULTRA) {
         quality_mode = ASCII_QUALITY_AUTO;
@@ -388,6 +400,7 @@ void renderer_set_ascii_density(int quality_mode, int screen_w, int screen_h) {
     r_height = target_h;
 }
 
+/* Mantem o angulo no intervalo [-PI, +PI] pra calcular direcoes relativas sem salto */
 static float wrap_angle_signed(float angle) {
     while (angle > PI_F) {
         angle -= 2.0f * PI_F;
@@ -398,6 +411,7 @@ static float wrap_angle_signed(float angle) {
     return angle;
 }
 
+/* Cor base de cada caractere de parede do mapa antes da neblina e iluminacao */
 static AsciiColor get_tile_base_color(char tile) {
     switch (tile) {
         case '#': return make_color(228, 72, 56);   /* Tijolo/aco vermelho DOOM */
@@ -407,6 +421,7 @@ static AsciiColor get_tile_base_color(char tile) {
     }
 }
 
+/* Ajusta inclinacao vertical (pitch) e alterna a camera entre 1a e 3a pessoa */
 void renderer_set_camera_view(float pitch_offset, int third_person) {
     if (pitch_offset < -62.0f) pitch_offset = -62.0f;
     if (pitch_offset > 62.0f) pitch_offset = 62.0f;
@@ -479,6 +494,7 @@ static void gpu_init_resources(void) {
     }
 }
 
+/* Libera shaders e texturas da GPU ao encerrar o jogo */
 static void gpu_shutdown_resources(void) {
     if (IsShaderValid(gpu_shader_micro)) {
         UnloadShader(gpu_shader_micro);
@@ -505,6 +521,7 @@ static void gpu_shutdown_resources(void) {
     gpu_ready = 0;
 }
 
+/* Abre a janela Raylib, tenta carregar o icone (do disco ou embutido) e prepara fonte e GPU */
 void renderer_init(void) {
     SetConfigFlags(FLAG_WINDOW_RESIZABLE);
     InitWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "SECTOR 404 - 165 FPS");
@@ -541,6 +558,7 @@ void renderer_init(void) {
     gpu_init_resources();
 }
 
+/* Descarrega recursos da GPU, reabilita o cursor se estiver preso e fecha a janela */
 void renderer_close(void) {
     if (IsWindowReady()) {
         gpu_shutdown_resources();
@@ -552,6 +570,8 @@ void renderer_close(void) {
     font_loaded = 0;
 }
 
+/* Empacota cada celula AsciiCell em 32 bits (RGB = cor, A = indice do glifo - 32).
+ * No modo solido aplica uma curva gamma via LUT pra evitar letras apagadas sem fundo. */
 static void pack_ascii_to_u32(const AsciiCell *cells, int width, int height,
                               int row_stride, int solid, unsigned int *dst32) {
     static unsigned char solid_boost_lut[256];
@@ -602,6 +622,7 @@ static void pack_ascii_to_u32(const AsciiCell *cells, int width, int height,
     }
 }
 
+/* Desenha a textura de dados da grade aplicando o shader correspondente ao estilo visual */
 static void draw_gpu_grid_tex(Texture2D tex, int tex_w, int tex_h,
                               int width, int height, int solid,
                               float dst_x, float dst_y, float dst_w, float dst_h) {
@@ -645,6 +666,7 @@ void renderer_draw_ascii_buffer(const AsciiCell *cells, int width, int height,
 
         Texture2D target_tex;
         int tex_w, tex_h;
+        /* Usa um slot novo do ring-buffer (UI menor ou cena 3D) pra GPU nao travar esperando o frame anterior */
         if (width <= GPU_UI_W && height <= GPU_UI_H) {
             target_tex = gpu_ui_tex[gpu_ui_slot];
             gpu_ui_slot = (gpu_ui_slot + 1) % GPU_UI_SLOTS;
@@ -687,6 +709,7 @@ void renderer_draw_ascii_buffer(const AsciiCell *cells, int width, int height,
     }
 }
 
+/* Limpa a grade ASCII e reseta z_buffer e cell_depth copiando linhas pre-preenchidas */
 void renderer_clear(void) {
     static AsciiCell empty_row[MAX_R_WIDTH];
     static float max_depth_row[MAX_R_WIDTH];
@@ -715,13 +738,12 @@ void renderer_clear(void) {
 }
 
 /*
- * Renderiza o cenario 3D completo na grade ASCII (paredes, teto e chao) usando
- * arquitetura em 2 passes otimizada para cache L1:
+ * Renderiza o cenario 3D completo na grade ASCII (paredes, teto e chao) em 2 passes:
  *   - Passe 1 (por coluna x): lanca r_width raios via DDA (Digital Differential Analyzer),
  *     corrige distorcao olho-de-peixe (perp_dist = raw_dist * cos), preenche z_buffer[x]
- *     para oclusao posterior dos sprites e rasteriza a faixa vertical da parede atingida.
- *   - Passe 2 (por linha y): desenha teto e chao sequencialmente em ordem de linha,
- *     reaproveitando col_ray_dx/dy/inv_cos e consultando g_floor_hook (armadilhas/kits).
+ *     para oclusao dos sprites e desenha a faixa vertical da parede atingida.
+ *   - Passe 2 (por linha y): desenha teto e chao na ordem das linhas (melhor pra cache L1),
+ *     reaproveitando os passos da coluna e consultando g_floor_hook (armadilhas/kits/saida).
  */
 void renderer_draw_walls(const GameMap *map, const Player *player) {
     if (!map || !player) {
@@ -729,6 +751,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
     }
     cam_view_map = map;
 
+    /* Suaviza o balanco de caminhada ao comecar e parar de andar */
     float d_bob = fabsf(player->bob_phase - prev_bob_phase);
     prev_bob_phase = player->bob_phase;
     if (d_bob > 0.0005f) {
@@ -743,6 +766,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
     cam_view_y = player->y;
     cam_view_angle = player->angle;
 
+    /* Em 3a pessoa, recua a camera ate 1.48 unidades parando com margem antes de bater em parede */
     if (cam_third_person) {
         float raw_bx = -cosf(player->angle) - sinf(player->angle) * 0.19f;
         float raw_by = -sinf(player->angle) + cosf(player->angle) * 0.19f;
@@ -803,6 +827,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
     static float base_ceil_dist[MAX_R_HEIGHT];
     static int col_draw_start[MAX_R_WIDTH];
 
+    /* Pre-calcula a distancia base de teto e chao para cada linha Y */
     for (int y = 0; y < r_height; y++) {
         float cy = (float)y + 0.5f;
         float pc = horizon_y - cy;
@@ -816,7 +841,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
     const float inv_13_5 = 1.0f / 13.5f;
     const float inv_13_0 = 1.0f / 13.0f;
 
-    /* PASSE 1: Raycasting DDA por coluna e rasterizacao especializada das paredes */
+    /* PASSE 1: Raycasting DDA por coluna e desenho vertical da parede atingida */
     for (int x = 0; x < r_width; x++) {
         float r_c_lut = rel_cos_lut[x];
         float r_s_lut = rel_sin_lut[x];
@@ -826,6 +851,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
         int map_x = fast_floor_i(cam_view_x);
         int map_y = fast_floor_i(cam_view_y);
 
+        /* Passos do DDA: quanto o raio anda para cruzar 1 celula inteira em X ou Y */
         float delta_dist_x = (fabsf(ray_dir_x) < 1e-6f) ? 1e30f : fabsf(1.0f / ray_dir_x);
         float delta_dist_y = (fabsf(ray_dir_y) < 1e-6f) ? 1e30f : fabsf(1.0f / ray_dir_y);
 
@@ -852,6 +878,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
         int side = 0;
         int steps = 0;
 
+        /* Avanca o raio celula por celula na grade ate achar uma parede (limite de 64 passos) */
         while (!hit && steps < 64) {
             if (side_dist_x < side_dist_y) {
                 side_dist_x += delta_dist_x;
@@ -875,6 +902,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
                                    : (side_dist_y - delta_dist_y);
         }
 
+        /* Corrige efeito olho-de-peixe multiplicando pelo cosseno e salva no z_buffer da coluna */
         float cos_corr = (r_c_lut < 0.25f) ? 0.25f : r_c_lut;
         float inv_cos = floor_rel_inv_cos[x];
 
@@ -884,12 +912,14 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
 
         z_buffer[x] = perp_dist;
 
+        /* Coordenada horizontal U [0..1) na face da parede; quinas recebem '|' */
         float u = (side == 0)
             ? (cam_view_y + raw_dist * ray_dir_y)
             : (cam_view_x + raw_dist * ray_dir_x);
         u -= (float)fast_floor_i(u);
         int is_block_edge = (u < 0.025f || u > 0.975f);
 
+        /* Projeta topo e base da coluna e guarda os limites pra pular pixels cobertos no Passe 2 */
         float floor_proj = (EYE_FLOOR_H * (float)r_height) / perp_dist;
         float ceil_proj = (EYE_CEIL_H * (float)r_height) / perp_dist;
         int raw_start = fast_floor_i(horizon_y - ceil_proj + 0.5f);
@@ -905,6 +935,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
         col_draw_start[x] = draw_start;
         floor_col_draw_end[x] = draw_end;
 
+        /* Cor base do bloco, hook de estilo (ex: saida E pulsante) e escurecimento por lado/distancia */
         char tile = hit ? map_get_tile(map, map_x, map_y) : '#';
         AsciiColor base_wall = get_tile_base_color(tile);
         float fog_dist = perp_dist;
@@ -922,7 +953,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
         const float b_c = (float)base_wall.b;
         float v_step = ((float)(draw_start - raw_start) + 0.5f) * inv_lh;
 
-        /* Iça o switch do material para fora do laco vertical da parede + incremento de v */
+        /* Escolhe o desenho da textura fora do loop vertical Y pra evitar ifs por pixel */
         if (is_block_edge && fog_dist < 10.0f) {
             float v = v_step;
             for (int y = draw_start; y <= draw_end; y++, v += inv_lh) {
@@ -935,6 +966,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
                 cell_depth[y][x] = perp_dist;
             }
         } else if (tile == '#') {
+            /* Tijolos alternados com variacao deterministica de brilho por bloco */
             const float ux_base = u * 3.0f;
             const unsigned map_h = (unsigned)(map_x * 31u + map_y * 17u);
             float v = v_step;
@@ -963,6 +995,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
                 cell_depth[y][x] = perp_dist;
             }
         } else if (tile == '@') {
+            /* Painel tecnologico azul com cruz central de conduite brilhante */
             float at_conduit_mod = 0.85f + 0.15f * cosf((u - 0.5f) * 8.0f);
             int at_in_u_border = (u < 0.07f || u > 0.93f);
             int at_in_u_conduit = (fabsf(u - 0.5f) < 0.06f);
@@ -989,6 +1022,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
                 cell_depth[y][x] = perp_dist;
             }
         } else if (tile == '%') {
+            /* Coluna organica/bio-reator com nervuras verticais */
             float rib_mod = u * 4.0f;
             rib_mod -= (float)(int)rib_mod;
             int bio_in_rib = (fabsf(rib_mod - 0.5f) < 0.14f);
@@ -1012,6 +1046,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
                 cell_depth[y][x] = perp_dist;
             }
         } else {
+            /* Listras diagonais industriais para paredes genericas ou porta de saida */
             const float u3 = u * 3.0f;
             float v = v_step;
             for (int y = draw_start; y <= draw_end; y++, v += inv_lh) {
@@ -1029,7 +1064,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
         }
     }
 
-    /* PASSE 2A: Floor-casting de Teto em ordem de linha (acesso sequencial em L1) */
+    /* PASSE 2A: Desenha o teto linha por linha com vigas nas bordas e luminarias centrais */
     int ceil_lim = (int)ceilf(horizon_y);
     if (ceil_lim < 0) ceil_lim = 0;
     if (ceil_lim > r_height) ceil_lim = r_height;
@@ -1074,7 +1109,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
         }
     }
 
-    /* PASSE 2B: Floor-casting de Chao em ordem de linha (acesso sequencial em L1) */
+    /* PASSE 2B: Desenha o chao linha por linha (xadrez metalico com rebites e emendas) */
     int floor_begin = fast_floor_i(horizon_y);
     if (floor_begin < 0) floor_begin = 0;
     if (floor_begin > r_height) floor_begin = r_height;
@@ -1100,7 +1135,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
             float fu = wx - (float)floor_mx;
             float fv = wy - (float)floor_my;
 
-            /* Fast-path: pula chamada indireta do hook em 98% do piso comum ('.' ou ' ') */
+            /* Pula a chamada do hook na maior parte do mapa quando o tile e piso comum ('.' ou ' ') */
             if (g_floor_hook && floor_mx >= 0 && floor_mx < map->width &&
                 floor_my >= 0 && floor_my < map->height) {
                 char ft = map->tiles[floor_my][floor_mx];
@@ -1144,6 +1179,7 @@ void renderer_draw_walls(const GameMap *map, const Player *player) {
     }
 }
 
+/* Projeta e desenha sprites de inimigos, aliados/rivais e do proprio jogador (3a pessoa) usando z_buffer e cell_depth */
 void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, int count) {
     if (!player) {
         return;
@@ -1162,6 +1198,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
     int total_count = 0;
     const float max_d2 = MAX_DEPTH * MAX_DEPTH;
 
+    /* Coleta sprites ativos dentro do alcance visivel */
     if (sprites && count > 0) {
         int limit = (count > MAX_SPRITES) ? MAX_SPRITES : count;
         for (int i = 0; i < limit; i++) {
@@ -1180,6 +1217,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
         }
     }
 
+    /* Na camera em 3a pessoa, injeta um sprite do proprio jogador na posicao real */
     if (cam_third_person) {
         float dx = player->x - vx;
         float dy = player->y - vy;
@@ -1204,6 +1242,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
         return;
     }
 
+    /* Ordena do mais distante para o mais proximo para composicao correta com cell_depth */
     for (int i = 0; i < total_count - 1; i++) {
         for (int j = i + 1; j < total_count; j++) {
             if (dists[i] < dists[j]) {
@@ -1231,6 +1270,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
             continue;
         }
 
+        /* Animacao procedural: respiracao quando parado ou passada/balanco quando caminhando */
         int is_walking = (is_self && walk_amp > 0.02f);
         float amp = is_walking ? walk_amp : 0.0f;
         float phase = is_walking
@@ -1263,6 +1303,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
             continue;
         }
 
+        /* Verifica se o jogador ou outro player usa skin customizada em vez do boneco procedural padrao */
         int use_custom_skin = 0;
         int skin_vid = PRESET_FUZILEIRO;
         const CharacterAppearance *skin_app = NULL;
@@ -1285,6 +1326,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
         const float inv_sh = 1.0f / (float)sprite_h;
         const float v_step = ((float)(sy_lo - top_y) + 0.5f) * inv_sh;
 
+        /* Desenha coluna por coluna testando z_buffer[sx] contra paredes */
         for (int sx = sx_lo; sx <= sx_hi; sx++) {
             if (dist >= z_buffer[sx]) {
                 continue;
@@ -1302,6 +1344,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
                 }
                 float vu = v + bounce * 0.026f;
 
+                /* Personagens com sprite customizado consultam o mapa de materiais em player.c */
                 if (use_custom_skin) {
                     if (draw_list[i].shooting && sx_u > 0.38f && sx_u < 0.92f &&
                         vu > 0.34f && vu < 0.50f) {
@@ -1333,11 +1376,13 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
                     continue;
                 }
 
+                /* Boneco humanoide procedural: part 1=armadura, 2=visor/brilho, 3=detalhe/arma */
                 int hit_part = 0;
                 float nx = 0.0f, ny = 0.0f;
                 float depth_shade = 1.0f;
 
                 if (vu < 0.21f) {
+                    /* Cabeca oval com visor frontal (ou faixa traseira na visao de costas) */
                     float hx = ax_u / 0.34f;
                     float hy = (vu - 0.105f) / 0.105f;
                     if (hx * hx + hy * hy <= 1.0f) {
@@ -1353,6 +1398,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
                     hit_part = 3;
                     nx = sx_u / 0.18f * 0.7f;
                 } else if (vu >= 0.23f && vu < 0.58f) {
+                    /* Torso, ombreiras, bracos balancando e claro do disparo */
                     float chest_expand = (!is_walking && vu < 0.46f) ? (breath * 0.025f) : 0.0f;
                     float torso_hw = ((vu < 0.42f) ? 0.56f : 0.44f) + chest_expand;
                     float arm_bob = is_walking
@@ -1397,6 +1443,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
                         hit_part = 2;
                     }
                 } else if (vu >= 0.56f) {
+                    /* Pernas alternando o passo na caminhada */
                     float leg_s = is_walking ? ((sx_u < 0.0f) ? stride : -stride) : 0.0f;
                     float leg_max_v = is_walking ? (0.99f - fmaxf(0.0f, leg_s) * 0.11f) : 0.995f;
                     if (v <= leg_max_v) {
@@ -1415,6 +1462,7 @@ void renderer_draw_sprites(const Player *player, const SpriteEntity *sprites, in
 
                 if (hit_part == 0) continue;
 
+                /* Iluminacao direcional falsa usando a normal aproximada (nx, ny, nz) */
                 float nz = sqrtf(fmaxf(0.10f, 1.0f - nx * nx * 0.6f - ny * ny * 0.4f));
                 float ndotl = fmaxf(0.24f, (-0.42f * nx - 0.48f * ny + 0.76f * nz)) * depth_shade;
                 float lum = ndotl * fog;
@@ -1482,12 +1530,10 @@ static int project_effect(const Player *p, float x, float y, float height,
     return (*sx >= 0 && *sx < r_width && dist < z_buffer[*sx]);
 }
 
-/* ============================================================================
- * INTERFACE DA BIBLIOTECA GRAFICA (RendererApi) PARA ENTIDADES, PROJETEIS E MAPAS
- * ============================================================================ */
+/* --- Interface grafica (RendererApi) usada por entities.c, map.c e player.c --- */
 
-/* Projeta um sprite generico 3D no mundo, aplica fog por distancia e invoca
- * sampler(u, v, ...) para cada celula visivel diante do z_buffer[sx]. */
+/* Projeta um sprite generico 3D no mundo, aplica fog por distancia e chama
+ * sampler(u, v, ...) para cada celula na frente de z_buffer[sx] e cell_depth[sy][sx]. */
 static void api_draw_world_sprite(const void *player_ptr,
                                   const RenderSpriteSpec *spec,
                                   RendererSpriteSamplerFn sampler,
@@ -1573,6 +1619,7 @@ static void api_draw_world_sprite(const void *player_ptr,
     }
 }
 
+/* Desenha uma esfera/orbe ASCII no mundo 3D (usada em tiros de plasma, fogo e particulas) */
 static void api_draw_world_orb(const void *player_ptr,
                                float world_x, float world_y, float height,
                                float radius_scale, int min_r, int max_r,
@@ -1617,6 +1664,7 @@ static void api_draw_world_orb(const void *player_ptr,
     }
 }
 
+/* Desenha um anel no chao aproveitando os dados de floor-casting salvos no frame atual */
 static void api_draw_world_floor_ring(float cx, float cy, float radius,
                                       char inner_ch, AsciiColor inner_col,
                                       char outer_ch, AsciiColor outer_col) {
@@ -1664,6 +1712,7 @@ static void api_draw_world_floor_ring(float cx, float cy, float radius,
     }
 }
 
+/* Wrappers pequenos expostos na RendererApi para consultar projecao, tamanho da grade, tempo e angulo */
 static int api_project_point(const void *player_ptr,
                              float world_x, float world_y, float height,
                              int *out_sx, int *out_sy, float *out_depth) {
@@ -1685,8 +1734,8 @@ static float api_get_view_angle(const void *player_ptr) {
     return player_ptr ? ((const Player *)player_ptr)->angle : 0.0f;
 }
 
-/* Expoe a vtable estatica RendererApi com operacoes independentes de Raylib.
- * Chamado em main.c para entregar a biblioteca grafica a entities.c, map.c e player.c. */
+/* Expoe a tabela estatica de funcoes graficas independentes de Raylib.
+ * Chamado em main.c para entregar a interface a entities.c, map.c e player.c. */
 const RendererApi *renderer_get_api(void) {
     static const RendererApi API = {
         api_draw_world_sprite,
@@ -1704,6 +1753,7 @@ const RendererApi *renderer_get_api(void) {
     return &API;
 }
 
+/* Desenha a arma em 1a pessoa com balanco de caminhada, recuo, clarao e reticulo da sniper */
 void renderer_draw_weapon(const Player *player) {
     if (!player || cam_third_person) {
         return;
@@ -1711,6 +1761,7 @@ void renderer_draw_weapon(const Player *player) {
 
     int wtype = player->active_weapon;
     if (wtype < 0 || wtype >= PLAYER_MAX_WEAPONS) wtype = 0;
+    /* Armas de boss (wtype >= 5) ocupam uma caixa maior na tela para destacar os detalhes */
     int is_boss_wep = (wtype >= 5);
     int w_cols = (r_width * (is_boss_wep ? 36 : 23)) / 100;
     int w_rows = (r_height * (is_boss_wep ? 42 : 27)) / 100;
@@ -1754,6 +1805,7 @@ void renderer_draw_weapon(const Player *player) {
         set_cell(cx, cy, '+', make_color(220, 255, 160), bg_black);
     }
 
+    /* Clarao do disparo na ponta do cano (1, 2 ou 3 bocas dependendo da arma) */
     if (firing) {
         int flash_off = (wtype == 1) ? (int)roundf(0.14f * (float)w_cols)
                       : (wtype == 4 ? (int)roundf(0.085f * (float)w_cols)
@@ -1799,6 +1851,7 @@ void renderer_draw_weapon(const Player *player) {
         }
     }
 
+    /* Cache da silhueta da arma: so redesenha quando muda tamanho, arma, tiro ou frame da maquita */
     enum { MAX_WEP_W = 240, MAX_WEP_H = 180 };
     static AsciiCell wep_cache[MAX_WEP_H][MAX_WEP_W];
     static int wep_c_cols = -1, wep_c_rows = -1, wep_c_firing = -1, wep_c_type = -1, wep_c_spin = -1;
@@ -2144,6 +2197,7 @@ void renderer_draw_weapon(const Player *player) {
         return;
     }
 
+    /* Fallback sem cache caso a janela fique grande demais para MAX_WEP_W/MAX_WEP_H */
     for (int r = 0; r < w_rows; r++) {
         float v = ((float)r + 0.5f) / (float)w_rows;
         for (int c = 0; c < w_cols; c++) {
@@ -2227,6 +2281,7 @@ void renderer_draw_weapon(const Player *player) {
     }
 }
 
+/* Desenha o minimapa no canto superior esquerdo com borda, tiles, entidades, direcao do olhar e jogador */
 void renderer_draw_minimap(const GameMap *map, const Player *player,
                            const SpriteEntity *sprites, int count) {
     if (!map || !player) {
@@ -2280,6 +2335,7 @@ void renderer_draw_minimap(const GameMap *map, const Player *player,
         }
     }
 
+    /* Coleta sprites ativos dentro do alcance visivel */
     if (sprites && count > 0) {
         for (int i = 0; i < count; i++) {
             if (!sprites[i].active) continue;
@@ -2305,6 +2361,7 @@ void renderer_draw_minimap(const GameMap *map, const Player *player,
         }
     }
 
+    /* Indicador '*' mostra para onde o jogador esta olhando e 'P' marca sua posicao */
     int look_x = (int)(player->x + cosf(player->angle) * 1.15f);
     int look_y = (int)(player->y + sinf(player->angle) * 1.15f);
     if (look_x >= 0 && look_x < map->width && look_y >= 0 && look_y < map->height &&
@@ -2325,6 +2382,7 @@ void renderer_draw_minimap(const GameMap *map, const Player *player,
     }
 }
 
+/* Mira basica em ASCII na grade (so roda no modo texto sem fonte Raylib carregada) */
 void renderer_draw_hud(const Player *player) {
     if (!player || font_loaded) {
         return;
@@ -2348,6 +2406,7 @@ void renderer_draw_hud(const Player *player) {
     set_cell(cx, cy + 3, '|', cross_col, bg_black);
 }
 
+/* Diminui o tamanho da fonte ate a string caber na largura do card do HUD */
 static int fit_hud_font(const char *txt, int want_sz, int max_w) {
     int sz = want_sz;
     while (sz > 10 && MeasureText(txt, sz) > max_w) {
@@ -2368,6 +2427,7 @@ static void draw_hud_mugshot(int bx, int by, int bw, int bh, const Player *playe
     const AsciiColor bg_zero = {0, 0, 0};
     int solid = (current_visual_style == ASCII_STYLE_SOLID);
 
+    /* Skins customizadas desenham o retrato estatico direto do mapa de materiais */
     if (player && player_appearance_visual(player->visual_id, &player->appearance).custom_sprite) {
         DrawRectangle(bx, by, bw, bh, (Color){10, 12, 17, 255});
         DrawRectangleLines(bx, by, bw, bh, (Color){235, 55, 100, 255});
@@ -2433,6 +2493,7 @@ static void draw_hud_mugshot(int bx, int by, int bw, int bh, const Player *playe
         return;
     }
 
+    /* Rosto classico procedural estilo DOOM: olha pros lados, pisca e mostra ferimentos conforme o HP */
     int hp = player ? player->health : 100;
     int firing = (player && player->shoot_timer > 0.12f);
     double t = GetTime();
@@ -2619,6 +2680,7 @@ static void draw_hud_mugshot(int bx, int by, int bw, int bh, const Player *playe
     }
 }
 
+/* Barra de status do HUD desenhada com 14 caracteres '#' e '-' */
 static void draw_hud_ascii_meter(int x, int y, int w, int h, float ratio, Color col) {
     if (ratio < 0.0f) ratio = 0.0f;
     if (ratio > 1.0f) ratio = 1.0f;
@@ -2697,6 +2759,7 @@ void renderer_draw_scene_and_hud(const Player *player, int is_multiplayer,
         DrawText(v_str, vx, cy_px + v_gap, ch_sz, cross_col);
     }
 
+    /* Faixa inferior do HUD com 4 cards simetricos e o mugshot centralizado */
     int hud_y = view_h;
     DrawRectangle(0, hud_y, sw, hud_h, (Color){16, 19, 27, 255});
     DrawRectangle(0, hud_y, sw, 3, (Color){196, 48, 42, 255});
@@ -2817,6 +2880,7 @@ void renderer_draw_scene_and_hud(const Player *player, int is_multiplayer,
     }
 }
 
+/* Desenha a cena 3D e o HUD dentro de BeginDrawing/EndDrawing para a janela principal */
 void renderer_present_window(const Player *player, int is_multiplayer,
                              int remote_connected, int mouse_locked, int fps_cap) {
     if (!font_loaded) {
@@ -2829,6 +2893,7 @@ void renderer_present_window(const Player *player, int is_multiplayer,
     EndDrawing();
 }
 
+/* Saida alternativa em texto puro no terminal (faz downsample da grade para 80x26) */
 void renderer_present_stdout(const Player *player, int is_multiplayer,
                              int remote_connected) {
     for (int row = 0; row < 26; row++) {
