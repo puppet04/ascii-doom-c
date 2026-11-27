@@ -86,7 +86,7 @@ CharacterClass player_roster_get(const CharacterRoster *roster, int index);
 /* Retorna indice criado ou -1 para dados invalidos/limite atingido. */
 int player_roster_add(CharacterRoster *roster, const CharacterClass *draft);
 
-#define PLAYER_MAX_WEAPONS 5
+#define PLAYER_MAX_WEAPONS 9
 
 typedef struct {
     int id;

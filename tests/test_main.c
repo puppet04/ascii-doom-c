@@ -694,7 +694,7 @@ static void test_medkit_and_traps(void) {
     enemies_update(&mgr, &map, &p, 1.0f);
     ASSERT_TRUE(p.health == hp_after_burn, "Burn encerra apos 0.5s fora da chama");
 
-    /* 4 caracteres reservados para proximos inimigos (U, V, W, X) -> Zodd opcional para saida */
+    /* 4 caracteres reservados das arenas (U, V, W, X) -> 4 Bosses opcionais para a saida */
     map_init_default(&map);
     map.tiles[2][2] = 'U';
     map.tiles[2][3] = 'V';
@@ -705,13 +705,12 @@ static void test_medkit_and_traps(void) {
                 map_is_wall(&map, 4, 2) == 0 && map_is_wall(&map, 5, 2) == 0,
                 "Caracteres U, V, W, X sao atravessaveis como spawn de inimigo");
     enemies_spawn_wave(&mgr, &map, &p);
-    int all_zodd_optional = (mgr.count == 4);
-    for (int i = 0; i < mgr.count; i++) {
-        if (mgr.enemies[i].type != ENEMY_BERSERK_ZODD || !mgr.enemies[i].optional_for_exit) {
-            all_zodd_optional = 0;
-        }
-    }
-    ASSERT_TRUE(all_zodd_optional, "U, V, W, X spawnam como Zodd opcionais para a saida");
+    int bosses_ok = (mgr.count == 4 &&
+        mgr.enemies[0].type == ENEMY_BOSS_MAQUITA && mgr.enemies[0].optional_for_exit &&
+        mgr.enemies[1].type == ENEMY_BOSS_REVOLVER && mgr.enemies[1].optional_for_exit &&
+        mgr.enemies[2].type == ENEMY_BOSS_TOMMY && mgr.enemies[2].optional_for_exit &&
+        mgr.enemies[3].type == ENEMY_BOSS_FLAME && mgr.enemies[3].optional_for_exit);
+    ASSERT_TRUE(bosses_ok, "U, V, W, X spawnam como os 4 Bosses de arena opcionais para a saida");
     ASSERT_TRUE(enemies_alive(&mgr) == 4 && enemies_required_alive(&mgr) == 0,
                 "Inimigos U, V, W, X vivos nao contam como obrigatorios");
     ASSERT_TRUE(map_are_enemies_alive() == 0 && map_is_wall(&map, 6, 2) == 0,
@@ -774,8 +773,8 @@ static void test_weapons_inventory_and_drops(void) {
                 "Sniper elimina Kushan com tiro reto");
     const WeaponDrop *drops = enemies_weapon_drop_pool();
     ASSERT_TRUE(drops[0].active == 1 && drops[0].weapon == WEAPON_SNIPER &&
-                drops[0].ammo >= 3 && drops[0].ammo <= 15,
-                "Kushan morto derruba Sniper no chao com 0.5x a 3x carregador");
+                drops[0].ammo >= 2 && drops[0].ammo <= 5,
+                "Kushan morto derruba Sniper no chao com municao reduzida (2 a 5)");
 
     /* Coletar drop no chao adiciona ao inventario; pegar repetida so da municao */
     int drop_ammo = drops[0].ammo;
@@ -836,6 +835,37 @@ static void test_weapons_inventory_and_drops(void) {
     }
     ASSERT_TRUE(mgr.enemies[0].x < 4.5f,
                 "IA com pathfinding contorna parede sem ficar enroscada");
+
+    /* Matar cada boss derruba sua arma no chao com 10x o carregador (igual as demais) */
+    clear_test_arena(&map);
+    map.tiles[5][5] = 'U';
+    enemies_spawn_wave(&mgr, &map, &p);
+    player_init(&p, 2.5f, 5.5f, 0.0f);
+    mgr.enemies[0].health = 10;
+    ASSERT_TRUE(enemies_check_hit(&mgr, &map, &p, &weapons[WEAPON_PISTOL]) == 1 &&
+                mgr.enemies[0].active == 0,
+                "Boss Maquita eliminado");
+    const WeaponDrop *bdrops = enemies_weapon_drop_pool();
+    ASSERT_TRUE(bdrops[0].active == 1 && bdrops[0].weapon == WEAPON_MAQUITA &&
+                bdrops[0].ammo == 100 && p.weapon_owned[WEAPON_MAQUITA] == 0,
+                "Matar Boss Maquita derruba Maquita no chao com 10x carregador (100)");
+    p.x = bdrops[0].x;
+    p.y = bdrops[0].y;
+    enemies_update(&mgr, &map, &p, 0.05f);
+    ASSERT_TRUE(bdrops[0].active == 0 && p.weapon_owned[WEAPON_MAQUITA] == 1 &&
+                (p.weapon_mag[WEAPON_MAQUITA] + p.weapon_reserve[WEAPON_MAQUITA]) == 100,
+                "Passar sobre a Maquita derrubada adiciona ao inventario com 100");
+
+    clear_test_arena(&map);
+    map.tiles[5][5] = 'X';
+    enemies_spawn_wave(&mgr, &map, &p);
+    player_init(&p, 2.5f, 5.5f, 0.0f);
+    mgr.enemies[0].health = 10;
+    ASSERT_TRUE(enemies_check_hit(&mgr, &map, &p, &weapons[WEAPON_PISTOL]) == 1 &&
+                enemies_weapon_drop_pool()[0].active == 1 &&
+                enemies_weapon_drop_pool()[0].weapon == WEAPON_FLAMETHROWER &&
+                enemies_weapon_drop_pool()[0].ammo == 400,
+                "Matar Boss Lanca-Chamas derruba Lanca-Chamas no chao com 10x carregador (400)");
 }
 
 int main(void) {

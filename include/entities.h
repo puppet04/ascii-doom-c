@@ -11,7 +11,7 @@
  * de inimigos (spawn, movimentacao por Delta Time e deteccao de acertos).
  */
 
-#define MAX_WEAPONS 5
+#define MAX_WEAPONS 9
 #define MAX_ENEMIES 32
 #define MAX_WEAPON_DROPS 32
 #define MAX_PLAYER_ORBS 16
@@ -23,7 +23,11 @@ typedef enum {
     WEAPON_SHOTGUN = 1,
     WEAPON_SNIPER = 2,
     WEAPON_MACHINEGUN = 3,
-    WEAPON_FUTURISTIC = 4
+    WEAPON_FUTURISTIC = 4,
+    WEAPON_MAQUITA = 5,
+    WEAPON_REVOLVER = 6,
+    WEAPON_TOMMYGUN = 7,
+    WEAPON_FLAMETHROWER = 8
 } WeaponType;
 
 #define WEAPON_PLASMA WEAPON_MACHINEGUN
@@ -41,6 +45,10 @@ typedef enum {
     ENEMY_BERSERK_TROLL,
     ENEMY_BERSERK_APOSTLE,
     ENEMY_BERSERK_ZODD,
+    ENEMY_BOSS_MAQUITA,
+    ENEMY_BOSS_REVOLVER,
+    ENEMY_BOSS_TOMMY,
+    ENEMY_BOSS_FLAME,
     ENEMY_TYPE_COUNT
 } EnemyType;
 
@@ -113,6 +121,7 @@ typedef struct {
     int optional_for_exit;
     float burn_time;
     float burn_tick;
+    int burn_is_fire;
 } Enemy;
 
 typedef struct {

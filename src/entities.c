@@ -68,17 +68,54 @@ static int has_line_of_sight(const GameMap *map, float x0, float y0, float x1, f
     return 1;
 }
 
+/* Linha de tiro limpa (sem raspar em quinas): verifica raio central e margens laterais
+ * com checagem estrita de parede para impedir inimigos de ficarem atirando atras de quinas. */
+static int enemy_has_clear_shot(const GameMap *map, float x0, float y0, float x1, float y1) {
+    float dx = x1 - x0;
+    float dy = y1 - y0;
+    float dist = sqrtf(dx * dx + dy * dy);
+    if (dist < 0.05f) {
+        return 1;
+    }
+
+    float px = -dy / dist;
+    float py = dx / dist;
+    const float half_w = 0.18f;
+    static const float offsets[3] = {0.0f, -1.0f, 1.0f};
+
+    int steps = (int)(dist * 16.0f);
+    if (steps < 2) steps = 2;
+
+    for (int r = 0; r < 3; r++) {
+        float ox = px * half_w * offsets[r];
+        float oy = py * half_w * offsets[r];
+        for (int i = 1; i < steps; i++) {
+            float t = (float)i / (float)steps;
+            float sx = x0 + ox + dx * t;
+            float sy = y0 + oy + dy * t;
+            if (map_is_wall(map, (int)floorf(sx), (int)floorf(sy))) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
 void weapons_init_defaults(Weapon out_weapons[MAX_WEAPONS]) {
     if (!out_weapons) {
         return;
     }
 
     Weapon list[MAX_WEAPONS] = {
-        {WEAPON_PISTOL,     "Pistola",        25, 0.28f, 1,  5.8f, 10, 1},
-        {WEAPON_SHOTGUN,    "Shotgun",        70, 0.72f, 1,  3.8f,  6, 0},
-        {WEAPON_SNIPER,     "Sniper",        140, 1.50f, 1, 22.0f,  5, 0},
-        {WEAPON_MACHINEGUN, "Metralhadora",   16, 0.075f,1,  6.8f, 30, 0},
-        {WEAPON_FUTURISTIC, "Arma Futurista", 85, 0.90f, 1,  7.5f,  4, 0}
+        {WEAPON_PISTOL,       "Pistola",        25, 0.28f,  1,  5.8f, 10, 1},
+        {WEAPON_SHOTGUN,      "Shotgun",        52, 0.72f,  1,  3.8f,  6, 0},
+        {WEAPON_SNIPER,       "Sniper",        105, 1.50f,  1, 22.0f,  5, 0},
+        {WEAPON_MACHINEGUN,   "Metralhadora",   11, 0.075f, 1,  6.8f, 30, 0},
+        {WEAPON_FUTURISTIC,   "Arma Futurista", 64, 0.90f,  1,  7.5f,  4, 0},
+        {WEAPON_MAQUITA,      "Maquita",         9, 0.045f, 1,  1.95f, 10, 1},
+        {WEAPON_REVOLVER,     "Revolver",      118, 0.62f,  1, 16.0f,  6, 0},
+        {WEAPON_TOMMYGUN,     "Tommy Gun",      15, 0.075f, 1, 10.5f, 50, 0},
+        {WEAPON_FLAMETHROWER, "Lanca-Chamas",   19, 0.11f,  1,  6.2f, 40, 0}
     };
 
     for (int i = 0; i < MAX_WEAPONS; i++) {
@@ -106,26 +143,34 @@ typedef struct {
 /* Projeteis: flecha 6, bola 3.1 e orbe 2.2; cerca de 40% mais lentos. */
 /* Precision is retained for compatibility with manually configured hitscan enemies. */
 static const EnemyStats ENEMY_STATS[ENEMY_TYPE_COUNT] = {
-    {"Z legado",       'Z',  40, 1.00f,  5, ENEMY_ATTACK_MELEE,      0.85f, 1.90f,  7.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"Z legado",          'Z',  40, 1.00f,  3, ENEMY_ATTACK_MELEE,      0.85f, 1.90f,  7.5f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
     /* Metralhadora: hitscan com alta cadencia de tiro, dano leve por disparo (alcance 6.8m). */
-    {"D legado",       'D',  80, 1.45f,  2, ENEMY_ATTACK_HITSCAN,    6.80f, 0.36f, 12.0f, 0.58f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
-    {"I legado",       'I',  55, 2.00f,  5, ENEMY_ATTACK_MELEE,      0.95f, 1.50f, 10.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"D legado",          'D',  80, 1.45f,  1, ENEMY_ATTACK_HITSCAN,    6.80f, 0.36f, 12.0f, 0.58f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"I legado",          'I',  55, 2.00f,  4, ENEMY_ATTACK_MELEE,      0.95f, 1.50f, 10.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
     /* Shotgun: aproxima ate o alcance da shotgun (3.8m) e dispara cone de 3 chumbinhos. */
-    {"Imp",            'M',  60, 1.40f,  5, ENEMY_ATTACK_PROJECTILE, 3.80f, 2.15f, 11.0f, 0.90f, ENEMY_PROJECTILE_FIREBALL,   ENEMY_PROJECTILE_WAVERING,  3.1f, 0.9f},
+    {"Imp",               'M',  60, 1.40f,  3, ENEMY_ATTACK_PROJECTILE, 3.80f, 2.15f, 11.0f, 0.90f, ENEMY_PROJECTILE_FIREBALL,   ENEMY_PROJECTILE_WAVERING,  3.1f, 0.9f},
     /* Ataque: investida veloz de curta distancia. */
-    {"Pinky",          'Y',  75, 2.30f,  8, ENEMY_ATTACK_MELEE,      1.20f, 1.65f, 11.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"Pinky",             'Y',  75, 2.30f,  6, ENEMY_ATTACK_MELEE,      1.20f, 1.65f, 11.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
     /* Arma Futurista: orbe de energia teleguiado (alcance 7.5m). */
-    {"Cacodemon",      'C', 175, 1.00f, 10, ENEMY_ATTACK_PROJECTILE, 7.50f, 3.90f, 13.0f, 0.75f, ENEMY_PROJECTILE_ENERGY_ORB, ENEMY_PROJECTILE_HOMING,    2.2f, 1.1f},
+    {"Cacodemon",         'C', 175, 1.00f,  7, ENEMY_ATTACK_PROJECTILE, 7.50f, 3.90f, 13.0f, 0.75f, ENEMY_PROJECTILE_ENERGY_ORB, ENEMY_PROJECTILE_HOMING,    2.2f, 1.1f},
     /* Ataque: golpe brutal de maos nuas, muito lento e devastador. */
-    {"Baron of Hell",  'B', 260, 0.75f, 18, ENEMY_ATTACK_MELEE,      1.60f, 4.50f, 10.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"Baron of Hell",     'B', 260, 0.75f, 13, ENEMY_ATTACK_MELEE,      1.60f, 4.50f, 10.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
     /* Sniper: longo alcance com tiro reto veloz (alcance 14.0m). */
-    {"Soldado Kushan", 'K',  35, 1.10f,  8, ENEMY_ATTACK_PROJECTILE,14.00f, 2.80f, 18.0f, 0.90f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  6.0f, 0.0f},
+    {"Soldado Kushan",    'K',  35, 1.10f,  6, ENEMY_ATTACK_PROJECTILE,14.00f, 2.80f, 18.0f, 0.90f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  6.0f, 0.0f},
     /* Arma: clava pesada; alcance estendido compensa a lentidao extrema. */
-    {"Troll",          'T', 220, 0.70f, 14, ENEMY_ATTACK_MELEE,      2.05f, 4.00f,  8.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"Troll",             'T', 220, 0.70f, 10, ENEMY_ATTACK_MELEE,      2.05f, 4.00f,  8.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
     /* Ataque: sequencia frenetica de garras, dano baixo por golpe e recarga minima. */
-    {"Apostolo",       'A',  95, 2.50f,  4, ENEMY_ATTACK_MELEE,      1.05f, 0.95f,  9.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    {"Apostolo",          'A',  95, 2.50f,  3, ENEMY_ATTACK_MELEE,      1.05f, 0.95f,  9.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
     /* Ataque: garra de mini-chefe implacavel. */
-    {"Zodd",           'Q', 460, 1.45f, 22, ENEMY_ATTACK_MELEE,      1.90f, 4.80f, 12.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f}
+    {"Zodd",              'Q', 460, 1.45f, 16, ENEMY_ATTACK_MELEE,      1.90f, 2.20f, 12.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Boss 1 (Arena 1 - U): Obreiro Pesado com Maquita de corte continuo rapido. */
+    {"Boss Maquita",      'U', 400, 2.05f,  1, ENEMY_ATTACK_MELEE,      1.65f, 0.10f, 11.0f, 1.00f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Boss 2 (Arena 2 - V): Pistoleiro com Revolver Grande de tiros pesados. */
+    {"Boss Revolver",     'V', 520, 1.35f, 15, ENEMY_ATTACK_PROJECTILE,10.50f, 1.65f, 12.5f, 0.95f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  7.2f, 0.0f},
+    /* Boss 3 (Arena 3 - W): Mafioso Blindado com Tommy Gun de alta cadencia. */
+    {"Boss Tommy Gun",    'W', 650, 1.25f,  3, ENEMY_ATTACK_HITSCAN,    8.50f, 0.24f, 12.0f, 0.56f, ENEMY_PROJECTILE_ARROW,      ENEMY_PROJECTILE_STRAIGHT,  0.0f, 0.0f},
+    /* Boss 4 (Arena 4 - X): Piromaniaco Hazmat com Lanca-Chamas em cone. */
+    {"Boss Lanca-Chamas", 'X', 800, 1.30f,  7, ENEMY_ATTACK_PROJECTILE, 6.20f, 0.65f, 13.0f, 0.95f, ENEMY_PROJECTILE_FIREBALL,   ENEMY_PROJECTILE_STRAIGHT,  4.6f, 0.0f}
 };
 
 static EnemyProjectile enemy_projectiles[MAX_ENEMY_PROJECTILES];
@@ -194,12 +239,6 @@ static int is_optional_enemy_symbol(char symbol) {
 }
 
 static int enemy_type_from_symbol(char symbol, EnemyType *out_type) {
-    if (is_optional_enemy_symbol(symbol)) {
-        if (out_type) {
-            *out_type = ENEMY_BERSERK_ZODD;
-        }
-        return 1;
-    }
     for (int i = 0; i < ENEMY_TYPE_COUNT; i++) {
         if (ENEMY_STATS[i].symbol == symbol) {
             if (out_type) {
@@ -278,8 +317,8 @@ static int enemy_weapon_drop_type(EnemyType type) {
     }
 }
 
-static void spawn_weapon_drop(int weapon_type, float x, float y) {
-    if (weapon_type <= WEAPON_PISTOL || weapon_type >= MAX_WEAPONS) {
+static void spawn_weapon_drop_with_ammo(int weapon_type, int ammo, float x, float y) {
+    if (weapon_type <= WEAPON_PISTOL || weapon_type >= MAX_WEAPONS || ammo <= 0) {
         return;
     }
     int slot = -1;
@@ -292,17 +331,35 @@ static void spawn_weapon_drop(int weapon_type, float x, float y) {
     if (slot < 0) {
         slot = 0;
     }
-    int mag = player_weapon_mag_size(weapon_type);
-    int min_ammo = (mag + 1) / 2; /* 0.5x carregador (arredondado para cima) */
-    int max_ammo = mag * 3;       /* 3.0x carregador */
-    int span = max_ammo - min_ammo + 1;
-    int ammo = min_ammo + (span > 1 ? (rand() % span) : 0);
 
     weapon_drops[slot].active = 1;
     weapon_drops[slot].weapon = (WeaponType)weapon_type;
     weapon_drops[slot].ammo = ammo;
     weapon_drops[slot].x = x;
     weapon_drops[slot].y = y;
+}
+
+static void spawn_weapon_drop(int weapon_type, float x, float y) {
+    if (weapon_type <= WEAPON_PISTOL || weapon_type >= MAX_WEAPONS) {
+        return;
+    }
+    int mag = player_weapon_mag_size(weapon_type);
+    int min_ammo = (mag + 2) / 3; /* ~0.35x carregador (minimo 1) */
+    if (min_ammo < 1) min_ammo = 1;
+    int max_ammo = mag;           /* ate 1.0x carregador */
+    int span = max_ammo - min_ammo + 1;
+    int ammo = min_ammo + (span > 1 ? (rand() % span) : 0);
+    spawn_weapon_drop_with_ammo(weapon_type, ammo, x, y);
+}
+
+static int enemy_boss_reward_weapon(EnemyType type) {
+    switch (type) {
+        case ENEMY_BOSS_MAQUITA:  return WEAPON_MAQUITA;
+        case ENEMY_BOSS_REVOLVER: return WEAPON_REVOLVER;
+        case ENEMY_BOSS_TOMMY:    return WEAPON_TOMMYGUN;
+        case ENEMY_BOSS_FLAME:    return WEAPON_FLAMETHROWER;
+        default:                  return -1;
+    }
 }
 
 static void damage_enemy(Enemy *e, Player *p, int damage) {
@@ -313,9 +370,15 @@ static void damage_enemy(Enemy *e, Player *p, int damage) {
         e->active = 0;
         player_register_kill(p, e->x, e->y);
         e->burn_time = e->burn_tick = 0;
-        int drop_w = enemy_weapon_drop_type(e->type);
-        if (drop_w >= 0) {
-            spawn_weapon_drop(drop_w, e->x, e->y);
+        int boss_w = enemy_boss_reward_weapon(e->type);
+        if (boss_w >= 0) {
+            /* Ao matar o boss, a arma cai no chao com 10x o carregador (igual as demais). */
+            spawn_weapon_drop_with_ammo(boss_w, player_weapon_mag_size(boss_w) * 10, e->x, e->y);
+        } else {
+            int drop_w = enemy_weapon_drop_type(e->type);
+            if (drop_w >= 0) {
+                spawn_weapon_drop(drop_w, e->x, e->y);
+            }
         }
     }
 }
@@ -367,6 +430,13 @@ static int enemy_spawn_projectile(const Enemy *enemy, const Player *player,
         (void)enemy_spawn_projectile_angled(enemy, player, &side_stats, 0.30f);
         return ok;
     }
+    if (enemy->type == ENEMY_BOSS_FLAME) {
+        /* Lanca-Chamas do Boss 4: rajada em cone de 3 jatos de fogo. */
+        int ok = enemy_spawn_projectile_angled(enemy, player, stats, 0.0f);
+        (void)enemy_spawn_projectile_angled(enemy, player, stats, -0.17f);
+        (void)enemy_spawn_projectile_angled(enemy, player, stats, 0.17f);
+        return ok;
+    }
     return enemy_spawn_projectile_angled(enemy, player, stats, 0.0f);
 }
 
@@ -415,6 +485,11 @@ static void enemy_projectiles_update(const GameMap *map, Player *player, float d
             float collision_radius = hit_radius + PLAYER_RADIUS;
             if (dx * dx + dy * dy <= collision_radius * collision_radius) {
                 player_take_damage(player, projectile->damage);
+                if (projectile->kind == ENEMY_PROJECTILE_FIREBALL &&
+                    projectile->path == ENEMY_PROJECTILE_STRAIGHT &&
+                    projectile->speed > 4.0f) {
+                    g_fire_burn_timer = 0.5f;
+                }
                 projectile->active = 0;
             }
         }
@@ -443,6 +518,7 @@ void enemies_update_fireball(EnemyManager *mgr, const GameMap *map, Player *p, f
                 if (e->active) {
                     e->burn_time = SHADOW_BURN_DURATION;
                     e->burn_tick = 0;
+                    e->burn_is_fire = 0;
                 }
                 s->fireball_active = 0;
                 break;
@@ -698,9 +774,13 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
         float dx = player->x - e->x;
         float dy = player->y - e->y;
         float dist = sqrtf(dx * dx + dy * dy);
+        int is_ranged = (e->attack_kind == ENEMY_ATTACK_HITSCAN ||
+                         e->attack_kind == ENEMY_ATTACK_PROJECTILE);
         int can_see = has_line_of_sight(map, player->x, player->y, e->x, e->y);
-        float preferred_distance = (e->attack_kind == ENEMY_ATTACK_HITSCAN ||
-                                    e->attack_kind == ENEMY_ATTACK_PROJECTILE)
+        int can_shoot = is_ranged
+            ? (can_see && enemy_has_clear_shot(map, e->x, e->y, player->x, player->y))
+            : can_see;
+        float preferred_distance = is_ranged
             ? attack_range * 0.75f : attack_range * 0.90f;
 
         float sep_x = 0.0f;
@@ -730,7 +810,7 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
         float vy = sep_y * 1.6f * dt;
         float slide_dir_x = dx;
         float slide_dir_y = dy;
-        if (dist < aggro_range && (dist > preferred_distance || !can_see)) {
+        if (dist < aggro_range && (dist > preferred_distance || !can_shoot)) {
             float move_speed = e->speed;
             if ((e->type == ENEMY_DOOM_PINKY || e->type == ENEMY_BERSERK_APOSTLE) &&
                 dist <= 3.2f) {
@@ -739,7 +819,7 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
 
             float steer_x = dx;
             float steer_y = dy;
-            int direct_clear = can_see && dist > 0.001f &&
+            int direct_clear = can_shoot && dist > 0.001f &&
                 enemy_can_occupy(map, e->x + (dx / dist) * 0.32f, e->y + (dy / dist) * 0.32f);
 
             /* Pathfinding BFS (flow-field): contorna paredes, pilares e portas sem enroscar. */
@@ -847,7 +927,7 @@ void enemies_update(EnemyManager *mgr, const GameMap *map, Player *player, float
             }
         }
 
-        if (dist <= attack_range && e->attack_timer <= 0.0f && can_see) {
+        if (dist <= attack_range && e->attack_timer <= 0.0f && can_shoot) {
             if (e->attack_kind == ENEMY_ATTACK_PROJECTILE) {
                 (void)enemy_spawn_projectile(e, player, stats);
             } else if (e->attack_kind == ENEMY_ATTACK_HITSCAN) {
@@ -907,11 +987,77 @@ int enemies_check_hit(EnemyManager *mgr, const GameMap *map,
         return hits > 0 ? 1 : 0;
     }
 
+    if (!berserk && weapon->type == WEAPON_MAQUITA) {
+        /* Maquita (Boss 1): serra corpo a corpo continua em arco frontal (dano baixo, cadencia altissima). */
+        int hits = 0;
+        int dmg = player_attack_damage(player, weapon->damage) * multiplier;
+        for (int i = 0; i < mgr->count; i++) {
+            Enemy *e = &mgr->enemies[i];
+            if (!e->active) continue;
+            float dx = e->x - player->x;
+            float dy = e->y - player->y;
+            float dist = sqrtf(dx * dx + dy * dy);
+            if (dist > weapon->range) continue;
+            float aim_diff = fabsf(wrap_angle(atan2f(dy, dx) - player->angle));
+            if (aim_diff < 0.55f && has_line_of_sight(map, player->x, player->y, e->x, e->y)) {
+                damage_enemy(e, player, dmg);
+                hits++;
+            }
+        }
+        return hits > 0 ? 1 : 0;
+    }
+
+    if (!berserk && weapon->type == WEAPON_REVOLVER) {
+        /* Revolver Grande (Boss 2): disparo Magnum perfurante em linha reta. */
+        int hits = 0;
+        int dmg = player_attack_damage(player, weapon->damage) * multiplier;
+        for (int i = 0; i < mgr->count; i++) {
+            Enemy *e = &mgr->enemies[i];
+            if (!e->active) continue;
+            float dx = e->x - player->x;
+            float dy = e->y - player->y;
+            float dist = sqrtf(dx * dx + dy * dy);
+            if (dist > weapon->range) continue;
+            float aim_diff = fabsf(wrap_angle(atan2f(dy, dx) - player->angle));
+            if (aim_diff < 0.11f && has_line_of_sight(map, player->x, player->y, e->x, e->y)) {
+                damage_enemy(e, player, dmg);
+                hits++;
+            }
+        }
+        return hits > 0 ? 1 : 0;
+    }
+
+    if (!berserk && weapon->type == WEAPON_FLAMETHROWER) {
+        /* Lanca-Chamas (Boss 4): jato em cone que atinge e incendeia inimigos. */
+        int hits = 0;
+        int dmg = player_attack_damage(player, weapon->damage) * multiplier;
+        for (int i = 0; i < mgr->count; i++) {
+            Enemy *e = &mgr->enemies[i];
+            if (!e->active) continue;
+            float dx = e->x - player->x;
+            float dy = e->y - player->y;
+            float dist = sqrtf(dx * dx + dy * dy);
+            if (dist > weapon->range) continue;
+            float aim_diff = fabsf(wrap_angle(atan2f(dy, dx) - player->angle));
+            if (aim_diff < 0.44f && has_line_of_sight(map, player->x, player->y, e->x, e->y)) {
+                damage_enemy(e, player, dmg);
+                if (e->active) {
+                    e->burn_time = SHADOW_BURN_DURATION;
+                    e->burn_tick = 0.0f;
+                    e->burn_is_fire = 1;
+                }
+                hits++;
+            }
+        }
+        return hits > 0 ? 1 : 0;
+    }
+
     int best_idx = -1;
     float best_dist = berserk ? 1.5f : weapon->range;
     float aim_limit = berserk ? 0.45f
                     : (weapon->type == WEAPON_SNIPER ? 0.07f
-                    : (weapon->type == WEAPON_MACHINEGUN ? 0.14f : 0.12f));
+                    : (weapon->type == WEAPON_TOMMYGUN ? 0.16f
+                    : (weapon->type == WEAPON_MACHINEGUN ? 0.14f : 0.12f)));
 
     for (int i = 0; i < mgr->count; i++) {
         Enemy *e = &mgr->enemies[i];
@@ -1862,7 +2008,9 @@ static EnemyProcMat enemy_proc_palette(int mat) {
         {{224, 218, 202}, '\0', 0}, /* 21: osso / chifre / mascara */
         {{ 30,  26,  34}, '\0', 0}, /* 22: obsidiana */
         {{ 66,  52,  64}, '\0', 0}, /* 23: obsidiana destaque */
-        {{178, 146, 116}, '\0', 0}  /* 24: pele / rosto */
+        {{178, 146, 116}, '\0', 0}, /* 24: pele / rosto */
+        {{ 34, 158, 178}, '\0', 0}, /* 25: azul-turquesa Makita */
+        {{232, 196,  56}, '\0', 0}  /* 26: amarelo capacete/hazmat */
     };
     if (mat < 0 || mat >= (int)(sizeof(pal) / sizeof(pal[0]))) return pal[0];
     return pal[mat];
@@ -2174,6 +2322,112 @@ static int enemy_procedural_material(char label, float x, float y, int shooting,
         return mat;
     }
 
+    if (label == 'U') {
+        /* Boss 1 (U): Obreiro Pesado Blindado com capacete amarelo e MAQUITA girando */
+        mat = enemy_humanoid_base(x, y, 0.40f, 0.20f, 19, 2, 1, 1);
+        /* Suspensorios industriais amarelos sobre o macacao */
+        if (y > 0.28f && y < 0.56f && (fabsf(ax - 0.14f) < 0.035f)) mat = 26;
+        /* Capacete de obra amarelo com viseira de solda escura */
+        if (enemy_inside_oval(x, y, 0.0f, 0.15f, 0.26f, 0.115f)) {
+            mat = (y < 0.155f) ? 26 : 24;
+            if (y > 0.145f && y < 0.195f && ax < 0.19f) mat = 1; /* viseira */
+            if (y > 0.160f && y < 0.182f && ax > 0.04f && ax < 0.13f) mat = 17; /* olhos */
+        }
+        if (y > 0.125f && y < 0.155f && ax < 0.30f) mat = 26; /* aba do capacete */
+        /* MAQUITA (carcaca azul-turquesa + disco serrilhado prateado girando) */
+        if (y > 0.44f && y < 0.57f && x > 0.10f && x < 0.56f) mat = 25; /* corpo Makita */
+        if (y > 0.41f && y < 0.46f && x > 0.18f && x < 0.48f) mat = 1;  /* alca preta */
+        float saw_cx = 0.68f, saw_cy = 0.50f;
+        float sdx = (x - saw_cx) / 0.24f, sdy = (y - saw_cy) / 0.14f;
+        float sr2 = sdx * sdx + sdy * sdy;
+        if (sr2 < 1.0f) {
+            float ang = atan2f(sdy, sdx) + time_now * (shooting ? 26.0f : 12.0f);
+            float teeth = sinf(ang * 10.0f);
+            mat = (sr2 < 0.18f) ? 1 : ((teeth > 0.15f) ? 4 : 3);
+        }
+        if (shooting && enemy_inside_oval(x, y, 0.88f, 0.44f, 0.12f, 0.09f)) mat = 18;
+        return mat;
+    }
+
+    if (label == 'V') {
+        /* Boss 2 (V): Pistoleiro Fora-da-Lei com chapeu cowboy, sobretudo e REVOLVER GRANDE */
+        /* Sobretudo longo marrom escuro */
+        if (y > 0.27f && y < 0.90f && ax < 0.34f + (y - 0.27f) * 0.24f) {
+            float fold = sinf(x * 36.0f + y * 3.0f);
+            mat = (fold > 0.45f) ? 10 : 11;
+            if (ax < 0.16f && y < 0.64f) mat = 22; /* colete escuro */
+            if (y > 0.54f && y < 0.59f && ax < 0.30f) mat = (ax < 0.07f) ? 12 : 1; /* fivela dourada */
+        }
+        if (y > 0.86f && y < 0.98f && fabsf(ax - 0.18f) < 0.09f) mat = 1;
+        /* Lenco vermelho no pescoco */
+        if (y > 0.24f && y < 0.33f && ax < 0.24f - (y - 0.24f) * 1.4f) mat = 8;
+        /* Rosto sombreado + Chapeu cowboy de aba larga */
+        if (enemy_inside_oval(x, y, 0.0f, 0.17f, 0.19f, 0.09f)) {
+            mat = 24;
+            if (y < 0.16f) mat = 1;
+            if (y > 0.155f && y < 0.18f && ax > 0.04f && ax < 0.12f) mat = 17;
+        }
+        if (y > 0.05f && y < 0.145f && ax < 0.21f) mat = 11; /* copa do chapeu */
+        if (y > 0.115f && y < 0.148f && ax < 0.44f) mat = (y < 0.128f) ? 12 : 11; /* aba larga */
+        /* REVOLVER GRANDE cromado (tambor grande + cano longo + cabo de madeira) */
+        if (y > 0.48f && y < 0.61f && x > 0.04f && x < 0.22f) mat = 10; /* cabo madeira */
+        if (y > 0.41f && y < 0.53f && x >= 0.20f && x < 0.44f) {
+            mat = (fmodf(y * 55.0f, 1.0f) < 0.28f) ? 2 : 4; /* tambor grande cromado */
+        }
+        if (y > 0.41f && y < 0.475f && x >= 0.44f && x < 0.94f) mat = 4; /* cano longo pesado */
+        if (shooting && enemy_inside_oval(x, y, 0.94f, 0.44f, 0.13f, 0.09f)) mat = 18;
+        return mat;
+    }
+
+    if (label == 'W') {
+        /* Boss 3 (W): Mafioso Blindado de terno risca-de-giz, fedora e TOMMY GUN */
+        mat = enemy_humanoid_base(x, y, 0.39f, 0.19f, 22, 3, 1, 0);
+        /* Riscas de giz verticais no terno + gravata vermelha */
+        if (y > 0.28f && y < 0.62f && ax < 0.34f && fmodf(x * 22.0f + 10.0f, 1.0f) < 0.14f) mat = 2;
+        if (y > 0.27f && y < 0.52f && ax < 0.045f) mat = 8;
+        /* Rosto + Chapeu Fedora preto com faixa dourada */
+        if (enemy_inside_oval(x, y, 0.0f, 0.18f, 0.19f, 0.085f)) {
+            mat = 24;
+            if (y > 0.16f && y < 0.185f && ax > 0.04f && ax < 0.12f) mat = 14;
+        }
+        if (y > 0.05f && y < 0.145f && ax < 0.21f) mat = 22;
+        if (y > 0.12f && y < 0.142f && ax < 0.22f) mat = 12; /* faixa dourada */
+        if (y > 0.135f && y < 0.158f && ax < 0.36f) mat = 22; /* aba fedora */
+        /* TOMMY GUN (coronha madeira + tambor redondo grande + cano longo) */
+        if (y > 0.46f && y < 0.56f && x > -0.34f && x < 0.06f) mat = 10; /* coronha */
+        if (y > 0.43f && y < 0.50f && x >= 0.04f && x < 0.92f) mat = (x > 0.42f) ? 3 : 2; /* corpo/cano */
+        if (enemy_inside_oval(x, y, 0.34f, 0.56f, 0.16f, 0.10f)) {
+            mat = (enemy_inside_oval(x, y, 0.34f, 0.56f, 0.07f, 0.045f)) ? 12 : 1; /* tambor 50 balas */
+        }
+        if (y > 0.49f && y < 0.58f && x > 0.56f && x < 0.65f) mat = 10; /* empunhadura frontal */
+        if (shooting && enemy_inside_oval(x, y, 0.94f, 0.465f, 0.11f, 0.08f)) mat = 18;
+        return mat;
+    }
+
+    if (label == 'X') {
+        /* Boss 4 (X): Piromaniaco Hazmat com tanques de combustivel e LANCA-CHAMAS */
+        /* Tanques de combustivel vermelhos/amarelos atras dos ombros */
+        if (y > 0.16f && y < 0.52f && (fabsf(ax - 0.42f) < 0.12f)) {
+            mat = (y < 0.24f) ? 26 : 8;
+            if (fabsf(y - 0.34f) < 0.02f) mat = 1;
+        }
+        int body = enemy_humanoid_base(x, y, 0.41f, 0.20f, 7, 26, 1, 1);
+        if (body) mat = body;
+        /* Mascara de gas hazmat com lentes laranja incandescentes */
+        if (enemy_inside_oval(x, y, 0.0f, 0.16f, 0.24f, 0.115f)) {
+            mat = (y < 0.13f) ? 26 : 2;
+            if (y > 0.145f && y < 0.185f && ax > 0.03f && ax < 0.15f) mat = 17;
+            if (y > 0.195f && y < 0.25f && ax < 0.09f) mat = 1; /* filtro da mascara */
+        }
+        /* LANCA-CHAMAS pesado (tubo + tanque inferior + chama-piloto na ponta) */
+        if (y > 0.42f && y < 0.52f && x > -0.14f && x < 0.84f) mat = (y < 0.46f) ? 3 : 2;
+        if (y > 0.51f && y < 0.61f && x > 0.12f && x < 0.52f) mat = 8; /* cilindro combustivel */
+        if (enemy_inside_oval(x, y, 0.90f, 0.47f, shooting ? 0.16f : 0.07f, shooting ? 0.11f : 0.05f)) {
+            mat = shooting ? 18 : 17; /* chama-piloto / jato */
+        }
+        return mat;
+    }
+
     return 0;
 }
 
@@ -2289,10 +2543,10 @@ static int enemy_sprite_sampler(float u, float v, int sx, int sy,
     return 1;
 }
 
-/* Chamas afiladas de Fogo Negro nos inimigos queimando, usando apenas RendererApi. */
+/* Chamas afiladas de queimadura nos inimigos (roxo para Arauto, laranja de fogo para Lanca-Chamas). */
 static void entities_draw_shadow_flame(const Player *p, const RendererApi *r,
                                        float wx, float wy, float height,
-                                       float size, float phase) {
+                                       float size, float phase, int is_fire) {
     int sx, sy;
     float depth;
     if (!r->project_point(p, wx, wy, height, &sx, &sy, &depth)) {
@@ -2324,13 +2578,13 @@ static void entities_draw_shadow_flame(const Player *p, const RendererApi *r,
             AsciiColor color;
             char ch;
             if (edge < 0.48f && v > -0.6f) {
-                color = (AsciiColor){250, 205, 255};
+                color = is_fire ? (AsciiColor){255, 245, 165} : (AsciiColor){250, 205, 255};
                 ch = '@';
             } else if (edge < 0.78f) {
-                color = (AsciiColor){195, 95, 255};
+                color = is_fire ? (AsciiColor){255, 130, 25} : (AsciiColor){195, 95, 255};
                 ch = vein > 0.0f ? '#' : '*';
             } else {
-                color = (AsciiColor){110, 48, 185};
+                color = is_fire ? (AsciiColor){215, 42, 12} : (AsciiColor){110, 48, 185};
                 ch = v < -0.6f ? '^' : '+';
             }
             r->set_cell_if_closer(px, py, depth, ch, color, black);
@@ -2377,18 +2631,19 @@ static void entities_render_drops_and_orbs(const Player *player, const RendererA
                           0.62f);
     }
 
-    /* Armas derrubadas no chao por inimigos derrotados (mesma textura do mapa) */
+    /* Armas derrubadas no chao por inimigos derrotados (armas de boss maiores e mais destacadas) */
     for (int i = 0; i < MAX_WEAPON_DROPS; i++) {
         const WeaponDrop *d = &weapon_drops[i];
         if (!d->active) continue;
+        int is_boss_weapon = ((int)d->weapon >= (int)WEAPON_MAQUITA);
         RenderSpriteSpec spec;
         spec.world_x = d->x;
         spec.world_y = d->y;
-        spec.height_scale = 0.34f / 0.78f;
-        spec.width_ratio = 1.95f;
-        spec.min_w = 10;
-        spec.min_h = 5;
-        spec.min_fog = 0.45f;
+        spec.height_scale = (is_boss_weapon ? 0.42f : 0.34f) / 0.78f;
+        spec.width_ratio = is_boss_weapon ? 2.05f : 1.95f;
+        spec.min_w = is_boss_weapon ? 12 : 10;
+        spec.min_h = is_boss_weapon ? 6 : 5;
+        spec.min_fog = is_boss_weapon ? 0.50f : 0.45f;
 
         DropRenderCtx dctx;
         dctx.weapon_type = (int)d->weapon;
@@ -2439,13 +2694,16 @@ void entities_render(const EnemyManager *mgr, const Player *player, const Render
         const EnemyDesign *legacy = visual ? NULL : enemy_design_for_label(e->symbol);
         const EnemySpriteCache *cache = enemy_sprite_cache_for_label(e->symbol);
 
+        int is_arena_boss = is_optional_enemy_symbol(e->symbol);
         RenderSpriteSpec spec;
         spec.world_x = e->x;
         spec.world_y = e->y;
-        spec.height_scale = visual ? (REDESIGN_IMP_HEIGHT_SCALE * visual->world_height)
-                                   : (legacy ? legacy->height_scale : 1.0f);
-        spec.width_ratio = visual ? visual->width_ratio
-                                  : (legacy ? legacy->width_ratio : 0.625f);
+        spec.height_scale = is_arena_boss ? 1.48f
+                          : (visual ? (REDESIGN_IMP_HEIGHT_SCALE * visual->world_height)
+                                    : (legacy ? legacy->height_scale : 1.0f));
+        spec.width_ratio = is_arena_boss ? 1.18f
+                         : (visual ? visual->width_ratio
+                                   : (legacy ? legacy->width_ratio : 0.625f));
         spec.min_w = 4;
         spec.min_h = 6;
         spec.min_fog = 0.65f;
@@ -2498,19 +2756,28 @@ void entities_render(const EnemyManager *mgr, const Player *player, const Render
                                       black);
             }
         } else if (projectile->kind == ENEMY_PROJECTILE_FIREBALL) {
-            /* Chumbinhos metalicos da Shotgun do Imp (sem aparencia de bola de fogo) */
-            int sx, sy;
-            float depth;
-            if (r->project_point(player, projectile->x, projectile->y, 0.44f,
-                                 &sx, &sy, &depth)) {
-                AsciiColor core = {255, 248, 195};
-                AsciiColor steel = {175, 185, 198};
-                AsciiColor smoke = {115, 122, 132};
-                r->set_cell_if_closer(sx, sy, depth, 'o', core, black);
-                r->set_cell_if_closer(sx - 1, sy, depth, '*', steel, black);
-                r->set_cell_if_closer(sx + 1, sy, depth, '*', steel, black);
-                r->set_cell_if_closer(sx, sy - 1, depth, '.', smoke, black);
-                r->set_cell_if_closer(sx, sy + 1, depth, '.', smoke, black);
+            if (projectile->path == ENEMY_PROJECTILE_STRAIGHT && projectile->speed > 4.0f) {
+                /* Jato de fogo do Boss Lanca-Chamas */
+                r->draw_world_orb(player, projectile->x, projectile->y, 0.46f,
+                                  0.13f, 3, 18,
+                                  '@', (AsciiColor){255, 225, 80},
+                                  '*', (AsciiColor){255, 70, 15},
+                                  0.62f);
+            } else {
+                /* Chumbinhos metalicos da Shotgun do Imp (sem aparencia de bola de fogo) */
+                int sx, sy;
+                float depth;
+                if (r->project_point(player, projectile->x, projectile->y, 0.44f,
+                                     &sx, &sy, &depth)) {
+                    AsciiColor core = {255, 248, 195};
+                    AsciiColor steel = {175, 185, 198};
+                    AsciiColor smoke = {115, 122, 132};
+                    r->set_cell_if_closer(sx, sy, depth, 'o', core, black);
+                    r->set_cell_if_closer(sx - 1, sy, depth, '*', steel, black);
+                    r->set_cell_if_closer(sx + 1, sy, depth, '*', steel, black);
+                    r->set_cell_if_closer(sx, sy - 1, depth, '.', smoke, black);
+                    r->set_cell_if_closer(sx, sy + 1, depth, '.', smoke, black);
+                }
             }
         } else {
             r->draw_world_orb(player, projectile->x, projectile->y, 0.46f,
@@ -2538,7 +2805,7 @@ void entities_render(const EnemyManager *mgr, const Player *player, const Render
                                        e->y + sinf(angle) * 0.22f,
                                        height,
                                        (0.045f + 0.025f * (1.0f - height)) * fade,
-                                       phase);
+                                       phase, e->burn_is_fire);
         }
     }
 }

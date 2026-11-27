@@ -922,6 +922,112 @@ int map_sample_weapon_pickup_sprite(int weapon_type, float u, float v, int sx, i
         return 1;
     }
 
+    if (weapon_type == 5) {
+        /* MAQUITA (Boss 1): carcaca azul-turquesa + disco serrilhado prateado girando */
+        float dx_s = (nx - 0.34f) / 0.44f;
+        float dy_s = (ny + 0.04f) / 0.56f;
+        float r2 = dx_s * dx_s + dy_s * dy_s;
+        int blade = (r2 <= 1.0f);
+        int body  = (ny > -0.26f && ny < 0.36f && nx > -0.82f && nx < 0.16f);
+        int handle = (ny > -0.58f && ny <= -0.22f && nx > -0.66f && nx < -0.06f &&
+                      (ny < -0.42f || nx < -0.50f || nx > -0.22f));
+        int base  = (ny >= 0.30f && ny < 0.48f && nx > -0.58f && nx < 0.52f);
+        if (!blade && !body && !handle && !base) return 0;
+
+        if (blade && !body) {
+            float ang = atan2f(dy_s, dx_s) + time_now * 14.0f;
+            int tooth = (sinf(ang * 12.0f) > 0.15f);
+            *out_ch = (r2 < 0.14f) ? '@' : (tooth ? '*' : '#');
+            *out_col = (r2 < 0.14f) ? r->scale_rgb(255.0f, 210.0f, 70.0f, fog)
+                                    : r->scale_rgb(215.0f, 228.0f, 240.0f, fog * pulse);
+        } else if (handle || base) {
+            *out_ch = '=';
+            *out_col = r->scale_rgb(56.0f, 62.0f, 70.0f, fog);
+        } else {
+            *out_ch = r->sample_ramp(0.75f * fog, sx, sy);
+            *out_col = r->scale_rgb(38.0f, 178.0f, 202.0f, fog * pulse);
+        }
+        return 1;
+    }
+
+    if (weapon_type == 6) {
+        /* REVOLVER GRANDE (Boss 2): cano longo cromado + tambor largo + cabo madeira */
+        int barrel = (ny > -0.34f && ny < -0.06f && nx > -0.04f && nx < 0.96f);
+        int sight  = (ny > -0.44f && ny <= -0.32f && nx > 0.78f && nx < 0.94f);
+        int cyl    = (ny > -0.30f && ny < 0.16f && nx > -0.42f && nx <= 0.04f);
+        int frame  = (ny > -0.26f && ny < 0.24f && nx > -0.56f && nx <= -0.36f);
+        int grip   = (nx >= -0.88f && nx <= -0.42f &&
+                      ny > (0.04f + (-0.42f - nx) * 0.75f) &&
+                      ny < (0.48f + (-0.42f - nx) * 0.85f));
+        if (!barrel && !sight && !cyl && !frame && !grip) return 0;
+
+        if (grip) {
+            *out_ch = '#';
+            *out_col = r->scale_rgb(165.0f, 96.0f, 48.0f, fog);
+        } else if (cyl) {
+            *out_ch = (fabsf(ny + 0.07f) < 0.08f) ? '=' : '#';
+            *out_col = r->scale_rgb(235.0f, 220.0f, 165.0f, fog * pulse);
+        } else {
+            *out_ch = (sight || nx > 0.86f) ? ']' : '=';
+            *out_col = r->scale_rgb(220.0f, 230.0f, 244.0f, fog * pulse);
+        }
+        return 1;
+    }
+
+    if (weapon_type == 7) {
+        /* TOMMY GUN (Boss 3): cano aletado + tambor redondo 50 balas + madeira */
+        int barrel   = (ny > -0.24f && ny < -0.04f && nx > -0.10f && nx < 0.96f);
+        int receiver = (ny > -0.28f && ny < 0.06f && nx > -0.44f && nx <= 0.26f);
+        int foregrip = (ny >= 0.00f && ny < 0.44f && nx > 0.34f && nx < 0.50f);
+        int stock    = (nx >= -0.96f && nx <= -0.40f &&
+                        ny > (-0.12f + (-0.40f - nx) * 0.35f) &&
+                        ny < (0.28f + (-0.40f - nx) * 0.55f));
+        float dx_d = (nx - 0.04f) / 0.26f;
+        float dy_d = (ny - 0.30f) / 0.34f;
+        int drum = (dx_d * dx_d + dy_d * dy_d <= 1.0f);
+        if (!barrel && !receiver && !foregrip && !stock && !drum) return 0;
+
+        if (drum) {
+            int center = (dx_d * dx_d + dy_d * dy_d < 0.22f);
+            *out_ch = center ? '@' : '#';
+            *out_col = center ? r->scale_rgb(245.0f, 205.0f, 75.0f, fog * pulse)
+                              : r->scale_rgb(68.0f, 74.0f, 84.0f, fog);
+        } else if (stock || foregrip) {
+            *out_ch = '#';
+            *out_col = r->scale_rgb(158.0f, 96.0f, 50.0f, fog);
+        } else {
+            *out_ch = '=';
+            *out_col = r->scale_rgb(185.0f, 195.0f, 208.0f, fog * pulse);
+        }
+        return 1;
+    }
+
+    if (weapon_type == 8) {
+        /* LANCA-CHAMAS (Boss 4): tubo pesado + cilindro vermelho + chama-piloto na ponta */
+        int tube   = (ny > -0.24f && ny < 0.06f && nx > -0.62f && nx < 0.78f);
+        int tank   = (ny >= 0.04f && ny < 0.46f && nx > -0.42f && nx < 0.36f);
+        int grip   = (ny >= 0.04f && ny < 0.50f && nx > -0.78f && nx < -0.52f);
+        float dx_f = (nx - 0.88f) / 0.16f;
+        float dy_f = (ny + 0.09f) / 0.24f;
+        int flame  = (dx_f * dx_f + dy_f * dy_f <= 1.0f);
+        if (!tube && !tank && !grip && !flame) return 0;
+
+        if (flame) {
+            *out_ch = (pulse > 0.94f) ? '@' : '*';
+            *out_col = r->scale_rgb(255.0f, 180.0f, 45.0f, fog * (pulse + 0.15f));
+        } else if (tank) {
+            *out_ch = '#';
+            *out_col = r->scale_rgb(218.0f, 52.0f, 38.0f, fog * pulse);
+        } else if (grip) {
+            *out_ch = '#';
+            *out_col = r->scale_rgb(72.0f, 78.0f, 86.0f, fog);
+        } else {
+            *out_ch = '=';
+            *out_col = r->scale_rgb(175.0f, 185.0f, 196.0f, fog);
+        }
+        return 1;
+    }
+
     /* ARMA FUTURISTA (4): ponteiras duplas abertas + nucleo de plasma brilhante */
     int top_prong = (ny > -0.42f && ny < -0.18f && nx > 0.10f && nx < 0.95f);
     int bot_prong = (ny > 0.14f && ny < 0.38f && nx > 0.10f && nx < 0.95f);
