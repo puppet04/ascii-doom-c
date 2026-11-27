@@ -2,10 +2,11 @@
 <!-- Descreva em poucas palavras o que voce adicionou, corrigiu ou melhorou -->
 
 ## Modulo alterado
-- [ ] Mapa e Colisao (`src/map.c` / `include/map.h`)
-- [ ] Jogador, Fisica e Input (`src/player.c` / `include/player.h`)
+- [ ] Mapa e Colisao (`src/map.c` / `include/map.h` / `assets/maps/`)
+- [ ] Personagens, Criador de Skins e Fisica (`src/player.c` / `include/player.h`)
+- [ ] Armas, Inimigos e Bosses (`src/entities.c` / `include/entities.h`)
 - [ ] Motor Grafico ASCII e HUD (`src/renderer.c` / `include/renderer.h`)
-- [ ] Multiplayer LAN/UDP (`src/network.c` / `include/network.h`)
+- [ ] Multiplayer LAN e Online (`src/network.c` / `include/network.h` / `relay/`)
 - [ ] Main / Menu / Testes / Documentacao
 
 ## Checklist antes de pedir revisao
